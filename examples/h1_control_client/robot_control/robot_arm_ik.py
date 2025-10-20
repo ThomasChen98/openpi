@@ -10,9 +10,12 @@ import sys
 import logging
 logger_mp = logging.getLogger(__name__)
 
-# add parent directory to sys.path
-parent2_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.append(parent2_dir)
+# Get the directory where this script is located
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Get the h1_control_client directory (parent of robot_control)
+CLIENT_DIR = os.path.dirname(SCRIPT_DIR)
+# Add parent directory to sys.path
+sys.path.append(CLIENT_DIR)
 
 from utils.weighted_moving_filter import WeightedMovingFilter
 
@@ -30,10 +33,14 @@ class H1_2_ArmIK:
         self.Visualization = Visualization
         self.Hand_Control = Hand_Control
 
-        if not self.Unit_Test:
-            self.robot = pin.RobotWrapper.BuildFromURDF('./assets/h1_2/h1_2.urdf', './assets/h1_2/')
-        else:
-            self.robot = pin.RobotWrapper.BuildFromURDF('../assets/h1_2/h1_2.urdf', '../assets/h1_2/') # for test
+        # Use absolute paths based on script location
+        urdf_path = os.path.join(CLIENT_DIR, 'assets', 'h1_2', 'h1_2.urdf')
+        package_dir = os.path.join(CLIENT_DIR, 'assets', 'h1_2')
+        
+        if not os.path.exists(urdf_path):
+            raise FileNotFoundError(f"URDF file not found at: {urdf_path}")
+        
+        self.robot = pin.RobotWrapper.BuildFromURDF(urdf_path, package_dir)
 
         self.mixed_jointsToLockIDs = [
                                       "left_hip_yaw_joint",
