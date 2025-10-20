@@ -1,0 +1,15 @@
+# Core dependencies for H1-2 control
+numpy==1.26.4
+matplotlib==3.7.5
+
+# IK solver dependencies
+pinocchio>=3.1.0
+casadi>=3.6.0
+meshcat>=0.3.2
+
+# OpenPi client (install separately)
+# cd ../../packages/openpi-client && pip install -e .
+
+# Unitree SDK (included in libraries/, install via setup.sh)
+# Inspire Hand SDK (included in libraries/, install via setup.sh)
+
