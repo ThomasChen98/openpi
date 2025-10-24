@@ -25,12 +25,12 @@ h1_control_client/
 │   └── robot_arm.py           # H1-2 low-level controller
 ├── utils/                      # Utilities
 │   └── weighted_moving_filter.py
-├── assets/                     # URDF and meshes
+├── assets/                     # URDF and meshes (copy from unitree_h12_bimanual)
 │   └── h1_2/
 │       ├── h1_2.urdf
 │       └── meshes/
-└── libraries/                  # SDKs (self-contained)
-    ├── unitree_sdk2_python/
+└── libraries/                  # SDKs with binaries (copy from unitree_h12_bimanual)
+    ├── unitree_sdk2_python/    # Includes .so files
     └── inspire_hand_sdk/
 ```
 
@@ -43,26 +43,48 @@ git clone https://github.com/PhysicalIntelligence/openpi.git
 cd openpi/examples/h1_control_client
 ```
 
-### 2. Run Setup Script
+### 2. Copy Required Files
+
+**Important:** Copy URDF models and SDK libraries from your `unitree_h12_bimanual` repository:
+
+```bash
+# Copy assets (URDF, meshes)
+cp -r /path/to/unitree_h12_bimanual/assets ./
+
+# Copy SDK libraries (with compiled binaries)
+cp -r /path/to/unitree_h12_bimanual/libraries ./
+```
+
+These folders contain:
+- **`assets/`**: URDF models, meshes, MuJoCo files
+- **`libraries/`**: Unitree SDK2 (with `.so` files) and Inspire Hand SDK
+
+These large files are not included in the OpenPi repository to avoid duplication.
+
+### 3. Create Conda Environment
+
+**Important:** Pinocchio 3.1.0 is only available via conda:
+
+```bash
+conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
+conda activate h1_client
+```
+
+### 4. Run Setup Script
 
 ```bash
 ./setup.sh
 ```
 
 This installs:
-- Python dependencies (pinocchio, casadi, etc.)
+- Python dependencies (casadi, meshcat, etc.)
 - OpenPi client
 - Unitree SDK
 - Inspire Hand SDK
 
-**Note:** If using conda, pinocchio installation is recommended:
-```bash
-conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
-conda activate h1_client
-./setup.sh
-```
+**Note:** Pinocchio is already installed via conda in step 3
 
-### 3. Configure Network
+### 5. Configure Network
 
 Edit IP addresses if needed:
 ```bash
@@ -72,26 +94,58 @@ Edit IP addresses if needed:
 --network-interface eno1
 ```
 
-### 4. Start Policy Server (GPU Machine)
+### 6. Setup Cameras
+
+**Camera Architecture:**
+- **Head camera (ego cam)**: On robot, streamed via image_server (RealSense)
+- **Wrist cameras**: Connected to laptop via USB (OpenCV /dev/video2, /dev/video4)
+
+**On Robot (Terminal 1):** Start head camera server
+```bash
+cd ~/xr_teleoperate
+python -m teleop.image_server.image_server
+# Edit the config in that file to match your head camera serial number
+```
+
+**On Laptop:** Wrist cameras are captured directly (no setup needed)
+- Left wrist: `/dev/video2`
+- Right wrist: `/dev/video4`
+- These are configured in `teleop_hand_and_arm.py` and match the H1-2 hardware setup
+
+### 7. Start Policy Server (GPU Machine - Terminal 2)
 
 On your GPU server:
 ```bash
 cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 8000
+uv run scripts/mock_policy_server.py --port 5006
 ```
 
 For real models:
 ```bash
-uv run scripts/serve_policy.py --env DROID --port 8000
+uv run scripts/serve_policy.py --env DROID --port 5006
 ```
 
-### 5. Run H1-2 Client (Robot Laptop)
+### 8. Run H1-2 Client (Laptop - Terminal 3)
 
+**Important:** Always run from the `h1_control_client` directory:
+
+```bash
+cd ~/openpi/examples/h1_control_client
+python h1_remote_client.py \
+    --server-host <gpu-server-ip> \
+    --server-port 5006 \
+    --head-camera-server-ip 192.168.123.163
+```
+
+**Test with demo sequence:**
 ```bash
 python h1_remote_client.py \
     --server-host <gpu-server-ip> \
-    --server-port 8000
+    --server-port 5006 \
+    --prompt "demo"
 ```
+
+This will make the robot: open hands → raise arms → close hands → lower arms
 
 That's it! The robot will:
 1. Connect to policy server
@@ -253,11 +307,19 @@ EOF
 
 ### Setup Issues
 
-**"pinocchio not found"**
+**"pinocchio not found" or "No matching distribution found"**
+
+Pinocchio 3.1.0 is ONLY available via conda, not pip:
 ```bash
-# Use conda for pinocchio:
-conda install pinocchio=3.1.0 -c conda-forge
+# Correct way (conda):
+conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
+conda activate h1_client
+
+# Then run setup.sh
+./setup.sh
 ```
+
+Note: PyPI only has old pinocchio versions (0.3-0.4), which won't work.
 
 **"unitree_sdk2py not found"**
 ```bash

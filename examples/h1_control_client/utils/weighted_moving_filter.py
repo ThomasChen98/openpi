@@ -38,3 +38,4 @@ class WeightedMovingFilter:
     def filtered_data(self):
         return self._filtered_data
 
+

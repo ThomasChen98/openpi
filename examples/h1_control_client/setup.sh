@@ -16,13 +16,39 @@ if [ ! -f "h1_remote_client.py" ]; then
     exit 1
 fi
 
+# Check required directories
+echo ""
+echo "Checking required directories..."
+if [ ! -d "assets/h1_2" ]; then
+    echo "❌ Error: assets/h1_2 directory not found!"
+    echo "   Please copy from unitree_h12_bimanual:"
+    echo "   cp -r /path/to/unitree_h12_bimanual/assets ./"
+    exit 1
+fi
+
+if [ ! -d "libraries/unitree_sdk2_python" ]; then
+    echo "❌ Error: libraries/unitree_sdk2_python not found!"
+    echo "   Please copy from unitree_h12_bimanual:"
+    echo "   cp -r /path/to/unitree_h12_bimanual/libraries ./"
+    exit 1
+fi
+
+if [ ! -d "libraries/inspire_hand_sdk" ]; then
+    echo "❌ Error: libraries/inspire_hand_sdk not found!"
+    echo "   Please copy from unitree_h12_bimanual:"
+    echo "   cp -r /path/to/unitree_h12_bimanual/libraries ./"
+    exit 1
+fi
+
+echo "✅ All required directories found"
+
 # Check Python version
 python_version=$(python3 --version 2>&1 | awk '{print $2}')
 echo "📍 Python version: $python_version"
 
 # 1. Install conda dependencies (pinocchio)
 echo ""
-echo "Step 1: Installing pinocchio via conda..."
+echo "Step 1/5: Installing pinocchio via conda..."
 if command -v conda &> /dev/null; then
     echo "  Found conda, checking if pinocchio is installed..."
     if python3 -c "import pinocchio" 2>/dev/null; then
@@ -40,12 +66,13 @@ fi
 
 # 2. Install Python dependencies
 echo ""
-echo "Step 2: Installing Python dependencies..."
+echo "Step 2/5: Installing Python dependencies..."
+echo "  (Skipping pinocchio - already installed via conda)"
 pip install -r requirements.txt
 
 # 3. Install OpenPi client
 echo ""
-echo "Step 3: Installing OpenPi client..."
+echo "Step 3/5: Installing OpenPi client..."
 if [ -d "../../packages/openpi-client" ]; then
     cd ../../packages/openpi-client
     pip install -e .
@@ -59,7 +86,7 @@ fi
 
 # 4. Install Unitree SDK
 echo ""
-echo "Step 4: Installing Unitree SDK..."
+echo "Step 4/5: Installing Unitree SDK..."
 if [ -d "libraries/unitree_sdk2_python" ]; then
     cd libraries/unitree_sdk2_python
     pip install -e .
@@ -72,7 +99,7 @@ fi
 
 # 5. Install Inspire Hand SDK
 echo ""
-echo "Step 5: Installing Inspire Hand SDK..."
+echo "Step 5/5: Installing Inspire Hand SDK..."
 if [ -d "libraries/inspire_hand_sdk" ]; then
     cd libraries/inspire_hand_sdk
     pip install -e .

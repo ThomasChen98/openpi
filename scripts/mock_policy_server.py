@@ -82,6 +82,11 @@ class MockPolicy:
         
         logger.info(f"Mock inference for prompt: '{prompt}'")
         
+        # Check for special sequence patterns
+        if "demo" in prompt or "sequence" in prompt or "test" in prompt:
+            logger.info("  Generating demo sequence: open hands → raise arms → close hands → lower arms")
+            return self._generate_demo_sequence()
+        
         # Find matching action pattern
         base_action = None
         for pattern, action_fn in ACTION_PATTERNS.items():
@@ -141,6 +146,56 @@ class MockPolicy:
                 "total_ms": 5.0,
             }
         }
+    
+    def _generate_demo_sequence(self) -> dict[str, Any]:
+        """Generate a demo sequence: open hands → raise arms → close hands → lower arms."""
+        if self.action_dim != 51:
+            # Fallback for non-H1 robots
+            logger.warning("Demo sequence only works for H1 (action_dim=51), using random actions")
+            action_chunk = np.random.randn(self.action_horizon, self.action_dim) * 0.01
+            return {
+                "actions": action_chunk,
+                "policy_timing": {"inference_ms": 5.0, "total_ms": 5.0}
+            }
+        
+        action_chunk = np.zeros((self.action_horizon, self.action_dim))
+        steps_per_phase = self.action_horizon // 4
+        
+        for i in range(self.action_horizon):
+            phase = i // steps_per_phase
+            progress = (i % steps_per_phase) / steps_per_phase
+            
+            if phase == 0:  # Phase 1: Open hands (0-25% of trajectory)
+                # Hands open to 900
+                action_chunk[i, 27:] = 500 + progress * 400  # Interpolate to 900
+                logger.info(f"  Step {i}: Opening hands") if i % 5 == 0 else None
+                
+            elif phase == 1:  # Phase 2: Raise arms (25-50%)
+                action_chunk[i, 27:] = 900  # Keep hands open
+                # Arms move up (positive shoulder pitch)
+                action_chunk[i, :27] = progress * 0.05  # Small arm raise
+                logger.info(f"  Step {i}: Raising arms") if i % 5 == 0 else None
+                
+            elif phase == 2:  # Phase 3: Close hands (50-75%)
+                action_chunk[i, :27] = 0.05  # Keep arms raised
+                # Hands close to 100
+                action_chunk[i, 27:] = 900 - progress * 800  # Interpolate to 100
+                logger.info(f"  Step {i}: Closing hands") if i % 5 == 0 else None
+                
+            else:  # Phase 4: Lower arms (75-100%)
+                action_chunk[i, 27:] = 100  # Keep hands closed
+                # Arms move down
+                action_chunk[i, :27] = 0.05 - progress * 0.05  # Back to 0
+                logger.info(f"  Step {i}: Lowering arms") if i % 5 == 0 else None
+        
+        # Clip to valid ranges
+        action_chunk[:, :27] = np.clip(action_chunk[:, :27], 0.0, 0.1)
+        action_chunk[:, 27:] = np.clip(action_chunk[:, 27:], 0.0, 1000)
+        
+        return {
+            "actions": action_chunk,
+            "policy_timing": {"inference_ms": 5.0, "total_ms": 5.0}
+        }
 
 
 @dataclasses.dataclass
@@ -157,7 +212,7 @@ class Args:
     action_horizon: int = 50
     
     # Port to serve on
-    port: int = 8000
+    port: int = 5006
     
     # Verbose logging
     verbose: bool = False

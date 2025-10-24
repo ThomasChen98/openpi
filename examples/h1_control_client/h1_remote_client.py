@@ -5,14 +5,21 @@ H1-2 Remote Policy Client - Self-Contained Edition
 Connects to OpenPi policy server and executes actions on H1-2 robot with arms only.
 This is a complete, self-contained solution for H1-2 control.
 
-Usage:
-    # Start OpenPi server (on GPU machine):
-    uv run scripts/mock_policy_server.py --port 8000
-    
-    # Run this client (on H1-2 control laptop):
-    python h1_remote_client.py --server-host <gpu-server-ip> --server-port 8000
+Camera Architecture:
+    - Head camera (ego): Streamed from robot via ZMQ (image_server on robot)
+    - Wrist cameras: Directly connected to laptop via USB (/dev/video2, /dev/video4)
 
-Author: Integrated from h1_remote_policy_client.py
+Usage:
+    # On robot: Start head camera server
+    python <run image server script for head camera>
+    
+    # On GPU: Start OpenPi policy server
+    uv run scripts/mock_policy_server.py --port 5006
+    
+    # On laptop: Run this client
+    python h1_remote_client.py --server-host <gpu-ip> --server-port 5006
+
+Author: Integrated from h1_remote_policy_client.py + camera integration
 """
 
 import time
@@ -21,6 +28,10 @@ import signal
 import argparse
 import numpy as np
 import pinocchio as pin
+import cv2
+from multiprocessing import shared_memory
+import threading
+import os
 
 # OpenPi client import
 try:
@@ -40,12 +51,28 @@ except ImportError:
     print("Make sure you're running from the h1_control_client directory")
     sys.exit(1)
 
+# Import camera utilities from xr_teleoperate
+try:
+    xr_teleoperate_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'xr_teleoperate')
+    if os.path.exists(xr_teleoperate_path):
+        sys.path.insert(0, xr_teleoperate_path)
+    from teleop.image_server.image_client import ImageClient
+    from teleop.image_server.image_server import OpenCVCamera
+except ImportError as e:
+    print(f"ERROR: Could not import camera utilities from xr_teleoperate: {e}")
+    print("  Make sure xr_teleoperate is cloned next to openpi/")
+    print("  Directory structure should be:")
+    print("    Projects/")
+    print("      ├── openpi/")
+    print("      └── xr_teleoperate/")
+    sys.exit(1)
+
 # Global for signal handler
 controller = None
 
 def signal_handler(sig, frame):
     global controller
-    print("\n⏹️  Caught exit signal...")
+    print("\n  Caught exit signal...")
     if controller is not None:
         controller.cleanup()
     sys.exit(0)
@@ -53,37 +80,44 @@ def signal_handler(sig, frame):
 
 class H1RemoteClient:
     """
-    Integrated H1-2 remote policy client
+    Integrated H1-2 remote policy client with camera streaming
     
     Combines:
     - OpenPi policy server client (gets action chunks)
     - IK solver (converts EE poses to joint angles)  
     - Robot controller (executes joint commands)
+    - Camera streaming (head from robot, wrists from laptop)
     """
     
     def __init__(self, 
                  server_host: str = "localhost",
-                 server_port: int = 8000,
+                 server_port: int = 5006,
                  network_interface: str = "eno1",
                  left_hand_ip: str = "192.168.123.211",
                  right_hand_ip: str = "192.168.123.210",
-                 visualization: bool = False):
+                 visualization: bool = False,
+                 head_camera_server_ip: str = "192.168.123.163",
+                 head_camera_server_port: int = 5555,
+                 left_wrist_camera_id: int = 2,
+                 right_wrist_camera_id: int = 4,
+                 prompt: str = "bimanual manipulation task"):
         
         self.server_host = server_host
         self.server_port = server_port
         self.policy_client = None
+        self.prompt = prompt
         
         # Initialize IK solver
-        print("🔧 Initializing IK solver...")
+        print(" Initializing IK solver...")
         self.ik_solver = H1_2_ArmIK(
             Unit_Test=False,
             Visualization=visualization,
             Hand_Control=True
         )
-        print("✅ IK solver ready")
+        print("   IK solver ready")
         
         # Initialize robot controller
-        print("🤖 Initializing robot controller...")
+        print(" Initializing robot controller...")
         self.robot = H1_2_ArmController(
             simulation_mode=False,
             hand_control=True,
@@ -91,48 +125,135 @@ class H1RemoteClient:
             right_hand_ip=right_hand_ip,
             network_interface=network_interface
         )
-        print("✅ Robot controller ready")
+        print("   Robot controller ready")
         
-        # Dummy camera images (TODO: replace with real cameras)
-        self.dummy_image = np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8)
+        # Initialize cameras
+        print(" Initializing cameras...")
+        self._init_head_camera_client(head_camera_server_ip, head_camera_server_port)
+        self._init_wrist_cameras(left_wrist_camera_id, right_wrist_camera_id)
+        print("   Cameras ready")
+    
+    def _init_head_camera_client(self, server_ip: str, server_port: int):
+        """Initialize client to receive head camera from robot"""
+        # Head camera: single RealSense at 480x640
+        self.head_img_shape = (480, 640, 3)
+        
+        # Create shared memory buffer for head camera
+        self.head_img_shm = shared_memory.SharedMemory(
+            create=True, 
+            size=np.prod(self.head_img_shape) * np.uint8().itemsize
+        )
+        self.head_img_array = np.ndarray(
+            self.head_img_shape, dtype=np.uint8, buffer=self.head_img_shm.buf
+        )
+        
+        # Initialize image client (receives head camera only)
+        self.head_camera_client = ImageClient(
+            tv_img_shape=self.head_img_shape,
+            tv_img_shm_name=self.head_img_shm.name,
+            wrist_img_shape=None,  # Wrist cameras are captured directly
+            wrist_img_shm_name=None,
+            server_address=server_ip,
+            port=server_port,
+            image_show=False
+        )
+        
+        # Start image receiving thread
+        self.head_camera_thread = threading.Thread(
+            target=self.head_camera_client.receive_process,
+            daemon=True
+        )
+        self.head_camera_thread.start()
+        print(f"   Head camera client connected to {server_ip}:{server_port}")
+    
+    def _init_wrist_cameras(self, left_id: int, right_id: int):
+        """Initialize direct USB wrist cameras on laptop"""
+        # Wrist cameras: OpenCV cameras connected to laptop
+        # /dev/video2 (left) and /dev/video4 (right)
+        self.left_wrist_camera = OpenCVCamera(
+            device_id=left_id,
+            img_shape=[480, 640],  # height, width
+            fps=30
+        )
+        print(f"   Left wrist camera: /dev/video{left_id}")
+        
+        self.right_wrist_camera = OpenCVCamera(
+            device_id=right_id,
+            img_shape=[480, 640],  # height, width
+            fps=30
+        )
+        print(f"   Right wrist camera: /dev/video{right_id}")
     
     def connect_to_policy_server(self):
         """Connect to the remote OpenPi policy server"""
         try:
-            print(f"🔌 Connecting to policy server at {self.server_host}:{self.server_port}...")
+            print(f" Connecting to policy server at {self.server_host}:{self.server_port}...")
             self.policy_client = websocket_client_policy.WebsocketClientPolicy(
                 host=self.server_host,
-                port=self.server_port,
+                port=self.server_port
             )
             
+            # Get server metadata
             metadata = self.policy_client.get_server_metadata()
-            print(f"✅ Connected to policy server!")
-            print(f"📊 Server metadata:")
-            for key, value in metadata.items():
-                print(f"  {key}: {value}")
+            print(f"   Connected! Server metadata:")
+            print(f"     Action dim: {metadata.get('action_dim', 'N/A')}")
+            print(f"     Action horizon: {metadata.get('action_horizon', 'N/A')}")
+            print(f"     Description: {metadata.get('description', 'N/A')}")
             
             return True
             
         except Exception as e:
-            print(f"❌ Failed to connect to policy server: {e}")
+            print(f"   Failed to connect to policy server: {e}")
             print(f"   Make sure server is running:")
             print(f"   uv run scripts/mock_policy_server.py --port {self.server_port}")
             return False
     
     def get_observation(self) -> dict:
         """
-        Construct observation for policy inference
-        
-        TODO: Replace dummy images with real camera feeds
+        Construct observation for policy inference with real camera feeds
         """
         # Get current arm joint positions (14 DOF)
         current_arm_q = self.robot.get_current_dual_arm_q()
         
+        # Get head camera (from robot via ZMQ)
+        head_image = self.head_img_array.copy()
+        
+        # Get wrist cameras (directly from laptop)
+        left_wrist_image = self.left_wrist_camera.get_frame()
+        right_wrist_image = self.right_wrist_camera.get_frame()
+        
+        if left_wrist_image is None or right_wrist_image is None:
+            raise RuntimeError("Failed to capture wrist camera frames")
+        
+        # Resize to OpenPi expected resolution (224x224)
+        base_image = cv2.resize(head_image, (224, 224))
+        base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
+        
+        left_wrist_image = cv2.resize(left_wrist_image, (224, 224))
+        left_wrist_image = cv2.cvtColor(left_wrist_image, cv2.COLOR_BGR2RGB)
+        
+        right_wrist_image = cv2.resize(right_wrist_image, (224, 224))
+        right_wrist_image = cv2.cvtColor(right_wrist_image, cv2.COLOR_BGR2RGB)
+        
+        # Convert to uint8 for efficient transmission
+        base_image = image_tools.convert_to_uint8(base_image)
+        left_wrist_image = image_tools.convert_to_uint8(left_wrist_image)
+        right_wrist_image = image_tools.convert_to_uint8(right_wrist_image)
+        
+        # OpenPi model expects this structure
         observation = {
-            "observation/image": self.dummy_image,  # TODO: external camera
-            "observation/wrist_image": self.dummy_image,  # TODO: wrist camera
-            "observation/state": current_arm_q,  # 14 arm joints
-            "prompt": "bimanual manipulation task",  # TODO: task from user
+            "image": {
+                "base_0_rgb": base_image,
+                "left_wrist_0_rgb": left_wrist_image,
+                "right_wrist_0_rgb": right_wrist_image,
+            },
+            "image_mask": {
+                "base_0_rgb": True,
+                "left_wrist_0_rgb": True,
+                "right_wrist_0_rgb": True,
+            },
+            "state": current_arm_q,  # 14 arm joints
+            "prompt": self.prompt,
         }
         
         return observation
@@ -183,7 +304,7 @@ class H1RemoteClient:
         """
         action_sequence = self.policy_actions_to_ee_poses(policy_actions)
         
-        print(f"🎯 Executing {len(action_sequence)} actions...")
+        print(f"   Executing {len(action_sequence)} actions...")
         
         for i, action in enumerate(action_sequence):
             arm_joints = action['arm_joints']
@@ -206,42 +327,53 @@ class H1RemoteClient:
         Args:
             duration: How long to run (seconds). Use inf for infinite.
         """
-        print(f"\n🚀 Starting control loop (duration: {duration}s)")
+        print(f"\n   Starting control loop (duration: {duration}s)")
         print("   Press Ctrl+C to stop\n")
         
         start_time = time.time()
-        iteration = 0
         
         try:
-            while (time.time() - start_time) < duration:
-                iteration += 1
+            while True:
+                # Check if duration exceeded
+                if time.time() - start_time > duration:
+                    print("\n   Control loop duration reached")
+                    break
                 
-                # 1. Get observation
+                # Get current observation (includes camera images + robot state)
                 observation = self.get_observation()
                 
-                # 2. Query policy server
-                try:
-                    result = self.policy_client.infer(observation)
-                    action_chunk = result["actions"]  # Shape: (50, 51)
-                    
-                    # Log timing
-                    if "server_timing" in result:
-                        inference_time = result["server_timing"].get("infer_ms", 0)
-                        print(f"[{iteration}] Policy inference: {inference_time:.1f}ms")
-                    
-                except Exception as e:
-                    print(f"❌ Policy query failed: {e}")
-                    continue
+                # Query policy for action chunk
+                policy_response = self.policy_client.infer(observation)
+                action_chunk = policy_response["actions"]  # Shape: (50, 51)
                 
-                # 3. Execute action chunk
+                # Execute action chunk
                 self.execute_action_chunk(action_chunk)
                 
         except KeyboardInterrupt:
-            print("\n⏹️  Control loop interrupted by user")
+            print("\n  Control loop interrupted by user")
     
     def cleanup(self):
         """Cleanup resources before exit"""
-        print("\n🧹 Cleaning up...")
+        print("\n   Cleaning up...")
+        
+        # Stop head camera client
+        print("  Stopping head camera client...")
+        if hasattr(self, 'head_camera_client'):
+            self.head_camera_client.running = False
+            if hasattr(self, 'head_camera_thread') and self.head_camera_thread.is_alive():
+                self.head_camera_thread.join(timeout=2.0)
+            
+            # Cleanup shared memory
+            if hasattr(self, 'head_img_shm'):
+                self.head_img_shm.close()
+                self.head_img_shm.unlink()
+        
+        # Stop wrist cameras
+        print("  Stopping wrist cameras...")
+        if hasattr(self, 'left_wrist_camera'):
+            self.left_wrist_camera.release()
+        if hasattr(self, 'right_wrist_camera'):
+            self.right_wrist_camera.release()
         
         # Stop robot control
         if self.robot:
@@ -250,25 +382,35 @@ class H1RemoteClient:
             if hasattr(self.robot, 'stop_hand_bridges'):
                 self.robot.stop_hand_bridges()
         
-        print("✅ Cleanup complete")
+        print("   Cleanup complete")
 
 
 def main():
     parser = argparse.ArgumentParser(description="H1-2 Remote Policy Client")
     parser.add_argument("--server-host", type=str, default="localhost",
                        help="Policy server hostname or IP")
-    parser.add_argument("--server-port", type=int, default=8000,
-                       help="Policy server port")
+    parser.add_argument("--server-port", type=int, default=5006,
+                       help="Policy server port (default: 5006)")
     parser.add_argument("--network-interface", type=str, default="eno1",
                        help="Network interface for hand bridges")
     parser.add_argument("--left-hand-ip", type=str, default="192.168.123.211",
                        help="Left hand IP address")
     parser.add_argument("--right-hand-ip", type=str, default="192.168.123.210",
                        help="Right hand IP address")
+    parser.add_argument("--head-camera-server-ip", type=str, default="192.168.123.163",
+                       help="Head camera server IP (robot IP where image_server runs)")
+    parser.add_argument("--head-camera-server-port", type=int, default=5555,
+                       help="Head camera server port")
+    parser.add_argument("--left-wrist-camera-id", type=int, default=2,
+                       help="Left wrist camera device ID (/dev/video<id>)")
+    parser.add_argument("--right-wrist-camera-id", type=int, default=4,
+                       help="Right wrist camera device ID (/dev/video<id>)")
     parser.add_argument("--visualization", action="store_true",
                        help="Enable IK visualization (meshcat)")
     parser.add_argument("--duration", type=float, default=float('inf'),
                        help="Control loop duration in seconds (default: infinite)")
+    parser.add_argument("--prompt", type=str, default="bimanual manipulation task",
+                       help="Task prompt for the policy")
     
     args = parser.parse_args()
     
@@ -286,18 +428,23 @@ def main():
         network_interface=args.network_interface,
         left_hand_ip=args.left_hand_ip,
         right_hand_ip=args.right_hand_ip,
-        visualization=args.visualization
+        head_camera_server_ip=args.head_camera_server_ip,
+        head_camera_server_port=args.head_camera_server_port,
+        left_wrist_camera_id=args.left_wrist_camera_id,
+        right_wrist_camera_id=args.right_wrist_camera_id,
+        visualization=args.visualization,
+        prompt=args.prompt
     )
     
     # Connect to policy server
     if not controller.connect_to_policy_server():
-        print("❌ Failed to connect to policy server. Exiting.")
+        print(" Failed to connect to policy server. Exiting.")
         return 1
     
     # Move arms to home position
-    print("\n🏠 Moving to home position...")
+    print("\n   Moving to home position...")
     controller.robot.ctrl_dual_arm_go_home()
-    print("✅ Ready!")
+    print("   Ready!")
     
     # Run control loop
     controller.run_control_loop(duration=args.duration)
@@ -309,4 +456,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
