@@ -364,8 +364,7 @@ class LeRobotH1DataConfig(DataConfigFactory):
     """
     # If true, will convert joint dimensions to deltas with respect to the current state before passing to the model.
     # Gripper dimensions will remain in absolute values.
-    use_delta_joint_actions: bool = True
-    extra_delta_transform: bool = False
+    extra_delta_transform: bool = True
     # Action keys that will be used to read the action sequence from the dataset.
     action_sequence_keys: Sequence[str] = ("action",)
 
@@ -375,40 +374,36 @@ class LeRobotH1DataConfig(DataConfigFactory):
         # and *not* during inference. We can use it to make inputs from the dataset look
         # as close as possible to those coming from the inference environment (e.g. match the keys).
         # Below, we match the keys in the dataset (which we defined in the data conversion script) to
-        # the keys we use in our inference pipeline (defined in the inference script for libero).
+        # the keys we use in our inference pipeline (defined in the inference script for H1).
         # For your own dataset, first figure out what keys your environment passes to the policy server
         # and then modify the mappings below so your dataset's keys get matched to those target keys.
         # The repack transform simply remaps key names here.
-        # If provided, will be injected into the input data if the "prompt" key is not present.
-        default_prompt: str | None = None
-        # Repack transforms.
-        repack_transforms: tyro.conf.Suppress[_transforms.Group] = dataclasses.field(
-            default=_transforms.Group(
-                inputs=[
-                    _transforms.RepackTransform(
-                        {
-                            "images": {
-                                "cam_head": "observations.images.ego_cam",
-                                "cam_left_wrist": "observations.images.cam_left_wrist",
-                                "cam_right_wrist": "observations.images.cam_right_wrist",
-                            },
-                            "state": "observations.qpos",
-                            "actions": "action",
-                        }
-                    )
-                ]
-            )
+        repack_transforms = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "cam_head": "ego_cam",
+                            "cam_left_wrist": "cam_left_wrist",
+                            "cam_right_wrist": "cam_right_wrist",
+                        },
+                        "state": "qpos",
+                        "actions": "action",
+                        "prompt": "task",
+                    }
+                )
+            ]
         )
 
         # The data transforms are applied to the data coming from the dataset *and* during inference.
         # Below, we define the transforms for data going into the model (``inputs``) and the transforms
         # for data coming out of the model (``outputs``) (the latter is only used during inference).
-        # We defined these transforms in `libero_policy.py`. You can check the detailed comments there for
+        # We defined these transforms in `h1_policy.py`. You can check the detailed comments there for
         # how to modify the transforms to match your dataset. Once you created your own transforms, you can
         # replace the transforms below with your own.
         data_transforms = _transforms.Group(
-            inputs=[libero_policy.LiberoInputs(model_type=model_config.model_type)],
-            outputs=[libero_policy.LiberoOutputs()],
+            inputs=[h1_policy.H1Inputs(model_type=model_config.model_type)],
+            outputs=[h1_policy.H1Outputs()],
         )
 
         # One additional data transform: pi0 models are trained on delta actions (relative to the first
@@ -424,7 +419,7 @@ class LeRobotH1DataConfig(DataConfigFactory):
         # LIBERO already represents actions as deltas, but we have some old Pi0 checkpoints that are trained with this
         # extra delta transform.
         if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(6, -1)
+            delta_action_mask = _transforms.make_bool_mask(14)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -996,6 +991,36 @@ _CONFIGS = [
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
         num_train_steps=20_000,
         batch_size=32,
+    ),
+    TrainConfig(
+        # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.
+        # Here, we use LeRobot data format (like for all other fine-tuning examples)
+        # To convert your custom DROID dataset (<10s of hours) to LeRobot format, see examples/droid/convert_droid_data_to_lerobot.py
+        name="pi05_h1_finetune",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # pi05 is trained with 32-dim actions
+            action_horizon=16,
+        ),
+        data=LeRobotH1DataConfig(
+            # Replace with your custom DROID LeRobot dataset repo id.
+            repo_id="ThomasChen98/h1_circular",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=2000,
+        batch_size=32,
+        save_interval=200,
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=10_000,
+        #     peak_lr=5e-5,
+        #     decay_steps=1_000_000,
+        #     decay_lr=5e-5,
+        # ),
+        # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        # ema_decay=0.999,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
