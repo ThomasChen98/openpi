@@ -412,6 +412,11 @@ class H1RemoteClient:
             left_hand = action['left_hand']
             right_hand = action['right_hand']
             
+            # Debug logging (every 10th action)
+            if i % 10 == 0:
+                print(f"   Action {i}: L_hand=[{left_hand[0]:.0f}(pinkie), {left_hand[1]:.0f}(ring), {left_hand[2]:.0f}(mid), {left_hand[3]:.0f}(idx), {left_hand[4]:.0f}(th_b), {left_hand[5]:.0f}(th_r)]")
+                print(f"            R_hand=[{right_hand[0]:.0f}(pinkie), {right_hand[1]:.0f}(ring), {right_hand[2]:.0f}(mid), {right_hand[3]:.0f}(idx), {right_hand[4]:.0f}(th_b), {right_hand[5]:.0f}(th_r)]")
+            
             # Send arm + hand commands to robot
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,

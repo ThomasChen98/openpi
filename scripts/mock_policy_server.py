@@ -208,27 +208,84 @@ class MockPolicy:
             step_progress = chunk_progress + (next_chunk_progress - chunk_progress) * i / self.action_horizon
             
             if self.demo_phase == 0:  # Open hands
-                # Interpolate hand position from 500 to 900
-                action_chunk[i, 27:] = 500 + step_progress * 400
+                # Set only ACTUATED hand joints (skip mimic joints)
+                # Left hand actuated: 27, 29, 31, 33, 35, 36
+                # Right hand actuated: 39, 41, 43, 45, 47, 48
+                hand_value = 500 + step_progress * 400
+                # Left hand
+                action_chunk[i, 27] = hand_value  # index_1
+                action_chunk[i, 29] = hand_value  # little_1 (pinkie)
+                action_chunk[i, 31] = hand_value  # middle_1
+                action_chunk[i, 33] = hand_value  # ring_1
+                action_chunk[i, 35] = hand_value  # thumb_1 (rotation)
+                action_chunk[i, 36] = hand_value  # thumb_2 (bend)
+                # Right hand
+                action_chunk[i, 39] = hand_value  # index_1
+                action_chunk[i, 41] = hand_value  # little_1 (pinkie)
+                action_chunk[i, 43] = hand_value  # middle_1
+                action_chunk[i, 45] = hand_value  # ring_1
+                action_chunk[i, 47] = hand_value  # thumb_1 (rotation)
+                action_chunk[i, 48] = hand_value  # thumb_2 (bend)
                 
             elif self.demo_phase == 1:  # Raise arms
-                action_chunk[i, 27:] = 900  # Keep hands open
+                # Keep hands open
+                hand_value = 900
+                action_chunk[i, 27] = hand_value
+                action_chunk[i, 29] = hand_value
+                action_chunk[i, 31] = hand_value
+                action_chunk[i, 33] = hand_value
+                action_chunk[i, 35] = hand_value
+                action_chunk[i, 36] = hand_value
+                action_chunk[i, 39] = hand_value
+                action_chunk[i, 41] = hand_value
+                action_chunk[i, 43] = hand_value
+                action_chunk[i, 45] = hand_value
+                action_chunk[i, 47] = hand_value
+                action_chunk[i, 48] = hand_value
                 # Raise arms - bigger movement (0.3 radians ~ 17 degrees)
                 action_chunk[i, :27] = step_progress * 0.3
                 
             elif self.demo_phase == 2:  # Close hands
                 action_chunk[i, :27] = 0.3  # Keep arms raised
                 # Close hands: 900 to 100
-                action_chunk[i, 27:] = 900 - step_progress * 800
+                hand_value = 900 - step_progress * 800
+                action_chunk[i, 27] = hand_value
+                action_chunk[i, 29] = hand_value
+                action_chunk[i, 31] = hand_value
+                action_chunk[i, 33] = hand_value
+                action_chunk[i, 35] = hand_value
+                action_chunk[i, 36] = hand_value
+                action_chunk[i, 39] = hand_value
+                action_chunk[i, 41] = hand_value
+                action_chunk[i, 43] = hand_value
+                action_chunk[i, 45] = hand_value
+                action_chunk[i, 47] = hand_value
+                action_chunk[i, 48] = hand_value
                 
             elif self.demo_phase == 3:  # Lower arms
-                action_chunk[i, 27:] = 100  # Keep hands closed
+                # Keep hands closed
+                hand_value = 100
+                action_chunk[i, 27] = hand_value
+                action_chunk[i, 29] = hand_value
+                action_chunk[i, 31] = hand_value
+                action_chunk[i, 33] = hand_value
+                action_chunk[i, 35] = hand_value
+                action_chunk[i, 36] = hand_value
+                action_chunk[i, 39] = hand_value
+                action_chunk[i, 41] = hand_value
+                action_chunk[i, 43] = hand_value
+                action_chunk[i, 45] = hand_value
+                action_chunk[i, 47] = hand_value
+                action_chunk[i, 48] = hand_value
                 # Lower arms back to 0
                 action_chunk[i, :27] = 0.3 - step_progress * 0.3
         
         # Clip to valid ranges (increased for more visible movement)
         action_chunk[:, :27] = np.clip(action_chunk[:, :27], 0.0, 0.5)
-        action_chunk[:, 27:] = np.clip(action_chunk[:, 27:], 0.0, 1000)
+        action_chunk[:, 27:51] = np.clip(action_chunk[:, 27:51], 0.0, 1000)
+        
+        # Log first action for debugging
+        logger.info(f"  Hand values: L_pinkie={action_chunk[0,29]:.0f}, L_index={action_chunk[0,27]:.0f}, R_pinkie={action_chunk[0,41]:.0f}, R_index={action_chunk[0,39]:.0f}")
         
         # Update phase counter
         self.demo_chunks_in_phase += 1
