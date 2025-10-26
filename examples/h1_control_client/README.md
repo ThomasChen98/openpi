@@ -25,14 +25,40 @@ h1_control_client/
 │   └── robot_arm.py           # H1-2 low-level controller
 ├── utils/                      # Utilities
 │   └── weighted_moving_filter.py
-├── assets/                     # URDF and meshes
+├── assets/                     # URDF and meshes (copy from unitree_h12_bimanual)
 │   └── h1_2/
 │       ├── h1_2.urdf
 │       └── meshes/
-└── libraries/                  # SDKs (self-contained)
-    ├── unitree_sdk2_python/
+└── libraries/                  # SDKs with binaries (copy from unitree_h12_bimanual)
+    ├── unitree_sdk2_python/    # Includes .so files
     └── inspire_hand_sdk/
 ```
+
+## 🚀 Pipeline Commands
+
+**Complete 3-machine setup to run the demo:**
+
+```bash
+# Robot (Terminal 1) - Stream head camera
+cd ~/xr_teleoperate
+python3 image_server.py
+
+# GPU Server (Terminal 2) - Run policy server
+cd /path/to/openpi
+uv run scripts/mock_policy_server.py --port 5006
+
+# Laptop (Terminal 3) - Run H1-2 client
+cd ~/openpi/examples/h1_control_client
+python3 h1_remote_client.py \
+    --server-host 128.32.164.12 \
+    --server-port 5006 \
+    --head-camera-server-ip 192.168.123.163 \
+    --prompt "demo"
+```
+
+**Demo sequence:** Opens hands → Raises arms → Closes hands → Lowers arms
+
+---
 
 ## Quick Start (New Laptop)
 
@@ -43,26 +69,51 @@ git clone https://github.com/PhysicalIntelligence/openpi.git
 cd openpi/examples/h1_control_client
 ```
 
-### 2. Run Setup Script
+### 2. Copy Required Files
+
+**Important:** Copy URDF models and SDK libraries from your `unitree_h12_bimanual` repository:
+
+```bash
+# Copy assets (URDF, meshes)
+cp -r /path/to/unitree_h12_bimanual/assets ./
+
+# Copy SDK libraries (with compiled binaries)
+cp -r /path/to/unitree_h12_bimanual/libraries ./
+```
+
+These folders contain:
+- **`assets/`**: URDF models, meshes, MuJoCo files
+- **`libraries/`**: Unitree SDK2 (with `.so` files) and Inspire Hand SDK
+
+These large files are not included in the OpenPi repository to avoid duplication.
+
+### 3. Create Conda Environment
+
+**Important:** Pinocchio 3.1.0 is only available via conda:
+
+```bash
+conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
+conda activate h1_client
+```
+
+### 4. Run Setup Script
 
 ```bash
 ./setup.sh
 ```
 
 This installs:
-- Python dependencies (pinocchio, casadi, etc.)
+- Python dependencies (casadi, meshcat, etc.)
 - OpenPi client
 - Unitree SDK
 - Inspire Hand SDK
+- RealSense SDK (pyrealsense2) - optional, for wrist cameras
 
-**Note:** If using conda, pinocchio installation is recommended:
-```bash
-conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
-conda activate h1_client
-./setup.sh
-```
+**Note:** Pinocchio is already installed via conda in step 3
 
-### 3. Configure Network
+**RealSense Cameras:** The setup script will attempt to install `pyrealsense2` for wrist camera support. If it fails (common on some systems), the client will still work but wrist cameras will use dummy images.
+
+### 5. Configure Network
 
 Edit IP addresses if needed:
 ```bash
@@ -72,26 +123,66 @@ Edit IP addresses if needed:
 --network-interface eno1
 ```
 
-### 4. Start Policy Server (GPU Machine)
+### 6. Setup Cameras
+
+**Camera Architecture:**
+- **Head camera (ego cam)**: On robot, streamed via image_server (RealSense)
+- **Wrist cameras**: Connected to laptop via USB (RealSense D405)
+  - Left wrist: Serial `218622271789`
+  - Right wrist: Serial `241222076627`
+
+**On Robot (Terminal 1):** Start head camera server
+```bash
+cd ~/xr_teleoperate
+python -m teleop.image_server.image_server
+# Edit the config in that file to match your head camera serial number
+```
+
+**On Laptop:** Wrist cameras are captured directly via RealSense SDK
+- The client automatically detects and connects to RealSense cameras by serial number
+- No additional setup required, but ensure cameras are connected and powered
+
+**Important: Graceful Degradation**
+- If any camera fails to initialize, the client will **continue running** with dummy images
+- You'll see warnings like: `WARNING: Failed to initialize left wrist camera`
+- This allows you to test robot control even without all cameras working
+- The policy will receive gray placeholder images (128,128,128) for failed cameras
+
+### 7. Start Policy Server (GPU Machine - Terminal 2)
 
 On your GPU server:
 ```bash
 cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 8000
+uv run scripts/mock_policy_server.py --port 5006
 ```
 
 For real models:
 ```bash
-uv run scripts/serve_policy.py --env DROID --port 8000
+uv run scripts/serve_policy.py --env DROID --port 5006
 ```
 
-### 5. Run H1-2 Client (Robot Laptop)
+### 8. Run H1-2 Client (Laptop - Terminal 3)
 
+**Important:** Always run from the `h1_control_client` directory:
+
+```bash
+cd ~/openpi/examples/h1_control_client
+python h1_remote_client.py \
+    --server-host <gpu-server-ip> \
+    --server-port 5006 \
+    --head-camera-server-ip 192.168.123.163 \
+    --head-camera-server-port 5555
+```
+
+**Test with demo sequence:**
 ```bash
 python h1_remote_client.py \
     --server-host <gpu-server-ip> \
-    --server-port 8000
+    --server-port 5006 \
+    --prompt "demo"
 ```
+
+This will make the robot: open hands → raise arms → close hands → lower arms
 
 That's it! The robot will:
 1. Connect to policy server
@@ -191,17 +282,28 @@ Right arm (7 DOF): indices 20-26
   26: right_wrist_yaw
 ```
 
-## Camera Integration (TODO)
+## Camera Integration
 
-Replace dummy images in `h1_remote_client.py`:
+The client now includes full RealSense camera integration:
 
+**RealSense Wrist Cameras:**
+- Automatically detects and connects to RealSense D405 cameras by serial number
+- Uses Intel RealSense SDK (pyrealsense2) for direct camera access
+- Serial numbers: `218622271789` (left), `241222076627` (right)
+
+**Head Camera:**
+- Receives stream from robot via ZMQ (image_server)
+- Processes RealSense camera feed from robot's head
+
+**Processing Pipeline:**
 ```python
 def get_observation(self) -> dict:
-    # TODO: Add your camera interface here
-    # external_image = your_camera.get_external_view()
-    # wrist_image = your_camera.get_wrist_view()
-    
-    # Process images
+    # Get real camera feeds
+    head_image = self.head_img_array.copy()  # From robot via ZMQ
+    left_wrist_image = self.left_wrist_camera.get_frame()  # RealSense direct
+    right_wrist_image = self.right_wrist_camera.get_frame()  # RealSense direct
+
+    # Process images (resize, convert to RGB, normalize)
     from openpi_client import image_tools
     external_processed = image_tools.convert_to_uint8(
         image_tools.resize_with_pad(external_image, 224, 224)
@@ -223,7 +325,7 @@ Test the setup without actual hardware:
 ```bash
 # Terminal 1: Start mock server
 cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 8000
+uv run scripts/mock_policy_server.py --port 5006
 
 # Terminal 2: Test connection only
 python3 << 'EOF'
@@ -253,11 +355,19 @@ EOF
 
 ### Setup Issues
 
-**"pinocchio not found"**
+**"pinocchio not found" or "No matching distribution found"**
+
+Pinocchio 3.1.0 is ONLY available via conda, not pip:
 ```bash
-# Use conda for pinocchio:
-conda install pinocchio=3.1.0 -c conda-forge
+# Correct way (conda):
+conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
+conda activate h1_client
+
+# Then run setup.sh
+./setup.sh
 ```
+
+Note: PyPI only has old pinocchio versions (0.3-0.4), which won't work.
 
 **"unitree_sdk2py not found"**
 ```bash
