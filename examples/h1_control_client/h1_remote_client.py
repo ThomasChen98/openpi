@@ -131,58 +131,111 @@ class H1RemoteClient:
         print(" Initializing cameras...")
         self._init_head_camera_client(head_camera_server_ip, head_camera_server_port)
         self._init_wrist_cameras(left_wrist_camera_id, right_wrist_camera_id)
-        print("   Cameras ready")
+        
+        # Report camera status
+        working_cameras = []
+        if self.head_img_array is not None:
+            working_cameras.append("head")
+        if self.left_wrist_camera is not None:
+            working_cameras.append("left wrist")
+        if self.right_wrist_camera is not None:
+            working_cameras.append("right wrist")
+        
+        if len(working_cameras) == 3:
+            print("   Cameras ready: All cameras working!")
+        elif len(working_cameras) > 0:
+            print(f"   Cameras ready: {', '.join(working_cameras)} working (others using dummy images)")
+        else:
+            print("   Cameras ready: All using dummy images (policy will still run)")
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
-        # Head camera: single RealSense at 480x640
-        self.head_img_shape = (480, 640, 3)
-        
-        # Create shared memory buffer for head camera
-        self.head_img_shm = shared_memory.SharedMemory(
-            create=True, 
-            size=np.prod(self.head_img_shape) * np.uint8().itemsize
-        )
-        self.head_img_array = np.ndarray(
-            self.head_img_shape, dtype=np.uint8, buffer=self.head_img_shm.buf
-        )
-        
-        # Initialize image client (receives head camera only)
-        self.head_camera_client = ImageClient(
-            tv_img_shape=self.head_img_shape,
-            tv_img_shm_name=self.head_img_shm.name,
-            wrist_img_shape=None,  # Wrist cameras are captured directly
-            wrist_img_shm_name=None,
-            server_address=server_ip,
-            port=server_port,
-            image_show=False
-        )
-        
-        # Start image receiving thread
-        self.head_camera_thread = threading.Thread(
-            target=self.head_camera_client.receive_process,
-            daemon=True
-        )
-        self.head_camera_thread.start()
-        print(f"   Head camera client connected to {server_ip}:{server_port}")
+        try:
+            # Head camera: single RealSense at 480x640
+            self.head_img_shape = (480, 640, 3)
+            
+            # Create shared memory buffer for head camera
+            self.head_img_shm = shared_memory.SharedMemory(
+                create=True, 
+                size=np.prod(self.head_img_shape) * np.uint8().itemsize
+            )
+            self.head_img_array = np.ndarray(
+                self.head_img_shape, dtype=np.uint8, buffer=self.head_img_shm.buf
+            )
+            
+            # Initialize image client (receives head camera only)
+            self.head_camera_client = ImageClient(
+                tv_img_shape=self.head_img_shape,
+                tv_img_shm_name=self.head_img_shm.name,
+                wrist_img_shape=None,  # Wrist cameras are captured directly
+                wrist_img_shm_name=None,
+                server_address=server_ip,
+                port=server_port,
+                image_show=False
+            )
+            
+            # Start image receiving thread
+            self.head_camera_thread = threading.Thread(
+                target=self.head_camera_client.receive_process,
+                daemon=True
+            )
+            self.head_camera_thread.start()
+            print(f"   Head camera client connected to {server_ip}:{server_port}")
+            
+        except Exception as e:
+            print(f"   WARNING: Failed to initialize head camera: {e}")
+            print(f"            Will use dummy image for head camera")
+            self.head_img_array = None
+            self.head_camera_client = None
     
     def _init_wrist_cameras(self, left_id: int, right_id: int):
         """Initialize direct USB wrist cameras on laptop"""
         # Wrist cameras: OpenCV cameras connected to laptop
         # /dev/video2 (left) and /dev/video4 (right)
-        self.left_wrist_camera = OpenCVCamera(
-            device_id=left_id,
-            img_shape=[480, 640],  # height, width
-            fps=30
-        )
-        print(f"   Left wrist camera: /dev/video{left_id}")
         
-        self.right_wrist_camera = OpenCVCamera(
-            device_id=right_id,
-            img_shape=[480, 640],  # height, width
-            fps=30
-        )
-        print(f"   Right wrist camera: /dev/video{right_id}")
+        # Try left wrist camera
+        try:
+            left_cam = OpenCVCamera(
+                device_id=left_id,
+                img_shape=[480, 640],  # height, width
+                fps=30
+            )
+            # Test if we can actually read a frame
+            test_frame = left_cam.get_frame()
+            if test_frame is None:
+                print(f"   WARNING: Left wrist camera /dev/video{left_id} opened but cannot read frames")
+                print(f"            Will use dummy image for left wrist")
+                left_cam.release()
+                self.left_wrist_camera = None
+            else:
+                self.left_wrist_camera = left_cam
+                print(f"   Left wrist camera: /dev/video{left_id}")
+        except Exception as e:
+            print(f"   WARNING: Failed to initialize left wrist camera (/dev/video{left_id}): {e}")
+            print(f"            Will use dummy image for left wrist")
+            self.left_wrist_camera = None
+        
+        # Try right wrist camera
+        try:
+            right_cam = OpenCVCamera(
+                device_id=right_id,
+                img_shape=[480, 640],  # height, width
+                fps=30
+            )
+            # Test if we can actually read a frame
+            test_frame = right_cam.get_frame()
+            if test_frame is None:
+                print(f"   WARNING: Right wrist camera /dev/video{right_id} opened but cannot read frames")
+                print(f"            Will use dummy image for right wrist")
+                right_cam.release()
+                self.right_wrist_camera = None
+            else:
+                self.right_wrist_camera = right_cam
+                print(f"   Right wrist camera: /dev/video{right_id}")
+        except Exception as e:
+            print(f"   WARNING: Failed to initialize right wrist camera (/dev/video{right_id}): {e}")
+            print(f"            Will use dummy image for right wrist")
+            self.right_wrist_camera = None
     
     def connect_to_policy_server(self):
         """Connect to the remote OpenPi policy server"""
@@ -211,34 +264,58 @@ class H1RemoteClient:
     def get_observation(self) -> dict:
         """
         Construct observation for policy inference with real camera feeds
+        Uses dummy images for any cameras that failed to initialize.
         """
         # Get current arm joint positions (14 DOF)
         current_arm_q = self.robot.get_current_dual_arm_q()
         
+        # Create dummy image (224x224 RGB, gray)
+        dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
+        
         # Get head camera (from robot via ZMQ)
-        head_image = self.head_img_array.copy()
+        if self.head_img_array is not None:
+            try:
+                head_image = self.head_img_array.copy()
+                base_image = cv2.resize(head_image, (224, 224))
+                base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
+                base_image = image_tools.convert_to_uint8(base_image)
+            except Exception as e:
+                print(f"   WARNING: Failed to get head camera frame: {e}")
+                base_image = dummy_image
+        else:
+            base_image = dummy_image
         
-        # Get wrist cameras (directly from laptop)
-        left_wrist_image = self.left_wrist_camera.get_frame()
-        right_wrist_image = self.right_wrist_camera.get_frame()
+        # Get left wrist camera (directly from laptop)
+        if self.left_wrist_camera is not None:
+            try:
+                left_wrist_frame = self.left_wrist_camera.get_frame()
+                if left_wrist_frame is not None:
+                    left_wrist_image = cv2.resize(left_wrist_frame, (224, 224))
+                    left_wrist_image = cv2.cvtColor(left_wrist_image, cv2.COLOR_BGR2RGB)
+                    left_wrist_image = image_tools.convert_to_uint8(left_wrist_image)
+                else:
+                    left_wrist_image = dummy_image
+            except Exception as e:
+                print(f"   WARNING: Failed to get left wrist frame: {e}")
+                left_wrist_image = dummy_image
+        else:
+            left_wrist_image = dummy_image
         
-        if left_wrist_image is None or right_wrist_image is None:
-            raise RuntimeError("Failed to capture wrist camera frames")
-        
-        # Resize to OpenPi expected resolution (224x224)
-        base_image = cv2.resize(head_image, (224, 224))
-        base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
-        
-        left_wrist_image = cv2.resize(left_wrist_image, (224, 224))
-        left_wrist_image = cv2.cvtColor(left_wrist_image, cv2.COLOR_BGR2RGB)
-        
-        right_wrist_image = cv2.resize(right_wrist_image, (224, 224))
-        right_wrist_image = cv2.cvtColor(right_wrist_image, cv2.COLOR_BGR2RGB)
-        
-        # Convert to uint8 for efficient transmission
-        base_image = image_tools.convert_to_uint8(base_image)
-        left_wrist_image = image_tools.convert_to_uint8(left_wrist_image)
-        right_wrist_image = image_tools.convert_to_uint8(right_wrist_image)
+        # Get right wrist camera (directly from laptop)
+        if self.right_wrist_camera is not None:
+            try:
+                right_wrist_frame = self.right_wrist_camera.get_frame()
+                if right_wrist_frame is not None:
+                    right_wrist_image = cv2.resize(right_wrist_frame, (224, 224))
+                    right_wrist_image = cv2.cvtColor(right_wrist_image, cv2.COLOR_BGR2RGB)
+                    right_wrist_image = image_tools.convert_to_uint8(right_wrist_image)
+                else:
+                    right_wrist_image = dummy_image
+            except Exception as e:
+                print(f"   WARNING: Failed to get right wrist frame: {e}")
+                right_wrist_image = dummy_image
+        else:
+            right_wrist_image = dummy_image
         
         # OpenPi model expects this structure
         observation = {
@@ -358,29 +435,44 @@ class H1RemoteClient:
         
         # Stop head camera client
         print("  Stopping head camera client...")
-        if hasattr(self, 'head_camera_client'):
-            self.head_camera_client.running = False
-            if hasattr(self, 'head_camera_thread') and self.head_camera_thread.is_alive():
-                self.head_camera_thread.join(timeout=2.0)
+        if hasattr(self, 'head_camera_client') and self.head_camera_client is not None:
+            try:
+                self.head_camera_client.running = False
+                if hasattr(self, 'head_camera_thread') and self.head_camera_thread.is_alive():
+                    self.head_camera_thread.join(timeout=2.0)
+            except Exception as e:
+                print(f"    Warning: Error stopping head camera: {e}")
             
             # Cleanup shared memory
             if hasattr(self, 'head_img_shm'):
-                self.head_img_shm.close()
-                self.head_img_shm.unlink()
+                try:
+                    self.head_img_shm.close()
+                    self.head_img_shm.unlink()
+                except Exception as e:
+                    print(f"    Warning: Error cleaning up shared memory: {e}")
         
         # Stop wrist cameras
         print("  Stopping wrist cameras...")
-        if hasattr(self, 'left_wrist_camera'):
-            self.left_wrist_camera.release()
-        if hasattr(self, 'right_wrist_camera'):
-            self.right_wrist_camera.release()
+        if hasattr(self, 'left_wrist_camera') and self.left_wrist_camera is not None:
+            try:
+                self.left_wrist_camera.release()
+            except Exception as e:
+                print(f"    Warning: Error releasing left wrist camera: {e}")
+        if hasattr(self, 'right_wrist_camera') and self.right_wrist_camera is not None:
+            try:
+                self.right_wrist_camera.release()
+            except Exception as e:
+                print(f"    Warning: Error releasing right wrist camera: {e}")
         
         # Stop robot control
         if self.robot:
             print("  Stopping robot controller...")
-            self.robot.ctrl_dual_arm_go_home()
-            if hasattr(self.robot, 'stop_hand_bridges'):
-                self.robot.stop_hand_bridges()
+            try:
+                self.robot.ctrl_dual_arm_go_home()
+                if hasattr(self.robot, 'stop_hand_bridges'):
+                    self.robot.stop_hand_bridges()
+            except Exception as e:
+                print(f"    Warning: Error stopping robot: {e}")
         
         print("   Cleanup complete")
 

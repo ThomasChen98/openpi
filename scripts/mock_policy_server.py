@@ -19,6 +19,29 @@ from openpi.serving import websocket_policy_server
 logger = logging.getLogger(__name__)
 
 
+def get_network_ip():
+    """Get the actual network IP address (not localhost)"""
+    try:
+        # Create a socket to find the actual network interface
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # Connect to a public DNS (doesn't actually send data)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # Fallback to hostname-based lookup
+        try:
+            hostname = socket.gethostname()
+            ip = socket.gethostbyname(hostname)
+            # Filter out localhost addresses
+            if ip.startswith("127."):
+                return "unknown"
+            return ip
+        except:
+            return "unknown"
+
+
 class EnvMode(enum.Enum):
     """Supported robot environments."""
 
@@ -253,15 +276,15 @@ def main(args: Args) -> None:
     
     # Get network info
     hostname = socket.gethostname()
-    try:
-        local_ip = socket.gethostbyname(hostname)
-    except:
-        local_ip = "unknown"
+    local_ip = get_network_ip()
     
     print(f"\nNetwork Info:")
     print(f"  Hostname: {hostname}")
-    print(f"  Local IP: {local_ip}")
+    print(f"  Network IP: {local_ip}")
     print(f"  Listening on: 0.0.0.0:{args.port}")
+    print(f"\n  → Clients should connect to: {local_ip}:{args.port}")
+    if local_ip == "unknown":
+        print(f"     (or find your IP with: ip addr show | grep 'inet ')")
     
     print(f"\nSupported action patterns:")
     patterns = list(ACTION_PATTERNS.keys())
@@ -269,16 +292,15 @@ def main(args: Args) -> None:
         row = patterns[i:i+3]
         print(f"  {', '.join(row)}")
     
-    print(f"\nStarting server...")
     print(f"\nConnect your client with:")
-    print(f"  from openpi_client import websocket_client_policy")
-    print(f"  client = websocket_client_policy.WebsocketClientPolicy(")
-    print(f"      host='{local_ip}',  # or 'localhost' if on same machine")
-    print(f"      port={args.port}")
-    print(f"  )")
-    print(f"  result = client.infer(observation)")
-    print(f"  actions = result['actions']")
-    print("\n" + "=" * 70 + "\n")
+    print(f"  python h1_remote_client.py \\")
+    print(f"      --server-host {local_ip} \\")
+    print(f"      --server-port {args.port} \\")
+    print(f"      --prompt \"demo\"")
+    print("\n" + "=" * 70)
+    print("  🚀 Starting server...")
+    print("     Waiting for client connections...")
+    print("=" * 70 + "\n")
     
     # Create and start server
     server = websocket_policy_server.WebsocketPolicyServer(
@@ -291,7 +313,7 @@ def main(args: Args) -> None:
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\n\n👋 Shutting down server...")
+        print("\n\n  Shutting down server...")
 
 
 if __name__ == "__main__":

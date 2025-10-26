@@ -112,6 +112,12 @@ python -m teleop.image_server.image_server
 - Right wrist: `/dev/video4`
 - These are configured in `teleop_hand_and_arm.py` and match the H1-2 hardware setup
 
+**Important: Graceful Degradation**
+- If any camera fails to initialize, the client will **continue running** with dummy images
+- You'll see warnings like: `WARNING: Failed to initialize left wrist camera`
+- This allows you to test robot control even without all cameras working
+- The policy will receive gray placeholder images (128,128,128) for failed cameras
+
 ### 7. Start Policy Server (GPU Machine - Terminal 2)
 
 On your GPU server:
