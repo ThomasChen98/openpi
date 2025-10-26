@@ -81,8 +81,11 @@ This installs:
 - OpenPi client
 - Unitree SDK
 - Inspire Hand SDK
+- RealSense SDK (pyrealsense2) - optional, for wrist cameras
 
 **Note:** Pinocchio is already installed via conda in step 3
+
+**RealSense Cameras:** The setup script will attempt to install `pyrealsense2` for wrist camera support. If it fails (common on some systems), the client will still work but wrist cameras will use dummy images.
 
 ### 5. Configure Network
 
@@ -98,7 +101,9 @@ Edit IP addresses if needed:
 
 **Camera Architecture:**
 - **Head camera (ego cam)**: On robot, streamed via image_server (RealSense)
-- **Wrist cameras**: Connected to laptop via USB (OpenCV /dev/video2, /dev/video4)
+- **Wrist cameras**: Connected to laptop via USB (RealSense D405)
+  - Left wrist: Serial `218622271789`
+  - Right wrist: Serial `241222076627`
 
 **On Robot (Terminal 1):** Start head camera server
 ```bash
@@ -107,10 +112,9 @@ python -m teleop.image_server.image_server
 # Edit the config in that file to match your head camera serial number
 ```
 
-**On Laptop:** Wrist cameras are captured directly (no setup needed)
-- Left wrist: `/dev/video2`
-- Right wrist: `/dev/video4`
-- These are configured in `teleop_hand_and_arm.py` and match the H1-2 hardware setup
+**On Laptop:** Wrist cameras are captured directly via RealSense SDK
+- The client automatically detects and connects to RealSense cameras by serial number
+- No additional setup required, but ensure cameras are connected and powered
 
 **Important: Graceful Degradation**
 - If any camera fails to initialize, the client will **continue running** with dummy images
@@ -140,7 +144,8 @@ cd ~/openpi/examples/h1_control_client
 python h1_remote_client.py \
     --server-host <gpu-server-ip> \
     --server-port 5006 \
-    --head-camera-server-ip 192.168.123.163
+    --head-camera-server-ip 192.168.123.163 \
+    --head-camera-server-port 5555
 ```
 
 **Test with demo sequence:**
@@ -251,17 +256,28 @@ Right arm (7 DOF): indices 20-26
   26: right_wrist_yaw
 ```
 
-## Camera Integration (TODO)
+## Camera Integration
 
-Replace dummy images in `h1_remote_client.py`:
+The client now includes full RealSense camera integration:
 
+**RealSense Wrist Cameras:**
+- Automatically detects and connects to RealSense D405 cameras by serial number
+- Uses Intel RealSense SDK (pyrealsense2) for direct camera access
+- Serial numbers: `218622271789` (left), `241222076627` (right)
+
+**Head Camera:**
+- Receives stream from robot via ZMQ (image_server)
+- Processes RealSense camera feed from robot's head
+
+**Processing Pipeline:**
 ```python
 def get_observation(self) -> dict:
-    # TODO: Add your camera interface here
-    # external_image = your_camera.get_external_view()
-    # wrist_image = your_camera.get_wrist_view()
-    
-    # Process images
+    # Get real camera feeds
+    head_image = self.head_img_array.copy()  # From robot via ZMQ
+    left_wrist_image = self.left_wrist_camera.get_frame()  # RealSense direct
+    right_wrist_image = self.right_wrist_camera.get_frame()  # RealSense direct
+
+    # Process images (resize, convert to RGB, normalize)
     from openpi_client import image_tools
     external_processed = image_tools.convert_to_uint8(
         image_tools.resize_with_pad(external_image, 224, 224)

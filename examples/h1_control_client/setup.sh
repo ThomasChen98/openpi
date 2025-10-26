@@ -70,9 +70,22 @@ echo "Step 2/5: Installing Python dependencies..."
 echo "  (Skipping pinocchio - already installed via conda)"
 pip install -r requirements.txt
 
+# 2b. Try to install RealSense SDK (optional, for wrist cameras)
+echo ""
+echo "Step 2b/5: Installing RealSense SDK (for wrist cameras)..."
+if python3 -c "import pyrealsense2" 2>/dev/null; then
+    echo "  ✅ pyrealsense2 already installed"
+elif pip install pyrealsense2; then
+    echo "  ✅ pyrealsense2 installed successfully"
+else
+    echo "  ⚠️  Could not install pyrealsense2"
+    echo "     This is optional - wrist cameras will use dummy images"
+    echo "     To install manually: pip install pyrealsense2"
+fi
+
 # 3. Install OpenPi client
 echo ""
-echo "Step 3/5: Installing OpenPi client..."
+echo "Step 3/6: Installing OpenPi client..."
 if [ -d "../../packages/openpi-client" ]; then
     cd ../../packages/openpi-client
     pip install -e .
@@ -86,7 +99,7 @@ fi
 
 # 4. Install Unitree SDK
 echo ""
-echo "Step 4/5: Installing Unitree SDK..."
+echo "Step 4/6: Installing Unitree SDK..."
 if [ -d "libraries/unitree_sdk2_python" ]; then
     cd libraries/unitree_sdk2_python
     pip install -e .
@@ -99,7 +112,7 @@ fi
 
 # 5. Install Inspire Hand SDK
 echo ""
-echo "Step 5/5: Installing Inspire Hand SDK..."
+echo "Step 5/6: Installing Inspire Hand SDK..."
 if [ -d "libraries/inspire_hand_sdk" ]; then
     cd libraries/inspire_hand_sdk
     pip install -e .

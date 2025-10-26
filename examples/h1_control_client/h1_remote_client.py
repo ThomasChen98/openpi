@@ -9,8 +9,8 @@ Matches xr_teleoperate --inspire-bridge architecture:
 
 Camera Architecture:
     - Head camera (ego): Streamed from robot via ZMQ (image_server on robot)
-    - Left wrist: Connected to laptop via USB (/dev/video2)
-    - Right wrist: Connected to laptop via USB (/dev/video4)
+    - Left wrist: RealSense D405 connected to laptop (serial: 218622271789)
+    - Right wrist: RealSense D405 connected to laptop (serial: 241222076627)
 
 Camera Logging:
     📹 Initialization: Step-by-step camera setup with detailed status
@@ -69,7 +69,7 @@ try:
     if os.path.exists(xr_teleoperate_path):
         sys.path.insert(0, xr_teleoperate_path)
     from teleop.image_server.image_client import ImageClient
-    # OpenCVCamera is imported locally in _init_wrist_cameras
+    from teleop.image_server.image_server import RealSenseCamera
 except ImportError as e:
     print(f"ERROR: Could not import camera utilities from xr_teleoperate: {e}")
     print("  Make sure xr_teleoperate is cloned next to openpi/")
@@ -102,7 +102,7 @@ class H1RemoteClient:
     - Camera streaming (head from robot via ZMQ, wrists from laptop USB)
     """
     
-    def __init__(self, 
+    def __init__(self,
                  server_host: str = "localhost",
                  server_port: int = 5006,
                  network_interface: str = "eno1",
@@ -111,8 +111,6 @@ class H1RemoteClient:
                  visualization: bool = False,
                  head_camera_server_ip: str = "192.168.123.163",
                  head_camera_server_port: int = 5555,
-                 left_wrist_camera_id: int = 2,
-                 right_wrist_camera_id: int = 4,
                  prompt: str = "bimanual manipulation task"):
         
         self.server_host = server_host
@@ -143,7 +141,7 @@ class H1RemoteClient:
         # Initialize cameras
         print(" Initializing cameras...")
         self._init_head_camera_client(head_camera_server_ip, head_camera_server_port)
-        self._init_wrist_cameras(left_wrist_camera_id, right_wrist_camera_id)
+        self._init_wrist_cameras()
         
         # Report camera status
         working_cameras = []
@@ -255,66 +253,83 @@ class H1RemoteClient:
             self.head_img_array = None
             self.head_camera_client = None
     
-    def _init_wrist_cameras(self, left_id: int, right_id: int):
-        """Initialize direct USB wrist cameras on laptop"""
+    def _init_wrist_cameras(self):
+        """Initialize direct USB wrist cameras on laptop (RealSense D405)"""
         print(f"   📹 Initializing wrist cameras...")
         print(f"      Resolution: 480x640 RGB")
-        print(f"      Left camera: /dev/video{left_id}")
-        print(f"      Right camera: /dev/video{right_id}")
+        print(f"      Type: RealSense D405 cameras")
+        print(f"      Left serial: 218622271789")
+        print(f"      Right serial: 241222076627")
 
-        # Try left wrist camera
-        print(f"      ⏳ Testing left wrist camera...")
+        # RealSense camera serial numbers from xr_teleoperate
+        left_serial = "218622271789"
+        right_serial = "241222076627"
+
+        # Try left wrist camera (RealSense)
+        print(f"      ⏳ Testing left wrist camera (RealSense)...")
         try:
-            left_cam = OpenCVCamera(
-                device_id=left_id,
+            left_cam = RealSenseCamera(
                 img_shape=[480, 640],  # height, width
-                fps=30
+                fps=30,
+                serial_number=left_serial
             )
             # Test if we can actually read a frame
             test_frame = left_cam.get_frame()
             if test_frame is None:
-                print(f"      ⚠ Left wrist camera /dev/video{left_id} opened but cannot read frames")
+                print(f"      ⚠ Left wrist camera (serial: {left_serial}) opened but cannot read frames")
                 print(f"         Camera device exists but no video stream")
                 print(f"         Will use dummy image for left wrist")
-                left_cam.release()
                 self.left_wrist_camera = None
             else:
                 print(f"      ✓ Left wrist camera connected!")
                 print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
                 print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
                 print(f"         Mean intensity: {test_frame.mean():.1f}")
+                print(f"         Serial number: {left_serial}")
                 self.left_wrist_camera = left_cam
+        except ImportError:
+            print(f"      ❌ RealSense SDK (pyrealsense2) not available")
+            print(f"         Install: pip install pyrealsense2")
+            print(f"         Will use dummy image for left wrist")
+            self.left_wrist_camera = None
         except Exception as e:
             print(f"      ❌ Failed to initialize left wrist camera: {e}")
-            print(f"         Check if /dev/video{left_id} exists and camera is plugged in")
+            print(f"         Check if RealSense camera is connected and serial number is correct")
+            print(f"         Serial number: {left_serial}")
             print(f"         Will use dummy image for left wrist")
             self.left_wrist_camera = None
 
-        # Try right wrist camera
-        print(f"      ⏳ Testing right wrist camera...")
+        # Try right wrist camera (RealSense)
+        print(f"      ⏳ Testing right wrist camera (RealSense)...")
         try:
-            right_cam = OpenCVCamera(
-                device_id=right_id,
+            right_cam = RealSenseCamera(
                 img_shape=[480, 640],  # height, width
-                fps=30
+                fps=30,
+                serial_number=right_serial
             )
             # Test if we can actually read a frame
             test_frame = right_cam.get_frame()
             if test_frame is None:
-                print(f"      ⚠ Right wrist camera /dev/video{right_id} opened but cannot read frames")
+                print(f"      ⚠ Right wrist camera (serial: {right_serial}) opened but cannot read frames")
                 print(f"         Camera device exists but no video stream")
                 print(f"         Will use dummy image for right wrist")
-                right_cam.release()
                 self.right_wrist_camera = None
             else:
                 print(f"      ✓ Right wrist camera connected!")
                 print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
                 print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
                 print(f"         Mean intensity: {test_frame.mean():.1f}")
+                print(f"         Serial number: {right_serial}")
                 self.right_wrist_camera = right_cam
+        except ImportError:
+            print(f"      ❌ RealSense SDK (pyrealsense2) not available")
+            print(f"         Install: pip install pyrealsense2")
+            print(f"         Will use dummy image for right wrist")
+            self.right_wrist_camera = None
         except Exception as e:
             print(f"      ❌ Failed to initialize right wrist camera: {e}")
-            print(f"         Check if /dev/video{right_id} exists and camera is plugged in")
+            print(f"         Check if RealSense camera is connected and serial number is correct")
+            print(f"         Serial number: {right_serial}")
             print(f"         Will use dummy image for right wrist")
             self.right_wrist_camera = None
     
@@ -718,10 +733,6 @@ def main():
                        help="Head camera server IP (robot IP where image_server runs)")
     parser.add_argument("--head-camera-server-port", type=int, default=5555,
                        help="Head camera server port")
-    parser.add_argument("--left-wrist-camera-id", type=int, default=2,
-                       help="Left wrist camera device ID (/dev/video<id>)")
-    parser.add_argument("--right-wrist-camera-id", type=int, default=4,
-                       help="Right wrist camera device ID (/dev/video<id>)")
     parser.add_argument("--visualization", action="store_true",
                        help="Enable IK visualization (meshcat)")
     parser.add_argument("--duration", type=float, default=float('inf'),
@@ -747,8 +758,6 @@ def main():
         right_hand_ip=args.right_hand_ip,
         head_camera_server_ip=args.head_camera_server_ip,
         head_camera_server_port=args.head_camera_server_port,
-        left_wrist_camera_id=args.left_wrist_camera_id,
-        right_wrist_camera_id=args.right_wrist_camera_id,
         visualization=args.visualization,
         prompt=args.prompt
     )
