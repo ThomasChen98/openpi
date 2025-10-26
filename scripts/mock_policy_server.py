@@ -97,6 +97,10 @@ class MockPolicy:
             "action_horizon": action_horizon,
             "description": "Mock policy for testing connectivity",
         }
+        # State for demo sequence (cycles through phases)
+        self.demo_phase = 0  # 0=open, 1=raise, 2=close, 3=lower
+        self.demo_chunks_in_phase = 0  # Count chunks in current phase
+        self.chunks_per_phase = 3  # Number of action chunks per phase
         logger.info(f"Initialized mock policy for {env.value}")
     
     def infer(self, observation: dict[str, Any]) -> dict[str, Any]:
@@ -107,7 +111,6 @@ class MockPolicy:
         
         # Check for special sequence patterns
         if "demo" in prompt or "sequence" in prompt or "test" in prompt:
-            logger.info("  Generating demo sequence: open hands → raise arms → close hands → lower arms")
             return self._generate_demo_sequence()
         
         # Find matching action pattern
@@ -171,7 +174,15 @@ class MockPolicy:
         }
     
     def _generate_demo_sequence(self) -> dict[str, Any]:
-        """Generate a demo sequence: open hands → raise arms → close hands → lower arms."""
+        """Generate a demo sequence that cycles through phases across multiple chunks.
+        
+        Each phase lasts for multiple action chunks to make movements bigger and smoother.
+        Phase 0: Open hands (3 chunks)
+        Phase 1: Raise arms (3 chunks)
+        Phase 2: Close hands (3 chunks)
+        Phase 3: Lower arms (3 chunks)
+        Then repeat cycle.
+        """
         if self.action_dim != 51:
             # Fallback for non-H1 robots
             logger.warning("Demo sequence only works for H1 (action_dim=51), using random actions")
@@ -181,39 +192,51 @@ class MockPolicy:
                 "policy_timing": {"inference_ms": 5.0, "total_ms": 5.0}
             }
         
+        # Determine current phase
+        phase_names = ["Opening hands", "Raising arms", "Closing hands", "Lowering arms"]
+        logger.info(f"  Phase {self.demo_phase}: {phase_names[self.demo_phase]} (chunk {self.demo_chunks_in_phase + 1}/{self.chunks_per_phase})")
+        
+        # Generate action chunk for current phase
         action_chunk = np.zeros((self.action_horizon, self.action_dim))
-        steps_per_phase = self.action_horizon // 4
+        
+        # Calculate progress within current phase (0.0 to 1.0 across all chunks in phase)
+        chunk_progress = self.demo_chunks_in_phase / self.chunks_per_phase
+        next_chunk_progress = (self.demo_chunks_in_phase + 1) / self.chunks_per_phase
         
         for i in range(self.action_horizon):
-            phase = i // steps_per_phase
-            progress = (i % steps_per_phase) / steps_per_phase
+            # Interpolate within this chunk
+            step_progress = chunk_progress + (next_chunk_progress - chunk_progress) * i / self.action_horizon
             
-            if phase == 0:  # Phase 1: Open hands (0-25% of trajectory)
-                # Hands open to 900
-                action_chunk[i, 27:] = 500 + progress * 400  # Interpolate to 900
-                logger.info(f"  Step {i}: Opening hands") if i % 5 == 0 else None
+            if self.demo_phase == 0:  # Open hands
+                # Interpolate hand position from 500 to 900
+                action_chunk[i, 27:] = 500 + step_progress * 400
                 
-            elif phase == 1:  # Phase 2: Raise arms (25-50%)
+            elif self.demo_phase == 1:  # Raise arms
                 action_chunk[i, 27:] = 900  # Keep hands open
-                # Arms move up (positive shoulder pitch)
-                action_chunk[i, :27] = progress * 0.05  # Small arm raise
-                logger.info(f"  Step {i}: Raising arms") if i % 5 == 0 else None
+                # Raise arms - bigger movement (0.3 radians ~ 17 degrees)
+                action_chunk[i, :27] = step_progress * 0.3
                 
-            elif phase == 2:  # Phase 3: Close hands (50-75%)
-                action_chunk[i, :27] = 0.05  # Keep arms raised
-                # Hands close to 100
-                action_chunk[i, 27:] = 900 - progress * 800  # Interpolate to 100
-                logger.info(f"  Step {i}: Closing hands") if i % 5 == 0 else None
+            elif self.demo_phase == 2:  # Close hands
+                action_chunk[i, :27] = 0.3  # Keep arms raised
+                # Close hands: 900 to 100
+                action_chunk[i, 27:] = 900 - step_progress * 800
                 
-            else:  # Phase 4: Lower arms (75-100%)
+            elif self.demo_phase == 3:  # Lower arms
                 action_chunk[i, 27:] = 100  # Keep hands closed
-                # Arms move down
-                action_chunk[i, :27] = 0.05 - progress * 0.05  # Back to 0
-                logger.info(f"  Step {i}: Lowering arms") if i % 5 == 0 else None
+                # Lower arms back to 0
+                action_chunk[i, :27] = 0.3 - step_progress * 0.3
         
-        # Clip to valid ranges
-        action_chunk[:, :27] = np.clip(action_chunk[:, :27], 0.0, 0.1)
+        # Clip to valid ranges (increased for more visible movement)
+        action_chunk[:, :27] = np.clip(action_chunk[:, :27], 0.0, 0.5)
         action_chunk[:, 27:] = np.clip(action_chunk[:, 27:], 0.0, 1000)
+        
+        # Update phase counter
+        self.demo_chunks_in_phase += 1
+        if self.demo_chunks_in_phase >= self.chunks_per_phase:
+            # Move to next phase
+            self.demo_chunks_in_phase = 0
+            self.demo_phase = (self.demo_phase + 1) % 4
+            logger.info(f"  → Moving to next phase: {phase_names[self.demo_phase]}")
         
         return {
             "actions": action_chunk,

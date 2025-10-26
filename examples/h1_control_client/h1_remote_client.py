@@ -360,9 +360,33 @@ class H1RemoteClient:
             # Extract arm joint commands (14 DOF: 7 per arm)
             arm_joints = action[13:27]  # indices 13-26 from full 51-DOF action
             
-            # Extract hand commands if present
-            left_hand = action[27:39] if len(action) > 27 else np.zeros(12)
-            right_hand = action[39:51] if len(action) > 39 else np.zeros(12)
+            # Extract hand commands from URDF action space (dims 27-50)
+            # Only extract actuated joints (6 per hand), skip mimic joints
+            # Left hand actuated: 27 (index_1), 29 (little_1), 31 (middle_1), 
+            #                     33 (ring_1), 35 (thumb_1), 36 (thumb_2)
+            # Right hand actuated: 39 (index_1), 41 (little_1), 43 (middle_1),
+            #                      45 (ring_1), 47 (thumb_1), 48 (thumb_2)
+            # Inspire hand order: [little, ring, middle, index, thumb_2(bend), thumb_1(rotation)]
+            if len(action) >= 51:
+                left_hand = np.array([
+                    action[29],  # little_1
+                    action[33],  # ring_1
+                    action[31],  # middle_1
+                    action[27],  # index_1
+                    action[36],  # thumb_2 (bend)
+                    action[35],  # thumb_1 (rotation)
+                ])
+                right_hand = np.array([
+                    action[41],  # little_1
+                    action[45],  # ring_1
+                    action[43],  # middle_1
+                    action[39],  # index_1
+                    action[48],  # thumb_2 (bend)
+                    action[47],  # thumb_1 (rotation)
+                ])
+            else:
+                left_hand = np.zeros(6)
+                right_hand = np.zeros(6)
             
             action_sequence.append({
                 'arm_joints': arm_joints,
@@ -385,13 +409,15 @@ class H1RemoteClient:
         
         for i, action in enumerate(action_sequence):
             arm_joints = action['arm_joints']
+            left_hand = action['left_hand']
+            right_hand = action['right_hand']
             
-            # Use IK solver to get smooth trajectory (optional - or use joints directly)
-            # For now, send joint commands directly
+            # Send arm + hand commands to robot
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
                 tauff_target=np.zeros(14),  # No feedforward torque
-                # Note: Hand control would go here if policy provides hand actions
+                left_hand_gesture=left_hand,   # 6 DOF per hand (0-1000 range)
+                right_hand_gesture=right_hand
             )
             
             # Control at 50Hz (policy provides actions at 10Hz, interpolate 5 steps each)
