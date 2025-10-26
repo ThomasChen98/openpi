@@ -1,25 +1,37 @@
 #!/usr/bin/env python3
 """
-H1-2 Remote Policy Client - Self-Contained Edition
+H1-2 Remote Policy Client - Inspire Bridge Mode
 
-Connects to OpenPi policy server and executes actions on H1-2 robot with arms only.
-This is a complete, self-contained solution for H1-2 control.
+Connects to OpenPi policy server and executes actions on H1-2 robot with Inspire hands.
+Matches xr_teleoperate --inspire-bridge architecture:
+    - Hands: Connected to laptop via Modbus (inspire-bridge mode)
+    - Cameras: Head (from robot via ZMQ), Wrists (laptop USB)
 
 Camera Architecture:
     - Head camera (ego): Streamed from robot via ZMQ (image_server on robot)
-    - Wrist cameras: Directly connected to laptop via USB (/dev/video2, /dev/video4)
+    - Left wrist: Connected to laptop via USB (/dev/video2)
+    - Right wrist: Connected to laptop via USB (/dev/video4)
+
+Camera Logging:
+    📹 Initialization: Step-by-step camera setup with detailed status
+    ⏳ Testing: Connection testing with frame validation
+    ✓ Success: Camera connected with frame statistics
+    ⚠ Warning: Camera issues with diagnostic suggestions
+    ❌ Error: Failed initialization with cleanup details
+    📷 Status: Periodic camera health and performance metrics
+    🧹 Cleanup: Resource cleanup with final performance summary
 
 Usage:
-    # On robot: Start head camera server
-    python <run image server script for head camera>
-    
-    # On GPU: Start OpenPi policy server
+    # On robot: Start image_server
+    python3 image_server.py  # Handles head camera automatically
+
+    # On GPU server: Start OpenPi policy server
     uv run scripts/mock_policy_server.py --port 5006
-    
+
     # On laptop: Run this client
     python h1_remote_client.py --server-host <gpu-ip> --server-port 5006
 
-Author: Integrated from h1_remote_policy_client.py + camera integration
+Author: Integrated from h1_remote_policy_client.py + xr_teleoperate
 """
 
 import time
@@ -57,7 +69,7 @@ try:
     if os.path.exists(xr_teleoperate_path):
         sys.path.insert(0, xr_teleoperate_path)
     from teleop.image_server.image_client import ImageClient
-    from teleop.image_server.image_server import OpenCVCamera
+    # OpenCVCamera is imported locally in _init_wrist_cameras
 except ImportError as e:
     print(f"ERROR: Could not import camera utilities from xr_teleoperate: {e}")
     print("  Make sure xr_teleoperate is cloned next to openpi/")
@@ -80,13 +92,14 @@ def signal_handler(sig, frame):
 
 class H1RemoteClient:
     """
-    Integrated H1-2 remote policy client with camera streaming
+    Integrated H1-2 remote policy client - Inspire Bridge Mode
     
     Combines:
     - OpenPi policy server client (gets action chunks)
     - IK solver (converts EE poses to joint angles)  
     - Robot controller (executes joint commands)
-    - Camera streaming (head from robot, wrists from laptop)
+    - Inspire hand bridges (hands connected to laptop)
+    - Camera streaming (head from robot via ZMQ, wrists from laptop USB)
     """
     
     def __init__(self, 
@@ -148,31 +161,48 @@ class H1RemoteClient:
         else:
             print("   Cameras ready: All using dummy images (policy will still run)")
         
-        # Frame counter for periodic camera status logging
+        # Frame counter and timing for performance monitoring
         self.frame_count = 0
         self.camera_status_interval = 50  # Log camera status every 50 frames
-        
-        # Track camera status changes to detect when cameras stop working
+        self.session_start_time = time.time()
+        self.last_frame_time = time.time()
+
+        # Track camera status changes
         self.last_head_ok = None
         self.last_left_wrist_ok = None
         self.last_right_wrist_ok = None
+
+        # Performance tracking
+        self.head_frame_count = 0
+        self.left_wrist_frame_count = 0
+        self.right_wrist_frame_count = 0
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
+        print(f"   📹 Initializing head camera client...")
+        print(f"      Server: {server_ip}:{server_port}")
+        print(f"      Resolution: 480x640 RGB")
+        print(f"      Shared memory: {self.head_img_shm.name if hasattr(self, 'head_img_shm') else 'Not created yet'}")
+
         try:
             # Head camera: single RealSense at 480x640
             self.head_img_shape = (480, 640, 3)
-            
+
+            print(f"      ⏳ Creating shared memory buffer...")
             # Create shared memory buffer for head camera
             self.head_img_shm = shared_memory.SharedMemory(
-                create=True, 
+                create=True,
                 size=np.prod(self.head_img_shape) * np.uint8().itemsize
             )
             self.head_img_array = np.ndarray(
                 self.head_img_shape, dtype=np.uint8, buffer=self.head_img_shm.buf
             )
-            
+
+            print(f"      ✓ Created shared memory buffer: {self.head_img_shm.name}")
+            print(f"         Buffer size: {self.head_img_shm.size} bytes")
+
             # Initialize image client (receives head camera only)
+            print(f"      ⏳ Initializing ImageClient...")
             self.head_camera_client = ImageClient(
                 tv_img_shape=self.head_img_shape,
                 tv_img_shm_name=self.head_img_shm.name,
@@ -182,34 +212,58 @@ class H1RemoteClient:
                 port=server_port,
                 image_show=False
             )
-            
+
+            print(f"      ✓ Created ImageClient")
+
             # Start image receiving thread
+            print(f"      ⏳ Starting receiver thread...")
             self.head_camera_thread = threading.Thread(
                 target=self.head_camera_client.receive_process,
                 daemon=True
             )
             self.head_camera_thread.start()
-            
+
+            print(f"      ✓ Started receiver thread (PID: {self.head_camera_thread.ident})")
+
             # Wait briefly and check if we're receiving frames
-            time.sleep(0.5)
-            test_frame = self.head_img_array.copy()
-            if np.any(test_frame != 0):
-                print(f"   ✓ Head camera connected to {server_ip}:{server_port} and receiving frames")
-            else:
-                print(f"   ⚠ Head camera client connected to {server_ip}:{server_port} but no frames yet")
-            
+            print(f"      ⏳ Testing connection (5 seconds)...")
+            for i in range(50):  # 5 seconds at 10fps
+                time.sleep(0.1)
+                test_frame = self.head_img_array.copy()
+                if np.any(test_frame != 0):
+                    print(f"      ✓ Connected! Receiving frames from robot")
+                    print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
+                    print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
+                    print(f"         Mean intensity: {test_frame.mean():.1f}")
+                    return
+
+            print(f"      ⚠ Connected to server but no frames received yet")
+            print(f"         Make sure image_server is running on robot:")
+            print(f"         python3 image_server.py --camera-id 0")
+            print(f"         Check robot logs for image_server errors")
+
         except Exception as e:
-            print(f"   WARNING: Failed to initialize head camera: {e}")
-            print(f"            Will use dummy image for head camera")
+            print(f"      ❌ Failed to initialize head camera: {e}")
+            print(f"         Will use dummy image for head camera")
+            if hasattr(self, 'head_img_shm'):
+                try:
+                    self.head_img_shm.close()
+                    self.head_img_shm.unlink()
+                    print(f"         Cleaned up shared memory")
+                except Exception as cleanup_e:
+                    print(f"         Warning: Failed to cleanup shared memory: {cleanup_e}")
             self.head_img_array = None
             self.head_camera_client = None
     
     def _init_wrist_cameras(self, left_id: int, right_id: int):
         """Initialize direct USB wrist cameras on laptop"""
-        # Wrist cameras: OpenCV cameras connected to laptop
-        # /dev/video2 (left) and /dev/video4 (right)
-        
+        print(f"   📹 Initializing wrist cameras...")
+        print(f"      Resolution: 480x640 RGB")
+        print(f"      Left camera: /dev/video{left_id}")
+        print(f"      Right camera: /dev/video{right_id}")
+
         # Try left wrist camera
+        print(f"      ⏳ Testing left wrist camera...")
         try:
             left_cam = OpenCVCamera(
                 device_id=left_id,
@@ -219,19 +273,25 @@ class H1RemoteClient:
             # Test if we can actually read a frame
             test_frame = left_cam.get_frame()
             if test_frame is None:
-                print(f"   WARNING: Left wrist camera /dev/video{left_id} opened but cannot read frames")
-                print(f"            Will use dummy image for left wrist")
+                print(f"      ⚠ Left wrist camera /dev/video{left_id} opened but cannot read frames")
+                print(f"         Camera device exists but no video stream")
+                print(f"         Will use dummy image for left wrist")
                 left_cam.release()
                 self.left_wrist_camera = None
             else:
+                print(f"      ✓ Left wrist camera connected!")
+                print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
+                print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
+                print(f"         Mean intensity: {test_frame.mean():.1f}")
                 self.left_wrist_camera = left_cam
-                print(f"   Left wrist camera: /dev/video{left_id}")
         except Exception as e:
-            print(f"   WARNING: Failed to initialize left wrist camera (/dev/video{left_id}): {e}")
-            print(f"            Will use dummy image for left wrist")
+            print(f"      ❌ Failed to initialize left wrist camera: {e}")
+            print(f"         Check if /dev/video{left_id} exists and camera is plugged in")
+            print(f"         Will use dummy image for left wrist")
             self.left_wrist_camera = None
-        
+
         # Try right wrist camera
+        print(f"      ⏳ Testing right wrist camera...")
         try:
             right_cam = OpenCVCamera(
                 device_id=right_id,
@@ -241,16 +301,21 @@ class H1RemoteClient:
             # Test if we can actually read a frame
             test_frame = right_cam.get_frame()
             if test_frame is None:
-                print(f"   WARNING: Right wrist camera /dev/video{right_id} opened but cannot read frames")
-                print(f"            Will use dummy image for right wrist")
+                print(f"      ⚠ Right wrist camera /dev/video{right_id} opened but cannot read frames")
+                print(f"         Camera device exists but no video stream")
+                print(f"         Will use dummy image for right wrist")
                 right_cam.release()
                 self.right_wrist_camera = None
             else:
+                print(f"      ✓ Right wrist camera connected!")
+                print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
+                print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
+                print(f"         Mean intensity: {test_frame.mean():.1f}")
                 self.right_wrist_camera = right_cam
-                print(f"   Right wrist camera: /dev/video{right_id}")
         except Exception as e:
-            print(f"   WARNING: Failed to initialize right wrist camera (/dev/video{right_id}): {e}")
-            print(f"            Will use dummy image for right wrist")
+            print(f"      ❌ Failed to initialize right wrist camera: {e}")
+            print(f"         Check if /dev/video{right_id} exists and camera is plugged in")
+            print(f"         Will use dummy image for right wrist")
             self.right_wrist_camera = None
     
     def connect_to_policy_server(self):
@@ -349,33 +414,66 @@ class H1RemoteClient:
         # Detect camera status changes (cameras going down)
         if self.last_head_ok is not None and self.last_head_ok and not head_ok:
             print(f"   ⚠️ WARNING: Head camera stopped sending frames (now using dummy images)")
+            print(f"      This usually means the image_server on the robot crashed or network issues")
+            print(f"      Check robot logs: journalctl -u image_server -f")
         if self.last_left_wrist_ok is not None and self.last_left_wrist_ok and not left_wrist_ok:
             print(f"   ⚠️ WARNING: Left wrist camera stopped sending frames (now using dummy images)")
+            print(f"      Camera device may have been unplugged or driver crashed")
+            print(f"      Check device: ls /dev/video* and dmesg | grep video")
         if self.last_right_wrist_ok is not None and self.last_right_wrist_ok and not right_wrist_ok:
             print(f"   ⚠️ WARNING: Right wrist camera stopped sending frames (now using dummy images)")
+            print(f"      Camera device may have been unplugged or driver crashed")
+            print(f"      Check device: ls /dev/video* and dmesg | grep video")
         
         # Update last status
         self.last_head_ok = head_ok
         self.last_left_wrist_ok = left_wrist_ok
         self.last_right_wrist_ok = right_wrist_ok
         
-        # Periodic camera status logging
+        # Update frame counters and timing
         self.frame_count += 1
+        current_time = time.time()
+
+        if head_ok:
+            self.head_frame_count += 1
+        if left_wrist_ok:
+            self.left_wrist_frame_count += 1
+        if right_wrist_ok:
+            self.right_wrist_frame_count += 1
+
+        # Periodic camera status logging with performance metrics
         if self.frame_count % self.camera_status_interval == 0:
+            elapsed_time = current_time - self.session_start_time
+            fps = self.frame_count / elapsed_time if elapsed_time > 0 else 0
+
+            # Calculate individual camera FPS
+            head_fps = self.head_frame_count / elapsed_time if elapsed_time > 0 else 0
+            left_fps = self.left_wrist_frame_count / elapsed_time if elapsed_time > 0 else 0
+            right_fps = self.right_wrist_frame_count / elapsed_time if elapsed_time > 0 else 0
+
             status_parts = []
             if head_ok:
-                status_parts.append("✓ Head(REAL)")
+                status_parts.append(f"✓ Head(REAL:{head_fps:.1f}fps)")
             else:
                 status_parts.append("✗ Head(DUMMY)")
             if left_wrist_ok:
-                status_parts.append("✓ L_wrist(REAL)")
+                status_parts.append(f"✓ L_wrist(REAL:{left_fps:.1f}fps)")
             else:
                 status_parts.append("✗ L_wrist(DUMMY)")
             if right_wrist_ok:
-                status_parts.append("✓ R_wrist(REAL)")
+                status_parts.append(f"✓ R_wrist(REAL:{right_fps:.1f}fps)")
             else:
                 status_parts.append("✗ R_wrist(DUMMY)")
+
             print(f" 📷 Camera status: {' | '.join(status_parts)}")
+            print(f"    Overall: {fps:.1f}fps | Total frames: {self.frame_count}")
+            print(f"    Head: {self.head_frame_count} frames | Left: {self.left_wrist_frame_count} | Right: {self.right_wrist_frame_count}")
+
+            # Reset counters for next interval
+            self.head_frame_count = 0
+            self.left_wrist_frame_count = 0
+            self.right_wrist_frame_count = 0
+            self.session_start_time = current_time
         
         # OpenPi model expects this structure
         observation = {
@@ -517,50 +615,91 @@ class H1RemoteClient:
     
     def cleanup(self):
         """Cleanup resources before exit"""
-        print("\n   Cleaning up...")
-        
+        print("\n   🧹 Cleaning up resources...")
+
         # Stop head camera client
-        print("  Stopping head camera client...")
+        print("   📹 Stopping head camera client...")
         if hasattr(self, 'head_camera_client') and self.head_camera_client is not None:
             try:
+                print(f"      Setting running=False for ImageClient...")
                 self.head_camera_client.running = False
                 if hasattr(self, 'head_camera_thread') and self.head_camera_thread.is_alive():
+                    print(f"      Waiting for receiver thread (timeout: 2s)...")
                     self.head_camera_thread.join(timeout=2.0)
+                    if self.head_camera_thread.is_alive():
+                        print(f"      ⚠ Thread didn't stop gracefully, continuing...")
+                    else:
+                        print(f"      ✓ Receiver thread stopped")
+                else:
+                    print(f"      ✓ Receiver thread already stopped")
             except Exception as e:
-                print(f"    Warning: Error stopping head camera: {e}")
-            
+                print(f"      ❌ Error stopping head camera: {e}")
+
             # Cleanup shared memory
             if hasattr(self, 'head_img_shm'):
                 try:
+                    print(f"      Closing shared memory: {self.head_img_shm.name}")
                     self.head_img_shm.close()
+                    print(f"      Unlinking shared memory...")
                     self.head_img_shm.unlink()
+                    print(f"      ✓ Shared memory cleaned up")
                 except Exception as e:
-                    print(f"    Warning: Error cleaning up shared memory: {e}")
-        
+                    print(f"      ❌ Error cleaning up shared memory: {e}")
+        else:
+            print("      ✓ Head camera already stopped")
+
         # Stop wrist cameras
-        print("  Stopping wrist cameras...")
+        print("   📹 Stopping wrist cameras...")
         if hasattr(self, 'left_wrist_camera') and self.left_wrist_camera is not None:
             try:
+                print(f"      Releasing left wrist camera...")
                 self.left_wrist_camera.release()
+                print(f"      ✓ Left wrist camera released")
             except Exception as e:
-                print(f"    Warning: Error releasing left wrist camera: {e}")
+                print(f"      ❌ Error releasing left wrist camera: {e}")
+        else:
+            print("      ✓ Left wrist camera already released")
+
         if hasattr(self, 'right_wrist_camera') and self.right_wrist_camera is not None:
             try:
+                print(f"      Releasing right wrist camera...")
                 self.right_wrist_camera.release()
+                print(f"      ✓ Right wrist camera released")
             except Exception as e:
-                print(f"    Warning: Error releasing right wrist camera: {e}")
-        
+                print(f"      ❌ Error releasing right wrist camera: {e}")
+        else:
+            print("      ✓ Right wrist camera already released")
+
         # Stop robot control
         if self.robot:
-            print("  Stopping robot controller...")
+            print("   🤖 Stopping robot controller...")
             try:
+                print(f"      Moving robot to home position...")
                 self.robot.ctrl_dual_arm_go_home()
+                print(f"      ✓ Robot moved to home position")
                 if hasattr(self.robot, 'stop_hand_bridges'):
+                    print(f"      Stopping hand bridges...")
                     self.robot.stop_hand_bridges()
+                    print(f"      ✓ Hand bridges stopped")
             except Exception as e:
-                print(f"    Warning: Error stopping robot: {e}")
-        
-        print("   Cleanup complete")
+                print(f"      ❌ Error stopping robot: {e}")
+        else:
+            print("   🤖 Robot controller already stopped")
+
+        # Print final performance statistics
+        if self.frame_count > 0:
+            total_time = time.time() - self.session_start_time
+            if total_time > 0:
+                avg_fps = self.frame_count / total_time
+                print(f"   📊 Performance summary:")
+                print(f"      Total frames processed: {self.frame_count}")
+                print(f"      Total runtime: {total_time:.2f}s")
+                print(f"      Average FPS: {avg_fps:.2f}")
+                print(f"      Head camera frames: {self.head_frame_count}")
+                print(f"      Left wrist frames: {self.left_wrist_frame_count}")
+                print(f"      Right wrist frames: {self.right_wrist_frame_count}")
+
+        print("   ✅ Cleanup complete")
 
 
 def main():
