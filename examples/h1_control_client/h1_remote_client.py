@@ -147,6 +147,15 @@ class H1RemoteClient:
             print(f"   Cameras ready: {', '.join(working_cameras)} working (others using dummy images)")
         else:
             print("   Cameras ready: All using dummy images (policy will still run)")
+        
+        # Frame counter for periodic camera status logging
+        self.frame_count = 0
+        self.camera_status_interval = 50  # Log camera status every 50 frames
+        
+        # Track camera status changes to detect when cameras stop working
+        self.last_head_ok = None
+        self.last_left_wrist_ok = None
+        self.last_right_wrist_ok = None
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
@@ -180,7 +189,14 @@ class H1RemoteClient:
                 daemon=True
             )
             self.head_camera_thread.start()
-            print(f"   Head camera client connected to {server_ip}:{server_port}")
+            
+            # Wait briefly and check if we're receiving frames
+            time.sleep(0.5)
+            test_frame = self.head_img_array.copy()
+            if np.any(test_frame != 0):
+                print(f"   ✓ Head camera connected to {server_ip}:{server_port} and receiving frames")
+            else:
+                print(f"   ⚠ Head camera client connected to {server_ip}:{server_port} but no frames yet")
             
         except Exception as e:
             print(f"   WARNING: Failed to initialize head camera: {e}")
@@ -272,13 +288,24 @@ class H1RemoteClient:
         # Create dummy image (224x224 RGB, gray)
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
         
+        # Track camera statuses
+        head_ok = False
+        left_wrist_ok = False
+        right_wrist_ok = False
+        
         # Get head camera (from robot via ZMQ)
         if self.head_img_array is not None:
             try:
                 head_image = self.head_img_array.copy()
-                base_image = cv2.resize(head_image, (224, 224))
-                base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
-                base_image = image_tools.convert_to_uint8(base_image)
+                # Check if we're actually receiving frames (not all zeros)
+                if np.any(head_image != 0):
+                    base_image = cv2.resize(head_image, (224, 224))
+                    base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
+                    base_image = image_tools.convert_to_uint8(base_image)
+                    head_ok = True
+                else:
+                    # Shared memory initialized but no frames received yet
+                    base_image = dummy_image
             except Exception as e:
                 print(f"   WARNING: Failed to get head camera frame: {e}")
                 base_image = dummy_image
@@ -293,6 +320,7 @@ class H1RemoteClient:
                     left_wrist_image = cv2.resize(left_wrist_frame, (224, 224))
                     left_wrist_image = cv2.cvtColor(left_wrist_image, cv2.COLOR_BGR2RGB)
                     left_wrist_image = image_tools.convert_to_uint8(left_wrist_image)
+                    left_wrist_ok = True
                 else:
                     left_wrist_image = dummy_image
             except Exception as e:
@@ -309,6 +337,7 @@ class H1RemoteClient:
                     right_wrist_image = cv2.resize(right_wrist_frame, (224, 224))
                     right_wrist_image = cv2.cvtColor(right_wrist_image, cv2.COLOR_BGR2RGB)
                     right_wrist_image = image_tools.convert_to_uint8(right_wrist_image)
+                    right_wrist_ok = True
                 else:
                     right_wrist_image = dummy_image
             except Exception as e:
@@ -316,6 +345,37 @@ class H1RemoteClient:
                 right_wrist_image = dummy_image
         else:
             right_wrist_image = dummy_image
+        
+        # Detect camera status changes (cameras going down)
+        if self.last_head_ok is not None and self.last_head_ok and not head_ok:
+            print(f"   ⚠️ WARNING: Head camera stopped sending frames (now using dummy images)")
+        if self.last_left_wrist_ok is not None and self.last_left_wrist_ok and not left_wrist_ok:
+            print(f"   ⚠️ WARNING: Left wrist camera stopped sending frames (now using dummy images)")
+        if self.last_right_wrist_ok is not None and self.last_right_wrist_ok and not right_wrist_ok:
+            print(f"   ⚠️ WARNING: Right wrist camera stopped sending frames (now using dummy images)")
+        
+        # Update last status
+        self.last_head_ok = head_ok
+        self.last_left_wrist_ok = left_wrist_ok
+        self.last_right_wrist_ok = right_wrist_ok
+        
+        # Periodic camera status logging
+        self.frame_count += 1
+        if self.frame_count % self.camera_status_interval == 0:
+            status_parts = []
+            if head_ok:
+                status_parts.append("✓ Head(REAL)")
+            else:
+                status_parts.append("✗ Head(DUMMY)")
+            if left_wrist_ok:
+                status_parts.append("✓ L_wrist(REAL)")
+            else:
+                status_parts.append("✗ L_wrist(DUMMY)")
+            if right_wrist_ok:
+                status_parts.append("✓ R_wrist(REAL)")
+            else:
+                status_parts.append("✗ R_wrist(DUMMY)")
+            print(f" 📷 Camera status: {' | '.join(status_parts)}")
         
         # OpenPi model expects this structure
         observation = {
@@ -411,11 +471,6 @@ class H1RemoteClient:
             arm_joints = action['arm_joints']
             left_hand = action['left_hand']
             right_hand = action['right_hand']
-            
-            # Debug logging (every 10th action)
-            if i % 10 == 0:
-                print(f"   Action {i}: L_hand=[{left_hand[0]:.0f}(pinkie), {left_hand[1]:.0f}(ring), {left_hand[2]:.0f}(mid), {left_hand[3]:.0f}(idx), {left_hand[4]:.0f}(th_b), {left_hand[5]:.0f}(th_r)]")
-                print(f"            R_hand=[{right_hand[0]:.0f}(pinkie), {right_hand[1]:.0f}(ring), {right_hand[2]:.0f}(mid), {right_hand[3]:.0f}(idx), {right_hand[4]:.0f}(th_b), {right_hand[5]:.0f}(th_r)]")
             
             # Send arm + hand commands to robot
             self.robot.ctrl_dual_arm(
