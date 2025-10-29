@@ -170,3 +170,5 @@ cython_debug/
 collected_data/
 
 training_data/
+
+*.hdf5

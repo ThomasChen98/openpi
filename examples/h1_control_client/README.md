@@ -1,69 +1,62 @@
-# H1-2 Remote Policy Client
+# H1-2 Control & Validation Client
 
-Self-contained control system for Unitree H1-2 humanoid robot with Inspire dexterous hands, integrated with OpenPi policy server.
-
-## What This Is
-
-A complete, ready-to-deploy solution for controlling H1-2 arms remotely using OpenPi models. Just clone, setup, and run!
-
-**Key Features:**
-- Self-contained - all dependencies included
-- Inverse kinematics solver (Pinocchio + CasADi)
-- Dexterous hand control (Inspire FTP hands)
-- Remote policy server integration (OpenPi)
-- Easy setup on new laptops
-
-## What's Included
-
-```
-h1_control_client/
-├── h1_remote_client.py       # Main control script
-├── setup.sh                    # One-command installation
-├── requirements.txt            # Python dependencies
-├── robot_control/              # IK solver & robot controller
-│   ├── robot_arm_ik.py        # Pinocchio IK solver
-│   └── robot_arm.py           # H1-2 low-level controller
-├── utils/                      # Utilities
-│   └── weighted_moving_filter.py
-├── assets/                     # URDF and meshes (copy from unitree_h12_bimanual)
-│   └── h1_2/
-│       ├── h1_2.urdf
-│       └── meshes/
-└── libraries/                  # SDKs with binaries (copy from unitree_h12_bimanual)
-    ├── unitree_sdk2_python/    # Includes .so files
-    └── inspire_hand_sdk/
-```
-
-## 🚀 Pipeline Commands
-
-**Complete 3-machine setup to run the demo:**
-
-```bash
-# Robot (Terminal 1) - Stream head camera
-cd ~/xr_teleoperate
-python3 image_server.py
-
-# GPU Server (Terminal 2) - Run policy server
-cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 5006
-
-# Laptop (Terminal 3) - Run H1-2 client
-cd ~/openpi/examples/h1_control_client
-python3 h1_remote_client.py \
-    --server-host 128.32.164.12 \
-    --server-port 5006 \
-    --head-camera-server-ip 192.168.123.163 \
-    --prompt "demo"
-```
-
-**Demo sequence:** Opens hands → Raises arms → Closes hands → Lowers arms
+Complete toolkit for Unitree H1-2 humanoid robot with OpenPi policy integration. Two main tools:
+1. **`h1_remote_client.py`** - Deploy policies on real robot
+2. **`h1_policy_viz_client.py`** - Validate policies with visualization
 
 ---
 
-## Quick Start (New Laptop)
+## Two Ways to Use This
 
-### 1. Clone OpenPi Repository
+### 🤖 Robot Control (Deploy Trained Policy)
 
+Control the H1-2 robot with a trained policy:
+
+```bash
+# Terminal 1: Start policy server (GPU machine)
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_h1_finetune \
+  --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_H50/1999
+
+# Terminal 2: Run robot client (control laptop)
+cd examples/h1_control_client
+python h1_remote_client.py \
+  --server-host <gpu-ip> \
+  --server-port 8000 \
+  --head-camera-server-ip <robot-ip>
+```
+
+**What it does**: Connects to robot → streams cameras → queries policy @ 10Hz → executes actions @ 250Hz
+
+### 📊 Policy Validation (Visualize Predictions)
+
+Test policy predictions without touching the robot:
+
+```bash
+# Terminal 1: Start policy server
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_h1_finetune \
+  --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_H50/1999
+
+# Terminal 2: Run visualization client
+cd examples/h1_control_client
+python h1_policy_viz_client.py --hdf5-path processed_data/circular.hdf5
+# Or: ./run_policy_viz.sh
+```
+
+**What it does**: Loads dataset → sends observations → receives action chunks → visualizes in 3D
+
+**Interactive workflow:**
+1. Select a frame from your dataset
+2. Click "🤖 Infer Action Chunk" to get predictions
+3. Click "▶️ Play Action Chunk" to visualize motion
+4. Compare ground truth vs predictions
+
+---
+
+## Quick Setup
+
+### 1. Clone Repository
 ```bash
 git clone https://github.com/PhysicalIntelligence/openpi.git
 cd openpi/examples/h1_control_client
@@ -71,398 +64,402 @@ cd openpi/examples/h1_control_client
 
 ### 2. Copy Required Files
 
-**Important:** Copy URDF models and SDK libraries from your `unitree_h12_bimanual` repository:
-
+**From your `unitree_h12_bimanual` repository:**
 ```bash
-# Copy assets (URDF, meshes)
+# Copy URDF models and meshes
 cp -r /path/to/unitree_h12_bimanual/assets ./
 
-# Copy SDK libraries (with compiled binaries)
+# Copy SDK libraries (with compiled .so files)
 cp -r /path/to/unitree_h12_bimanual/libraries ./
 ```
 
-These folders contain:
-- **`assets/`**: URDF models, meshes, MuJoCo files
-- **`libraries/`**: Unitree SDK2 (with `.so` files) and Inspire Hand SDK
+These are not in the OpenPi repo to avoid duplication.
 
-These large files are not included in the OpenPi repository to avoid duplication.
+### 3. Install Dependencies
 
-### 3. Create Conda Environment
-
-**Important:** Pinocchio 3.1.0 is only available via conda:
-
+**For robot control** (needs Pinocchio from conda):
 ```bash
+# Create environment with Pinocchio
 conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
 conda activate h1_client
-```
 
-### 4. Run Setup Script
-
-```bash
+# Install other dependencies
 ./setup.sh
 ```
 
-This installs:
-- Python dependencies (casadi, meshcat, etc.)
-- OpenPi client
-- Unitree SDK
-- Inspire Hand SDK
-- RealSense SDK (pyrealsense2) - optional, for wrist cameras
-
-**Note:** Pinocchio is already installed via conda in step 3
-
-**RealSense Cameras:** The setup script will attempt to install `pyrealsense2` for wrist camera support. If it fails (common on some systems), the client will still work but wrist cameras will use dummy images.
-
-### 5. Configure Network
-
-Edit IP addresses if needed:
+**For visualization only** (can use existing openpi venv):
 ```bash
-# In h1_remote_client.py or use command-line args
---left-hand-ip 192.168.123.211
---right-hand-ip 192.168.123.210
---network-interface eno1
+# Already in openpi venv
+cd examples/h1_control_client
+uv pip install yourdfpy h5py viser tyro cv2 einops
 ```
 
-### 6. Setup Cameras
+---
 
-**Camera Architecture:**
-- **Head camera (ego cam)**: On robot, streamed via image_server (RealSense)
-- **Wrist cameras**: Connected to laptop via USB (RealSense D405)
-  - Left wrist: Serial `218622271789`
-  - Right wrist: Serial `241222076627`
+## Tool Details
 
-**On Robot (Terminal 1):** Start head camera server
-```bash
-cd ~/xr_teleoperate
-python -m teleop.image_server.image_server
-# Edit the config in that file to match your head camera serial number
-```
+### 🤖 h1_remote_client.py
 
-**On Laptop:** Wrist cameras are captured directly via RealSense SDK
-- The client automatically detects and connects to RealSense cameras by serial number
-- No additional setup required, but ensure cameras are connected and powered
+**Purpose**: Deploy trained policies on the actual H1-2 robot.
 
-**Important: Graceful Degradation**
-- If any camera fails to initialize, the client will **continue running** with dummy images
-- You'll see warnings like: `WARNING: Failed to initialize left wrist camera`
-- This allows you to test robot control even without all cameras working
-- The policy will receive gray placeholder images (128,128,128) for failed cameras
-
-### 7. Start Policy Server (GPU Machine - Terminal 2)
-
-On your GPU server:
-```bash
-cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 5006
-```
-
-For real models:
-```bash
-uv run scripts/serve_policy.py --env DROID --port 5006
-```
-
-### 8. Run H1-2 Client (Laptop - Terminal 3)
-
-**Important:** Always run from the `h1_control_client` directory:
-
-```bash
-cd ~/openpi/examples/h1_control_client
-python h1_remote_client.py \
-    --server-host <gpu-server-ip> \
-    --server-port 5006 \
-    --head-camera-server-ip 192.168.123.163 \
-    --head-camera-server-port 5555
-```
-
-**Test with demo sequence:**
-```bash
-python h1_remote_client.py \
-    --server-host <gpu-server-ip> \
-    --server-port 5006 \
-    --prompt "demo"
-```
-
-This will make the robot: open hands → raise arms → close hands → lower arms
-
-That's it! The robot will:
-1. Connect to policy server
-2. Move to home position
-3. Start querying policy at 10Hz
-4. Execute actions on robot at 250Hz
-
-## Command Line Options
-
+**Command line options:**
 ```bash
 python h1_remote_client.py [OPTIONS]
 
-Options:
-  --server-host HOST          Policy server IP (default: localhost)
+Key options:
+  --server-host HOST          Policy server IP
   --server-port PORT          Policy server port (default: 8000)
-  --network-interface IF      Network interface (default: eno1)
+  --head-camera-server-ip IP  Robot head camera IP
   --left-hand-ip IP           Left hand IP (default: 192.168.123.211)
   --right-hand-ip IP          Right hand IP (default: 192.168.123.210)
-  --visualization             Enable IK visualization (meshcat)
-  --duration SECONDS          Run duration (default: infinite)
-  -h, --help                  Show help message
+  --network-interface IF      Network interface (default: eno1)
+  --visualization             Enable IK visualization
+  --prompt STR                Task instruction
+  --duration SECONDS          Run duration
 ```
 
-## System Architecture
+**Architecture:**
+```
+Robot Cameras → Client → Policy Server → Client → IK Solver → Robot Arms
+    (USB/ZMQ)    (10Hz)    (WebSocket)   (250Hz)  (Pinocchio)   (DDS)
+```
 
+**Key features:**
+- Real-time control @ 250Hz execution
+- Policy queries @ 10Hz
+- 3 cameras: head (via ZMQ), left/right wrist (USB)
+- IK solver for smooth trajectories
+- Dexterous hand control (Inspire FTP)
+- Graceful degradation (continues with missing cameras)
+
+**Testing without robot:**
+```bash
+# Use mock server
+uv run scripts/mock_policy_server.py --port 8000
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                GPU Server (Policy Inference)                 │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │  mock_policy_server.py  or  serve_policy.py           │ │
-│  │  • Receives observations                               │ │
-│  │  • Returns action chunks (50, 51)                      │ │
-│  └────────────────────────────────────────────────────────┘ │
-└───────────────────────────────┬──────────────────────────────┘
-                                │ Websocket (10Hz policy queries)
-                                │
-┌───────────────────────────────▼──────────────────────────────┐
-│           Robot Control Laptop (H1-2 Local Controller)       │
-│                                                              │
-│  ┌────────────────────────────────────────────────────────┐ │
-│  │  h1_remote_client.py                                   │ │
-│  │                                                         │ │
-│  │  ┌───────────────────┐  ┌────────────────────────────┐│ │
-│  │  │ OpenPi Client     │  │ IK Solver (Pinocchio)      ││ │
-│  │  │ • Get observation │  │ • EE pose → Joint angles   ││ │
-│  │  │ • Query policy    │  │ • Smooth trajectory        ││ │
-│  │  └───────────────────┘  └────────────────────────────┘│ │
-│  │                                                         │ │
-│  │  ┌─────────────────────────────────────────────────────┤ │
-│  │  │ Robot Controller (H1_2_ArmController)              ││ │
-│  │  │ • Execute joint commands @ 250Hz                   ││ │
-│  │  │ • Control dexterous hands                          ││ │
-│  │  └────────────────────────────────────────────────────┘│ │
-│  └────────────────────────────────────────────────────────┘ │
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ Unitree SDK  │  │ Inspire SDK  │  │  DDS Bridge  │      │
-│  └───────┬──────┘  └──────┬───────┘  └──────┬───────┘      │
-└──────────┼─────────────────┼─────────────────┼──────────────┘
-           │                 │                 │
-           ▼                 ▼                 ▼
-    ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-    │   H1-2 Arms  │  │ Left Hand    │  │ Right Hand   │
-    │   (14 DOF)   │  │ (6 DOF)      │  │ (6 DOF)      │
-    └──────────────┘  └──────────────┘  └──────────────┘
+
+### 📊 h1_policy_viz_client.py
+
+**Purpose**: Validate trained policies by visualizing predicted action chunks before deploying to robot.
+
+**Command line options:**
+```bash
+python h1_policy_viz_client.py [OPTIONS]
+
+Key options:
+  --hdf5-path STR         Dataset path (default: processed_data/circular.hdf5)
+  --urdf-path STR         Robot URDF (default: assets/h1_2/h1_2.urdf)
+  --host STR              Policy server host (default: 0.0.0.0)
+  --port INT              Policy server port (default: 8000)
+  --prompt STR            Task instruction
+  --fps FLOAT             Playback speed (default: 30.0)
+  --start-frame INT       Initial frame
+  --no-load-meshes        Faster loading
 ```
+
+**Interactive UI:**
+- **Frame selection**: Choose observation from dataset
+- **Inference**: Get action chunk predictions from policy
+- **Playback**: Animate predicted motions
+- **Comparison**: Toggle ground truth vs predictions
+- **Timing**: Monitor inference latency
+- **Camera views**: Display dataset images
+
+**Why use this?**
+- ✅ Catch policy errors before robot deployment
+- ✅ Test on diverse scenarios from your dataset
+- ✅ Verify action chunks make sense
+- ✅ Measure inference speed for real-time feasibility
+- ✅ Compare predictions with ground truth
+- ✅ Much faster iteration than robot testing
+
+**Dataset format:**
+```
+/action                           # (N, 14 or 26) - Joint actions
+/observations/
+  /qpos                          # (N, 14 or 26) - Joint positions
+  /images/
+    /ego_cam                     # (N, H, W, 3) or JPEG
+    /cam_left_wrist              # (N, H, W, 3) or JPEG
+    /cam_right_wrist             # (N, H, W, 3) or JPEG
+```
+
+### 🔄 data_replay.py
+
+**Purpose**: Replay recorded demonstrations without any policy.
+
+```bash
+cd utils
+python data_replay.py --hdf5-path ../processed_data/circular.hdf5
+```
+
+**Use for:**
+- Verify data collection worked
+- Inspect trajectories frame-by-frame
+- Check camera quality
+
+---
 
 ## Action Space
 
-The system uses **51-dimensional action space** matching H1-2 URDF:
+51-dimensional action space matching H1-2 URDF:
 
-| Dimensions | Description | Range | Control |
-|------------|-------------|-------|---------|
-| 0-12 | Legs + Torso | [varies] | Locked (not controlled) |
-| **13-26** | **Arms (14 DOF)** | **[-π, π]** | **Active control** |
-| 27-50 | Hands (24 URDF joints) | [0, 1000] | 12 actuated, 12 mimic |
+| Dimensions | Description | Control |
+|------------|-------------|---------|
+| 0-12 | Legs + Torso | Locked |
+| **13-26** | **Arms (14 DOF)** | **Active** |
+| 27-50 | Hands (24 joints) | 12 actuated |
 
-### Arm Joints (14 DOF - What We Control)
+**Arm joints we control (14 DOF):**
 ```
-Left arm (7 DOF):  indices 13-19
-  13: left_shoulder_pitch
-  14: left_shoulder_roll
-  15: left_shoulder_yaw
-  16: left_elbow_pitch
-  17: left_elbow_roll
-  18: left_wrist_pitch
-  19: left_wrist_yaw
-
-Right arm (7 DOF): indices 20-26
-  20: right_shoulder_pitch
-  21: right_shoulder_roll
-  22: right_shoulder_yaw
-  23: right_elbow_pitch
-  24: right_elbow_roll
-  25: right_wrist_pitch
-  26: right_wrist_yaw
+Left arm:  13-19 (shoulder_pitch/roll/yaw, elbow_pitch/roll, wrist_pitch/yaw)
+Right arm: 20-26 (shoulder_pitch/roll/yaw, elbow_pitch/roll, wrist_pitch/yaw)
 ```
 
-## Camera Integration
+---
 
-The client now includes full RealSense camera integration:
+## Development Workflow
 
-**RealSense Wrist Cameras:**
-- Automatically detects and connects to RealSense D405 cameras by serial number
-- Uses Intel RealSense SDK (pyrealsense2) for direct camera access
-- Serial numbers: `218622271789` (left), `241222076627` (right)
+### 1. Collect Data
+Use teleoperation or other methods to collect demonstrations.
 
-**Head Camera:**
-- Receives stream from robot via ZMQ (image_server)
-- Processes RealSense camera feed from robot's head
-
-**Processing Pipeline:**
-```python
-def get_observation(self) -> dict:
-    # Get real camera feeds
-    head_image = self.head_img_array.copy()  # From robot via ZMQ
-    left_wrist_image = self.left_wrist_camera.get_frame()  # RealSense direct
-    right_wrist_image = self.right_wrist_camera.get_frame()  # RealSense direct
-
-    # Process images (resize, convert to RGB, normalize)
-    from openpi_client import image_tools
-    external_processed = image_tools.convert_to_uint8(
-        image_tools.resize_with_pad(external_image, 224, 224)
-    )
-    
-    observation = {
-        "observation/image": external_processed,
-        "observation/wrist_image": wrist_image,
-        "observation/state": current_arm_q,
-        "prompt": "your task instruction",
-    }
-    return observation
-```
-
-## Testing Without Robot
-
-Test the setup without actual hardware:
-
+### 2. Convert to LeRobot Format
 ```bash
-# Terminal 1: Start mock server
-cd /path/to/openpi
-uv run scripts/mock_policy_server.py --port 5006
-
-# Terminal 2: Test connection only
-python3 << 'EOF'
-from openpi_client import websocket_client_policy
-import numpy as np
-
-client = websocket_client_policy.WebsocketClientPolicy(
-    host="localhost",
-    port=8000
-)
-
-print("Connected:", client.get_server_metadata())
-
-obs = {
-    "observation/image": np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8),
-    "observation/wrist_image": np.random.randint(0, 255, (224, 224, 3), dtype=np.uint8),
-    "observation/state": np.zeros(14),
-    "prompt": "test"
-}
-
-result = client.infer(obs)
-print(f"Got actions: {result['actions'].shape}")
-EOF
+uv run training_data/h1/convert_h1_data_to_lerobot.py \
+  --data_dir examples/h1_control_client/processed_data/my_task.hdf5 \
+  --repo_id username/h1_my_task \
+  --num_repeats 256
 ```
 
-## 🔍 Troubleshooting
+### 3. Train Policy
+```bash
+uv run scripts/train.py \
+  --config pi05_h1_finetune \
+  --dataset username/h1_my_task
+```
+
+### 4. Validate with Visualization ⭐
+```bash
+# Terminal 1: Policy server
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_h1_finetune \
+  --policy.dir=checkpoints/pi05_h1_finetune/latest
+
+# Terminal 2: Visualization
+python h1_policy_viz_client.py \
+  --hdf5-path processed_data/my_task.hdf5 \
+  --prompt "my task description"
+```
+
+**Check:**
+- ✓ Actions look reasonable?
+- ✓ Inference fast enough?
+- ✓ Predictions match ground truth?
+
+### 5. Deploy to Robot
+```bash
+python h1_remote_client.py \
+  --server-host <gpu-ip> \
+  --server-port 8000 \
+  --prompt "my task description"
+```
+
+---
+
+## Camera Setup
+
+### Head Camera (on robot)
+```bash
+# On robot (Terminal 1)
+cd ~/xr_teleoperate
+python3 image_server.py
+```
+- RealSense camera on robot head
+- Streams via ZMQ to control laptop
+- Configure serial number in image_server.py
+
+### Wrist Cameras (on control laptop)
+- Left wrist: RealSense D405, serial `218622271789`
+- Right wrist: RealSense D405, serial `241222076627`
+- Connected directly via USB to control laptop
+- Auto-detected by client
+
+**Graceful degradation**: Client continues with dummy images if cameras fail.
+
+---
+
+## Troubleshooting
 
 ### Setup Issues
 
-**"pinocchio not found" or "No matching distribution found"**
-
-Pinocchio 3.1.0 is ONLY available via conda, not pip:
+**"pinocchio not found"**
 ```bash
-# Correct way (conda):
-conda create -n h1_client python=3.10 pinocchio=3.1.0 numpy=1.26.4 -c conda-forge
-conda activate h1_client
-
-# Then run setup.sh
-./setup.sh
+# Pinocchio ONLY available via conda (not pip):
+conda create -n h1_client python=3.10 pinocchio=3.1.0 -c conda-forge
 ```
-
-Note: PyPI only has old pinocchio versions (0.3-0.4), which won't work.
 
 **"unitree_sdk2py not found"**
 ```bash
-# Reinstall SDKs:
 cd libraries/unitree_sdk2_python && pip install -e .
 cd libraries/inspire_hand_sdk && pip install -e .
+```
+
+**"yourdfpy not found" (for visualization)**
+```bash
+uv pip install yourdfpy h5py viser tyro
 ```
 
 ### Connection Issues
 
 **"Connection refused"**
-```bash
-# Check server is running:
-ping <server-ip>
-telnet <server-ip> 8000
-
-# Check firewall:
-sudo ufw allow 8000/tcp
-```
+- Check policy server is running: `curl http://<host>:<port>/health`
+- Check firewall: `sudo ufw allow 8000/tcp`
+- Verify network: `ping <server-ip>`
 
 **"Hand bridges failing"**
 ```bash
-# Check hand IPs are correct:
-ping 192.168.123.211  # Left hand
-ping 192.168.123.210  # Right hand
+# Check hand IPs
+ping 192.168.123.211  # Left
+ping 192.168.123.210  # Right
 
-# Check network interface:
-ip addr show  # Find correct interface name
+# Check network interface
+ip addr show
 ```
 
 ### Runtime Issues
 
 **"Robot not moving"**
-1. Check robot is in correct mode
-2. Verify arms are unlocked
-3. Check policy server is returning valid actions
-4. Enable visualization to see IK solver output: `--visualization`
+1. Robot in correct mode?
+2. Arms unlocked?
+3. Policy returning valid actions?
+4. Enable `--visualization` to debug
 
-**"Actions out of range"**
-- Mock server should return actions in valid ranges
-- Check server is configured for H1-2: `action_dim=51, action_horizon=50`
+**"Inference too slow"**
+- Target: <50ms for 20Hz, <33ms for 30Hz
+- Check GPU utilization on policy server
+- Try simpler model or optimize
 
-## File Structure Details
+**"Actions look wrong" (in viz client)**
+1. Toggle ground truth vs predicted
+2. Try different frames
+3. Check if training data was good
+4. Retrain with more data
 
-### Core Files
+---
 
-- **`h1_remote_client.py`** - Main control script
-  - Connects to OpenPi policy server
-  - Queries policy at 10Hz
-  - Executes actions via robot controller
+## System Architecture
 
-- **`robot_control/robot_arm_ik.py`** - IK solver
-  - Pinocchio + CasADi optimization
-  - Converts EE poses → joint angles
-  - Smooth trajectory generation
+```
+┌─────────────────────────────────────────────────────────┐
+│              GPU Server (Policy Inference)               │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │  serve_policy.py                                   │ │
+│  │  • Receives observations (images + state)          │ │
+│  │  • Returns action chunks (H, 14)                   │ │
+│  └────────────────────────────────────────────────────┘ │
+└───────────────────────┬──────────────────────────────────┘
+                        │ WebSocket
+                        │
+        ┌───────────────┴───────────────┐
+        │                               │
+        ▼                               ▼
+┌─────────────────────┐      ┌─────────────────────────┐
+│ h1_remote_client.py │      │ h1_policy_viz_client.py │
+│                     │      │                         │
+│ Robot Control       │      │ Policy Validation       │
+│ • Real cameras      │      │ • Dataset observations  │
+│ • 10Hz query        │      │ • 3D visualization      │
+│ • 250Hz execution   │      │ • Action chunk playback │
+│ • IK solver         │      │ • Ground truth compare  │
+│                     │      │                         │
+│        ↓            │      │        ↓                │
+│   Real Robot        │      │   Viser Display         │
+└─────────────────────┘      └─────────────────────────┘
+```
 
-- **`robot_control/robot_arm.py`** - Robot controller
-  - Low-level DDS communication
-  - Joint command execution @ 250Hz
-  - Hand control via Modbus bridges
+---
 
-### Dependencies
+## Files Structure
 
-- **Pinocchio** - Rigid body dynamics
-- **CasADi** - Nonlinear optimization  
-- **Meshcat** - 3D visualization (optional)
-- **Unitree SDK** - Robot communication
-- **Inspire SDK** - Hand control
+```
+h1_control_client/
+├── h1_remote_client.py          # Robot control
+├── h1_policy_viz_client.py      # Policy validation
+├── run_policy_viz.sh            # Convenience launcher
+│
+├── utils/
+│   ├── data_replay.py           # Replay demonstrations
+│   └── weighted_moving_filter.py
+│
+├── robot_control/
+│   ├── robot_arm_ik.py          # IK solver
+│   └── robot_arm.py             # Robot controller
+│
+├── assets/
+│   └── h1_2/
+│       ├── h1_2.urdf
+│       └── meshes/
+│
+├── libraries/
+│   ├── unitree_sdk2_python/
+│   └── inspire_hand_sdk/
+│
+├── processed_data/              # Your HDF5 datasets
+│   └── circular.hdf5
+│
+├── setup.sh                     # Installation script
+└── requirements.txt
+```
 
-## Next Steps
+---
 
-1. Clone and setup (you are here!)
-2. Integrate real cameras
-3. Test with mock server
-4. Collect demonstration data
-5. Train custom H1-2 policy
-6. Deploy trained model
+## Quick Reference
+
+### Common Commands
+
+**Start policy server:**
+```bash
+uv run scripts/serve_policy.py policy:checkpoint \
+  --policy.config=pi05_h1_finetune \
+  --policy.dir=checkpoints/path/to/checkpoint
+```
+
+**Validate policy (safe):**
+```bash
+python h1_policy_viz_client.py --hdf5-path processed_data/task.hdf5
+```
+
+**Deploy to robot:**
+```bash
+python h1_remote_client.py --server-host <ip> --server-port 8000
+```
+
+**Replay data (no policy):**
+```bash
+cd utils && python data_replay.py --hdf5-path ../processed_data/task.hdf5
+```
+
+### Tips
+
+1. **Always validate first**: Use viz client before robot deployment
+2. **Test diverse frames**: Don't just test on first frame
+3. **Monitor timing**: Ensure inference meets real-time requirements
+4. **Compare carefully**: Large deviations = potential issues
+5. **Iterate fast**: Viz client is much faster than robot testing
+
+---
 
 ## Related Documentation
 
 - **OpenPi Setup**: `../../SETUP_SUMMARY.md`
+- **Training Guide**: `../../examples/droid/README_train.md`
+- **Policy Server**: `../../scripts/serve_policy.py`
 - **Mock Server**: `../../scripts/mock_policy_server.py`
-- **Real Server**: `../../scripts/serve_policy.py`
-- **Training**: `../../examples/droid/README_train.md`
-
-## Support
-
-For issues:
-1. Check this README's troubleshooting section
-2. Review OpenPi documentation: `../../README.md`
-3. Open issue on OpenPi GitHub
+- **Usage Examples**: `USAGE_EXAMPLES.md`
 
 ---
 
 **Built for**: Unitree H1-2 + Inspire FTP Hands  
 **Integrated with**: OpenPi Policy Framework  
-**Ready to deploy!** 
-
+**Ready to deploy!** 🚀

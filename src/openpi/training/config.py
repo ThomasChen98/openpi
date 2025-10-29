@@ -1000,7 +1000,7 @@ _CONFIGS = [
         model=pi0_config.Pi0Config(
             pi05=True,
             action_dim=32,  # pi05 is trained with 32-dim actions
-            action_horizon=16,
+            action_horizon=50,
         ),
         data=LeRobotH1DataConfig(
             # Replace with your custom DROID LeRobot dataset repo id.
