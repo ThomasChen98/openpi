@@ -81,9 +81,9 @@ class H1_2_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
         
-        # Hand control parameters
-        self.left_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)
-        self.right_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)
+        # Hand control parameters - default to open position
+        self.left_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
+        self.right_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
         self.left_hand_pub = None
         self.right_hand_pub = None
         self.left_bridge_handler = None

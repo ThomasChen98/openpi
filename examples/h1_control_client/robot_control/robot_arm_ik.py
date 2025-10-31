@@ -177,11 +177,11 @@ class H1_2_ArmIK:
         self.smooth_filter = WeightedMovingFilter(np.array([0.4, 0.3, 0.2, 0.1]), 14)
         self.vis = None
         
-        # Hand gesture control parameters
-        self.left_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)  # 6 DOF for left hand
-        self.right_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)  # 6 DOF for right hand
-        self.target_left_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)
-        self.target_right_hand_gesture = np.zeros(INSPIRE_HAND_DOF_PER_HAND)
+        # Hand gesture control parameters - default to open position
+        self.left_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
+        self.right_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
+        self.target_left_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
+        self.target_right_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
 
         if self.Visualization:
             # Initialize the Meshcat visualizer for visualization
