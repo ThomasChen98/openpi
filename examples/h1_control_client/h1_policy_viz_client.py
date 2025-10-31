@@ -470,9 +470,9 @@ def main(args: Args) -> None:
                 hint="Use robot cameras for inference instead of dataset"
             )
             
-            server.gui.add_markdown("### ⚠️ Safety")
+            server.gui.add_markdown("###  Safety")
             estop_button = server.gui.add_button(
-                "🛑 EMERGENCY STOP",
+                " EMERGENCY STOP",
                 color="red"
             )
     
@@ -575,16 +575,16 @@ def main(args: Args) -> None:
             target_joints = data['qpos'][current_frame][:14]
             
             # Create confirmation modal
-            with server.gui.add_modal("⚠️ Confirm Reset") as modal:
+            with server.gui.add_modal(" Confirm Reset") as modal:
                 server.gui.add_markdown(
                     f"## Reset Robot to Frame {current_frame}?\n\n"
                     f"The robot will smoothly move to the joint positions from frame {current_frame}.\n\n"
                     f"**Duration:** 2.0 seconds\n\n"
-                    f"⚠️ **Make sure the workspace is clear!**"
+                    f" **Make sure the workspace is clear!**"
                 )
                 
-                confirm_button = server.gui.add_button("✅ Confirm Reset", color="green")
-                cancel_button = server.gui.add_button("❌ Cancel")
+                confirm_button = server.gui.add_button(" Confirm Reset", color="green")
+                cancel_button = server.gui.add_button(" Cancel")
                 
                 @confirm_button.on_click
                 def _(_):
@@ -603,11 +603,11 @@ def main(args: Args) -> None:
                             )
                             
                             if result["status"] == "success":
-                                robot_status.value = f"✅ Reset to frame {current_frame} complete"
+                                robot_status.value = f" Reset to frame {current_frame} complete"
                             else:
-                                robot_status.value = f"❌ Reset failed: {result.get('message')}"
+                                robot_status.value = f" Reset failed: {result.get('message')}"
                         except Exception as e:
-                            robot_status.value = f"❌ Reset error: {str(e)}"
+                            robot_status.value = f" Reset error: {str(e)}"
                         finally:
                             reset_robot_button.disabled = False
                             if predicted_actions is not None:
@@ -624,27 +624,27 @@ def main(args: Args) -> None:
         @execute_robot_button.on_click
         def _(event):
             if predicted_actions is None:
-                robot_status.value = "⚠️ No predicted actions - run inference first"
+                robot_status.value = " No predicted actions - run inference first"
                 return
             
             # Create confirmation modal
-            with server.gui.add_modal("🚨 Confirm Execution") as modal:
+            with server.gui.add_modal(" Confirm Execution") as modal:
                 server.gui.add_markdown(
-                    f"## ⚠️ Execute {len(predicted_actions)} Actions on Robot?\n\n"
+                    f"##  Execute {len(predicted_actions)} Actions on Robot?\n\n"
                     f"**Action sequence:**\n"
                     f"- Number of actions: {len(predicted_actions)}\n"
                     f"- Duration: ~{len(predicted_actions)/50.0:.2f} seconds\n\n"
-                    f"### 🚨 SAFETY WARNING 🚨\n"
+                    f"###  SAFETY WARNING \n"
                     f"- Keep emergency stop ready\n"
                     f"- Ensure workspace is clear\n"
                     f"- Be ready to power off if needed\n"
                 )
                 
                 confirm_exec_button = server.gui.add_button(
-                    "✅ I Understand - Execute Now",
+                    " I Understand - Execute Now",
                     color="red"
                 )
-                cancel_exec_button = server.gui.add_button("❌ Cancel")
+                cancel_exec_button = server.gui.add_button(" Cancel")
                 
                 @confirm_exec_button.on_click
                 def _(_):
@@ -664,11 +664,11 @@ def main(args: Args) -> None:
                             )
                             
                             if result["status"] == "success":
-                                robot_status.value = f"✅ Execution complete"
+                                robot_status.value = f" Execution complete"
                             else:
-                                robot_status.value = f"❌ Execution failed: {result.get('message')}"
+                                robot_status.value = f" Execution failed: {result.get('message')}"
                         except Exception as e:
-                            robot_status.value = f"❌ Execution error: {str(e)}"
+                            robot_status.value = f" Execution error: {str(e)}"
                         finally:
                             reset_robot_button.disabled = False
                             execute_robot_button.disabled = False
@@ -685,7 +685,7 @@ def main(args: Args) -> None:
         @estop_button.on_click
         def _(event):
             async def do_stop():
-                robot_status.value = "🛑 EMERGENCY STOP ACTIVATED"
+                robot_status.value = " EMERGENCY STOP ACTIVATED"
                 try:
                     await send_robot_command(
                         args.robot_host,
@@ -693,7 +693,7 @@ def main(args: Args) -> None:
                         {"command": "emergency_stop"}
                     )
                 except Exception as e:
-                    robot_status.value = f"🛑 EMERGENCY STOP (error: {e})"
+                    robot_status.value = f" EMERGENCY STOP (error: {e})"
             
             run_async(do_stop())
     

@@ -13,13 +13,13 @@ Camera Architecture:
     - Right wrist: RealSense D405 connected to laptop (serial: 241222076627)
 
 Camera Logging:
-    📹 Initialization: Step-by-step camera setup with detailed status
-    ⏳ Testing: Connection testing with frame validation
-    ✓ Success: Camera connected with frame statistics
-    ⚠ Warning: Camera issues with diagnostic suggestions
-    ❌ Error: Failed initialization with cleanup details
-    📷 Status: Periodic camera health and performance metrics
-    🧹 Cleanup: Resource cleanup with final performance summary
+     Initialization: Step-by-step camera setup with detailed status
+     Testing: Connection testing with frame validation
+     Success: Camera connected with frame statistics
+     Warning: Camera issues with diagnostic suggestions
+     Error: Failed initialization with cleanup details
+     Status: Periodic camera health and performance metrics
+     Cleanup: Resource cleanup with final performance summary
 
 Usage:
     # On robot: Start image_server
@@ -255,7 +255,7 @@ class H1RemoteClient:
             print(f"         Check robot logs for image_server errors")
 
         except Exception as e:
-            print(f"      ❌ Failed to initialize head camera: {e}")
+            print(f"       Failed to initialize head camera: {e}")
             print(f"         Will use dummy image for head camera")
             if hasattr(self, 'head_img_shm'):
                 try:
@@ -302,12 +302,12 @@ class H1RemoteClient:
                 print(f"         Serial number: {left_serial}")
                 self.left_wrist_camera = left_cam
         except ImportError:
-            print(f"      ❌ RealSense SDK (pyrealsense2) not available")
+            print(f"       RealSense SDK (pyrealsense2) not available")
             print(f"         Install: pip install pyrealsense2")
             print(f"         Will use dummy image for left wrist")
             self.left_wrist_camera = None
         except Exception as e:
-            print(f"      ❌ Failed to initialize left wrist camera: {e}")
+            print(f"       Failed to initialize left wrist camera: {e}")
             print(f"         Check if RealSense camera is connected and serial number is correct")
             print(f"         Serial number: {left_serial}")
             print(f"         Will use dummy image for left wrist")
@@ -336,12 +336,12 @@ class H1RemoteClient:
                 print(f"         Serial number: {right_serial}")
                 self.right_wrist_camera = right_cam
         except ImportError:
-            print(f"      ❌ RealSense SDK (pyrealsense2) not available")
+            print(f"       RealSense SDK (pyrealsense2) not available")
             print(f"         Install: pip install pyrealsense2")
             print(f"         Will use dummy image for right wrist")
             self.right_wrist_camera = None
         except Exception as e:
-            print(f"      ❌ Failed to initialize right wrist camera: {e}")
+            print(f"       Failed to initialize right wrist camera: {e}")
             print(f"         Check if RealSense camera is connected and serial number is correct")
             print(f"         Serial number: {right_serial}")
             print(f"         Will use dummy image for right wrist")
@@ -442,15 +442,15 @@ class H1RemoteClient:
         
         # Detect camera status changes (cameras going down)
         if self.last_head_ok is not None and self.last_head_ok and not head_ok:
-            print(f"   ⚠️ WARNING: Head camera stopped sending frames (now using dummy images)")
+            print(f"    WARNING: Head camera stopped sending frames (now using dummy images)")
             print(f"      This usually means the image_server on the robot crashed or network issues")
             print(f"      Check robot logs: journalctl -u image_server -f")
         if self.last_left_wrist_ok is not None and self.last_left_wrist_ok and not left_wrist_ok:
-            print(f"   ⚠️ WARNING: Left wrist camera stopped sending frames (now using dummy images)")
+            print(f"    WARNING: Left wrist camera stopped sending frames (now using dummy images)")
             print(f"      Camera device may have been unplugged or driver crashed")
             print(f"      Check device: ls /dev/video* and dmesg | grep video")
         if self.last_right_wrist_ok is not None and self.last_right_wrist_ok and not right_wrist_ok:
-            print(f"   ⚠️ WARNING: Right wrist camera stopped sending frames (now using dummy images)")
+            print(f"    WARNING: Right wrist camera stopped sending frames (now using dummy images)")
             print(f"      Camera device may have been unplugged or driver crashed")
             print(f"      Check device: ls /dev/video* and dmesg | grep video")
         
@@ -535,17 +535,15 @@ class H1RemoteClient:
         Returns:
             List of (left_ee_pose, right_ee_pose, left_hand, right_hand) tuples
         """
-        # Extract arm actions (dimensions 13-26 = 14 arm joints)
-        # Note: Policy uses full URDF (0-26=robot, 27-50=hands)
-        # But H1_2_ArmController only controls arms (indices 13-26 in full robot)
-        
-        # For now, we'll directly use the arm joint commands from policy
-        # If your policy outputs EE poses instead, you'd convert here
+        # Extract arm actions - MATCH VISUALIZATION CLIENT BEHAVIOR
+        # The policy outputs 51-dim actions, but the first 14 are the arm joints
+        # (same as how viz client uses them in extract_hand_joints_for_urdf)
         
         action_sequence = []
         for action in policy_actions:
             # Extract arm joint commands (14 DOF: 7 per arm)
-            arm_joints = action[13:27]  # indices 13-26 from full 51-DOF action
+            # Take first 14 dimensions directly (matches visualization)
+            arm_joints = action[:14]
             
             # Extract hand commands from URDF action space (dims 27-50)
             # Only extract actuated joints (6 per hand), skip mimic joints
@@ -709,7 +707,7 @@ class H1RemoteClient:
                         
                         elif cmd == "emergency_stop":
                             # Emergency stop
-                            logger.warning("🛑 EMERGENCY STOP")
+                            logger.warning(" EMERGENCY STOP")
                             current = self.robot.get_current_dual_arm_q()
                             self.robot.ctrl_dual_arm(
                                 q_target=current,
@@ -740,13 +738,13 @@ class H1RemoteClient:
                                 }
                             }
                             
-                            logger.info("✅ Observation sent")
+                            logger.info(" Observation sent")
                         
                         else:
                             response = {"status": "error", "message": f"Unknown command: {cmd}"}
                     
                     except Exception as e:
-                        logger.error(f"❌ Error: {e}", exc_info=True)
+                        logger.error(f" Error: {e}", exc_info=True)
                         response = {"status": "error", "message": str(e)}
                     
                     await websocket.send(json.dumps(response))
@@ -754,8 +752,8 @@ class H1RemoteClient:
             except websockets.exceptions.ConnectionClosed:
                 logger.info("🔌 Viz client disconnected")
         
-        logger.info(f"🚀 Starting command server on 0.0.0.0:{port}")
-        logger.info("📡 Waiting for viz client...")
+        logger.info(f" Starting command server on 0.0.0.0:{port}")
+        logger.info(" Waiting for viz client...")
         logger.info("")
         logger.info("Next steps:")
         logger.info(f"  1. SSH with reverse tunnel: ssh -R {port}:localhost:{port} -L 8081:localhost:8081 yuxin@msc-server")
@@ -768,7 +766,7 @@ class H1RemoteClient:
     
     def cleanup(self):
         """Cleanup resources before exit"""
-        print("\n   🧹 Cleaning up resources...")
+        print("\n    Cleaning up resources...")
 
         # Stop head camera client
         print("   📹 Stopping head camera client...")
@@ -786,7 +784,7 @@ class H1RemoteClient:
                 else:
                     print(f"      ✓ Receiver thread already stopped")
             except Exception as e:
-                print(f"      ❌ Error stopping head camera: {e}")
+                print(f"       Error stopping head camera: {e}")
 
             # Cleanup shared memory
             if hasattr(self, 'head_img_shm'):
@@ -797,7 +795,7 @@ class H1RemoteClient:
                     self.head_img_shm.unlink()
                     print(f"      ✓ Shared memory cleaned up")
                 except Exception as e:
-                    print(f"      ❌ Error cleaning up shared memory: {e}")
+                    print(f"       Error cleaning up shared memory: {e}")
         else:
             print("      ✓ Head camera already stopped")
 
@@ -809,7 +807,7 @@ class H1RemoteClient:
                 self.left_wrist_camera.release()
                 print(f"      ✓ Left wrist camera released")
             except Exception as e:
-                print(f"      ❌ Error releasing left wrist camera: {e}")
+                print(f"       Error releasing left wrist camera: {e}")
         else:
             print("      ✓ Left wrist camera already released")
 
@@ -819,13 +817,13 @@ class H1RemoteClient:
                 self.right_wrist_camera.release()
                 print(f"      ✓ Right wrist camera released")
             except Exception as e:
-                print(f"      ❌ Error releasing right wrist camera: {e}")
+                print(f"       Error releasing right wrist camera: {e}")
         else:
             print("      ✓ Right wrist camera already released")
 
         # Stop robot control
         if self.robot:
-            print("   🤖 Stopping robot controller...")
+            print("    Stopping robot controller...")
             try:
                 print(f"      Moving robot to home position...")
                 self.robot.ctrl_dual_arm_go_home()
@@ -835,16 +833,16 @@ class H1RemoteClient:
                     self.robot.stop_hand_bridges()
                     print(f"      ✓ Hand bridges stopped")
             except Exception as e:
-                print(f"      ❌ Error stopping robot: {e}")
+                print(f"       Error stopping robot: {e}")
         else:
-            print("   🤖 Robot controller already stopped")
+            print("    Robot controller already stopped")
 
         # Print final performance statistics
         if self.frame_count > 0:
             total_time = time.time() - self.session_start_time
             if total_time > 0:
                 avg_fps = self.frame_count / total_time
-                print(f"   📊 Performance summary:")
+                print(f"    Performance summary:")
                 print(f"      Total frames processed: {self.frame_count}")
                 print(f"      Total runtime: {total_time:.2f}s")
                 print(f"      Average FPS: {avg_fps:.2f}")
@@ -852,7 +850,7 @@ class H1RemoteClient:
                 print(f"      Left wrist frames: {self.left_wrist_frame_count}")
                 print(f"      Right wrist frames: {self.right_wrist_frame_count}")
 
-        print("   ✅ Cleanup complete")
+        print("    Cleanup complete")
 
 
 def main():
@@ -920,7 +918,7 @@ def main():
         try:
             asyncio.run(controller.command_server(port=args.listen_port))
         except KeyboardInterrupt:
-            print("\n⚠️  Interrupted")
+            print("\n  Interrupted")
     else:
         # Normal mode - connect to policy server
         if not controller.connect_to_policy_server():
