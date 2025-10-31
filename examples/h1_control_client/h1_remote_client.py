@@ -44,6 +44,20 @@ import cv2
 from multiprocessing import shared_memory
 import threading
 import os
+import asyncio
+import json
+import logging
+from io import BytesIO
+import base64
+import websockets
+from websockets.server import serve
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # OpenPi client import
 try:
@@ -628,6 +642,130 @@ class H1RemoteClient:
         except KeyboardInterrupt:
             print("\n  Control loop interrupted by user")
     
+    async def command_server(self, port: int = 5007):
+        """
+        WebSocket server that listens for commands from viz client.
+        
+        Supported commands:
+        - {"command": "execute", "actions": [[...], ...]}  # Execute action chunk
+        - {"command": "reset", "joints": [...]}  # Reset to joint positions
+        - {"command": "get_state"}  # Get current robot state
+        - {"command": "get_observation"}  # Get live observation
+        - {"command": "emergency_stop"}  # Stop robot
+        """
+        async def handle_command(websocket):
+            logger.info(f"🔌 Viz client connected from {websocket.remote_address}")
+            
+            try:
+                async for message in websocket:
+                    data = json.loads(message)
+                    cmd = data.get("command")
+                    
+                    logger.info(f"📨 Received: {cmd}")
+                    
+                    try:
+                        if cmd == "ping":
+                            # Health check
+                            response = {"status": "success", "message": "pong"}
+                        
+                        elif cmd == "execute":
+                            # Execute action chunk
+                            actions = np.array(data["actions"], dtype=np.float32)
+                            logger.info(f"🚀 Executing {len(actions)} actions...")
+                            
+                            self.execute_action_chunk(actions)
+                            
+                            response = {"status": "success", "message": f"Executed {len(actions)} actions"}
+                        
+                        elif cmd == "reset":
+                            # Reset to joint positions
+                            target = np.array(data["joints"], dtype=np.float32)
+                            duration = data.get("duration", 2.0)
+                            
+                            logger.info(f"🔄 Resetting to joints over {duration}s...")
+                            
+                            # Smooth interpolation
+                            current = self.robot.get_current_dual_arm_q()
+                            steps = int(duration * 250)
+                            
+                            for i in range(steps):
+                                alpha = (i + 1) / steps
+                                interp = current * (1 - alpha) + target * alpha
+                                self.robot.ctrl_dual_arm(
+                                    q_target=interp,
+                                    tauff_target=np.zeros(14)
+                                )
+                                await asyncio.sleep(1.0 / 250)
+                            
+                            response = {"status": "success", "message": "Reset complete"}
+                        
+                        elif cmd == "get_state":
+                            # Get current state
+                            state = self.robot.get_current_dual_arm_q()
+                            response = {
+                                "status": "success",
+                                "state": state.tolist()
+                            }
+                        
+                        elif cmd == "emergency_stop":
+                            # Emergency stop
+                            logger.warning("🛑 EMERGENCY STOP")
+                            current = self.robot.get_current_dual_arm_q()
+                            self.robot.ctrl_dual_arm(
+                                q_target=current,
+                                tauff_target=np.zeros(14)
+                            )
+                            response = {"status": "success", "message": "Emergency stop"}
+                        
+                        elif cmd == "get_observation":
+                            # Get live observation (images + state)
+                            logger.info("📷 Getting observation...")
+                            obs = self.get_observation()
+                            
+                            # Encode images as base64
+                            def img_to_base64(img):
+                                from PIL import Image
+                                pil_img = Image.fromarray(img)
+                                buf = BytesIO()
+                                pil_img.save(buf, format="JPEG", quality=85)
+                                return base64.b64encode(buf.getvalue()).decode()
+                            
+                            response = {
+                                "status": "success",
+                                "state": obs["state"].tolist(),
+                                "images": {
+                                    "base_0_rgb": img_to_base64(obs["image"]["base_0_rgb"]),
+                                    "left_wrist_0_rgb": img_to_base64(obs["image"]["left_wrist_0_rgb"]),
+                                    "right_wrist_0_rgb": img_to_base64(obs["image"]["right_wrist_0_rgb"]),
+                                }
+                            }
+                            
+                            logger.info("✅ Observation sent")
+                        
+                        else:
+                            response = {"status": "error", "message": f"Unknown command: {cmd}"}
+                    
+                    except Exception as e:
+                        logger.error(f"❌ Error: {e}", exc_info=True)
+                        response = {"status": "error", "message": str(e)}
+                    
+                    await websocket.send(json.dumps(response))
+            
+            except websockets.exceptions.ConnectionClosed:
+                logger.info("🔌 Viz client disconnected")
+        
+        logger.info(f"🚀 Starting command server on 0.0.0.0:{port}")
+        logger.info("📡 Waiting for viz client...")
+        logger.info("")
+        logger.info("Next steps:")
+        logger.info(f"  1. SSH with reverse tunnel: ssh -R {port}:localhost:{port} -L 8081:localhost:8081 yuxin@msc-server")
+        logger.info("  2. On remote: python h1_policy_viz_client.py --robot-execution")
+        logger.info("  3. Open browser: http://localhost:8081")
+        logger.info("")
+        
+        async with serve(handle_command, "0.0.0.0", port):
+            await asyncio.Future()  # Run forever
+    
     def cleanup(self):
         """Cleanup resources before exit"""
         print("\n   🧹 Cleaning up resources...")
@@ -739,6 +877,10 @@ def main():
                        help="Control loop duration in seconds (default: infinite)")
     parser.add_argument("--prompt", type=str, default="bimanual manipulation task",
                        help="Task prompt for the policy")
+    parser.add_argument("--listen-mode", action="store_true",
+                       help="Listen for commands from viz client instead of running control loop")
+    parser.add_argument("--listen-port", type=int, default=5007,
+                       help="Port to listen on in listen mode (default: 5007)")
     
     args = parser.parse_args()
     
@@ -762,18 +904,36 @@ def main():
         prompt=args.prompt
     )
     
-    # Connect to policy server
-    if not controller.connect_to_policy_server():
-        print(" Failed to connect to policy server. Exiting.")
-        return 1
-    
-    # Move arms to home position
-    print("\n   Moving to home position...")
-    controller.robot.ctrl_dual_arm_go_home()
-    print("   Ready!")
-    
-    # Run control loop
-    controller.run_control_loop(duration=args.duration)
+    if args.listen_mode:
+        # Listen mode - wait for commands from viz client
+        print("\n🎧 Starting in LISTEN MODE")
+        print(f"   Listening on port {args.listen_port}")
+        print(f"   Waiting for commands from viz client...")
+        print()
+        
+        # Move to home position first
+        print("   Moving to home position...")
+        controller.robot.ctrl_dual_arm_go_home()
+        print("   Ready!")
+        print()
+        
+        try:
+            asyncio.run(controller.command_server(port=args.listen_port))
+        except KeyboardInterrupt:
+            print("\n⚠️  Interrupted")
+    else:
+        # Normal mode - connect to policy server
+        if not controller.connect_to_policy_server():
+            print(" Failed to connect to policy server. Exiting.")
+            return 1
+        
+        # Move arms to home position
+        print("\n   Moving to home position...")
+        controller.robot.ctrl_dual_arm_go_home()
+        print("   Ready!")
+        
+        # Run control loop
+        controller.run_control_loop(duration=args.duration)
     
     # Cleanup
     controller.cleanup()
