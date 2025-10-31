@@ -543,7 +543,7 @@ class H1RemoteClient:
         for action in policy_actions:
             # Extract arm joint commands (14 DOF: 7 per arm)
             # Take first 14 dimensions directly (matches visualization)
-            arm_joints = action[:14]
+            arm_joints = action[13:27]
             
             # Extract hand commands from URDF action space (dims 27-50)
             # Only extract actuated joints (6 per hand), skip mimic joints
