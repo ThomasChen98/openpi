@@ -524,54 +524,25 @@ class H1RemoteClient:
     
     def policy_actions_to_ee_poses(self, policy_actions: np.ndarray):
         """
-        Convert policy action chunk to end-effector poses
+        Convert policy action chunk to robot commands
         
-        Policy actions are in joint space (51 DOF), but we only use arm joints (14 DOF).
-        Your IK solver then converts these to EE poses if needed.
+        The policy outputs 14-dimensional actions (arm joints only, no hands).
         
         Args:
-            policy_actions: (action_horizon, 51) array
+            policy_actions: (action_horizon, 14) array - arm joints only
             
         Returns:
-            List of (left_ee_pose, right_ee_pose, left_hand, right_hand) tuples
+            List of command dicts with arm_joints and default open hands
         """
-        # Extract arm actions - MATCH VISUALIZATION CLIENT BEHAVIOR
-        # The policy outputs 51-dim actions, but the first 14 are the arm joints
-        # (same as how viz client uses them in extract_hand_joints_for_urdf)
-        
         action_sequence = []
         for action in policy_actions:
-            # Extract arm joint commands (14 DOF: 7 per arm)
-            # Take first 14 dimensions directly (matches visualization)
-            arm_joints = action[13:27]
+            # Policy outputs 14-dim actions (arm joints only)
+            # All 14 dimensions are arm joints directly
+            arm_joints = action  # No slicing needed!
             
-            # Extract hand commands from URDF action space (dims 27-50)
-            # Only extract actuated joints (6 per hand), skip mimic joints
-            # Left hand actuated: 27 (index_1), 29 (little_1), 31 (middle_1), 
-            #                     33 (ring_1), 35 (thumb_1), 36 (thumb_2)
-            # Right hand actuated: 39 (index_1), 41 (little_1), 43 (middle_1),
-            #                      45 (ring_1), 47 (thumb_1), 48 (thumb_2)
-            # Inspire hand order: [little, ring, middle, index, thumb_2(bend), thumb_1(rotation)]
-            if len(action) >= 51:
-                left_hand = np.array([
-                    action[29],  # little_1
-                    action[33],  # ring_1
-                    action[31],  # middle_1
-                    action[27],  # index_1
-                    action[36],  # thumb_2 (bend)
-                    action[35],  # thumb_1 (rotation)
-                ])
-                right_hand = np.array([
-                    action[41],  # little_1
-                    action[45],  # ring_1
-                    action[43],  # middle_1
-                    action[39],  # index_1
-                    action[48],  # thumb_2 (bend)
-                    action[47],  # thumb_1 (rotation)
-                ])
-            else:
-                left_hand = np.zeros(6) + 1000  # Default open hand
-                right_hand = np.zeros(6) + 1000 # Default open hand
+            # Default to open hands (policy doesn't control hands)
+            left_hand = np.full(6, 1000.0)  # Fully open
+            right_hand = np.full(6, 1000.0)  # Fully open
             
             action_sequence.append({
                 'arm_joints': arm_joints,
@@ -586,27 +557,44 @@ class H1RemoteClient:
         Execute a chunk of policy actions on the robot
         
         Args:
-            policy_actions: (50, 51) array of actions
+            policy_actions: (50, 14) array of arm joint actions
         """
+        logger.info(f"📊 Action chunk shape: {policy_actions.shape}")
+        logger.info(f"   Expected: (50, 14) - arm joints only")
+        logger.info(f"   Range: [{policy_actions.min():.3f}, {policy_actions.max():.3f}]")
+        
+        if policy_actions.shape[1] != 14:
+            logger.error(f"❌ Invalid action dimension: {policy_actions.shape[1]}, expected 14")
+            return
+        
         action_sequence = self.policy_actions_to_ee_poses(policy_actions)
         
-        print(f"   Executing {len(action_sequence)} actions...")
+        logger.info(f"   Executing {len(action_sequence)} actions...")
+        logger.info(f"   First action: {action_sequence[0]['arm_joints']}")
         
+        # Execute with same timing as reset (250Hz)
         for i, action in enumerate(action_sequence):
             arm_joints = action['arm_joints']
             left_hand = action['left_hand']
             right_hand = action['right_hand']
             
+            # Log every 10th action
+            if i % 10 == 0:
+                logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
+            
             # Send arm + hand commands to robot
+            # Use same control pattern as reset
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14),  # No feedforward torque
-                left_hand_gesture=left_hand,   # 6 DOF per hand (0-1000 range)
+                tauff_target=np.zeros(14),
+                left_hand_gesture=left_hand,
                 right_hand_gesture=right_hand
             )
             
-            # Control at 50Hz (policy provides actions at 10Hz, interpolate 5 steps each)
-            time.sleep(0.02)
+            # Control at 250Hz (same as reset command)
+            time.sleep(1.0 / 250)
+        
+        logger.info("✅ Action chunk execution complete")
     
     def run_control_loop(self, duration: float = 10.0):
         """
