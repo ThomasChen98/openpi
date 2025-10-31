@@ -26,6 +26,9 @@ import io
 import os
 import time
 from pathlib import Path
+import asyncio
+import json
+import websockets
 
 import cv2
 import einops
@@ -71,6 +74,16 @@ class Args:
     start_frame: int = 0
     load_meshes: bool = True
     load_collision_meshes: bool = False
+    
+    # Robot execution settings
+    robot_execution: bool = False
+    """Enable robot execution (connects to h1_remote_client in listen mode)"""
+    
+    robot_host: str = "localhost"
+    """Robot client host (via SSH reverse tunnel)"""
+    
+    robot_port: int = 5007
+    """Robot client port"""
 
 
 def load_hdf5_data(hdf5_path: str) -> dict:
@@ -225,6 +238,27 @@ def get_observation_at_frame(data: dict, frame_idx: int, prompt: str, target_siz
     }
 
 
+async def send_robot_command(host: str, port: int, command: dict) -> dict:
+    """Send command to robot client and get response.
+    
+    Args:
+        host: Robot client host
+        port: Robot client port
+        command: Command dictionary to send
+        
+    Returns:
+        Response dictionary from robot
+    """
+    uri = f"ws://{host}:{port}"
+    try:
+        async with websockets.connect(uri) as ws:
+            await ws.send(json.dumps(command))
+            response = await ws.recv()
+            return json.loads(response)
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
     """Convert 14-dim actions to URDF format (27 robot joints + 12 hand joints).
     
@@ -252,6 +286,20 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
 
 def main(args: Args) -> None:
     """Run H1 policy inference visualization client."""
+    
+    # Helper to run async functions from sync callbacks
+    def run_async(coro):
+        """Run async coroutine in a new thread with its own event loop."""
+        import threading
+        def run_in_thread():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(coro)
+            finally:
+                loop.close()
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
     
     # Convert relative paths to absolute
     script_dir = Path(__file__).parent
@@ -286,7 +334,7 @@ def main(args: Args) -> None:
     
     # Start viser server
     print(f"\nStarting viser server...")
-    server = viser.ViserServer()
+    server = viser.ViserServer(port=8080, host="0.0.0.0")
     server.scene.set_up_direction("+z")
     
     # Load URDF
@@ -396,6 +444,38 @@ def main(args: Args) -> None:
                 initial_value=True
             )
     
+    # === NEW: Robot Execution GUI ===
+    if args.robot_execution:
+        with server.gui.add_folder("🤖 Robot Execution", expand_by_default=True):
+            robot_status = server.gui.add_text(
+                "Status",
+                initial_value="Ready - Connect robot client via SSH tunnel",
+                disabled=True,
+            )
+            
+            reset_robot_button = server.gui.add_button(
+                "🔄 Reset Robot to Frame",
+                hint="Move robot to selected frame's joint positions"
+            )
+            
+            execute_robot_button = server.gui.add_button(
+                "🚀 Execute on Robot",
+                disabled=True,
+                hint="Execute predicted actions on real robot"
+            )
+            
+            use_live_cam = server.gui.add_checkbox(
+                "📷 Use Live Cameras",
+                initial_value=False,
+                hint="Use robot cameras for inference instead of dataset"
+            )
+            
+            server.gui.add_markdown("### ⚠️ Safety")
+            estop_button = server.gui.add_button(
+                "🛑 EMERGENCY STOP",
+                color="red"
+            )
+    
     # Visibility callbacks
     @show_meshes_cb.on_update
     def _(_):
@@ -481,6 +561,141 @@ def main(args: Args) -> None:
         print(f"  Action chunk shape: {predicted_actions.shape}")
         print(f"  Inference time: {inference_time*1000:.1f}ms")
         print(f"  → Toggle 'Show Predicted Actions' to view predictions")
+        
+        # Enable execute button if robot execution is enabled
+        if args.robot_execution:
+            execute_robot_button.disabled = False
+    
+    # === NEW: Robot execution callbacks ===
+    if args.robot_execution:
+        # Reset robot button callback
+        @reset_robot_button.on_click
+        def _(event):
+            current_frame = int(frame_slider.value)
+            target_joints = data['qpos'][current_frame][:14]
+            
+            # Create confirmation modal
+            with server.gui.add_modal("⚠️ Confirm Reset") as modal:
+                server.gui.add_markdown(
+                    f"## Reset Robot to Frame {current_frame}?\n\n"
+                    f"The robot will smoothly move to the joint positions from frame {current_frame}.\n\n"
+                    f"**Duration:** 2.0 seconds\n\n"
+                    f"⚠️ **Make sure the workspace is clear!**"
+                )
+                
+                confirm_button = server.gui.add_button("✅ Confirm Reset", color="green")
+                cancel_button = server.gui.add_button("❌ Cancel")
+                
+                @confirm_button.on_click
+                def _(_):
+                    modal.close()
+                    
+                    async def do_reset():
+                        robot_status.value = f"🔄 Resetting to frame {current_frame}..."
+                        reset_robot_button.disabled = True
+                        execute_robot_button.disabled = True
+                        
+                        try:
+                            result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "reset", "joints": target_joints.tolist(), "duration": 2.0}
+                            )
+                            
+                            if result["status"] == "success":
+                                robot_status.value = f"✅ Reset to frame {current_frame} complete"
+                            else:
+                                robot_status.value = f"❌ Reset failed: {result.get('message')}"
+                        except Exception as e:
+                            robot_status.value = f"❌ Reset error: {str(e)}"
+                        finally:
+                            reset_robot_button.disabled = False
+                            if predicted_actions is not None:
+                                execute_robot_button.disabled = False
+                    
+                    run_async(do_reset())
+                
+                @cancel_button.on_click
+                def _(_):
+                    modal.close()
+                    robot_status.value = "Reset cancelled"
+        
+        # Execute on robot button callback
+        @execute_robot_button.on_click
+        def _(event):
+            if predicted_actions is None:
+                robot_status.value = "⚠️ No predicted actions - run inference first"
+                return
+            
+            # Create confirmation modal
+            with server.gui.add_modal("🚨 Confirm Execution") as modal:
+                server.gui.add_markdown(
+                    f"## ⚠️ Execute {len(predicted_actions)} Actions on Robot?\n\n"
+                    f"**Action sequence:**\n"
+                    f"- Number of actions: {len(predicted_actions)}\n"
+                    f"- Duration: ~{len(predicted_actions)/50.0:.2f} seconds\n\n"
+                    f"### 🚨 SAFETY WARNING 🚨\n"
+                    f"- Keep emergency stop ready\n"
+                    f"- Ensure workspace is clear\n"
+                    f"- Be ready to power off if needed\n"
+                )
+                
+                confirm_exec_button = server.gui.add_button(
+                    "✅ I Understand - Execute Now",
+                    color="red"
+                )
+                cancel_exec_button = server.gui.add_button("❌ Cancel")
+                
+                @confirm_exec_button.on_click
+                def _(_):
+                    modal.close()
+                    
+                    async def do_execute():
+                        robot_status.value = f"🚀 Executing {len(predicted_actions)} actions..."
+                        reset_robot_button.disabled = True
+                        execute_robot_button.disabled = True
+                        infer_button.disabled = True
+                        
+                        try:
+                            result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "execute", "actions": predicted_actions.tolist()}
+                            )
+                            
+                            if result["status"] == "success":
+                                robot_status.value = f"✅ Execution complete"
+                            else:
+                                robot_status.value = f"❌ Execution failed: {result.get('message')}"
+                        except Exception as e:
+                            robot_status.value = f"❌ Execution error: {str(e)}"
+                        finally:
+                            reset_robot_button.disabled = False
+                            execute_robot_button.disabled = False
+                            infer_button.disabled = False
+                    
+                    run_async(do_execute())
+                
+                @cancel_exec_button.on_click
+                def _(_):
+                    modal.close()
+                    robot_status.value = "Execution cancelled"
+        
+        # Emergency stop button callback
+        @estop_button.on_click
+        def _(event):
+            async def do_stop():
+                robot_status.value = "🛑 EMERGENCY STOP ACTIVATED"
+                try:
+                    await send_robot_command(
+                        args.robot_host,
+                        args.robot_port,
+                        {"command": "emergency_stop"}
+                    )
+                except Exception as e:
+                    robot_status.value = f"🛑 EMERGENCY STOP (error: {e})"
+            
+            run_async(do_stop())
     
     # Play actions button callback
     @play_actions_button.on_click
