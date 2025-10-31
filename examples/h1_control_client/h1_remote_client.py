@@ -572,8 +572,8 @@ class H1RemoteClient:
                     action[47],  # thumb_1 (rotation)
                 ])
             else:
-                left_hand = np.ones(6)
-                right_hand = np.ones(6)
+                left_hand = np.zeros(6) + 1000  # Default open hand
+                right_hand = np.zeros(6) + 1000 # Default open hand
             
             action_sequence.append({
                 'arm_joints': arm_joints,
