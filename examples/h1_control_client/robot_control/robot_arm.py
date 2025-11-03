@@ -291,6 +291,17 @@ class H1_2_ArmController:
                 self.msg.motor_cmd[id].dq = 0
                 self.msg.motor_cmd[id].tau = arm_tauff_target[idx]      
 
+            # Debug: Log what we're sending to DDS (throttled)
+            if not hasattr(self, '_ctrl_iter'):
+                self._ctrl_iter = 0
+            self._ctrl_iter += 1
+            if self._ctrl_iter % 125 == 0:  # Log every 0.5s at 250Hz
+                current_state = self.get_current_dual_arm_q()
+                logger_mp.info(f"🔍 DEBUG DDS publish (iter {self._ctrl_iter}):")
+                logger_mp.info(f"  Commanding: L_ShoulderPitch[13]={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].q:.4f}, R_ShoulderPitch[20]={self.msg.motor_cmd[H1_2_JointIndex.kRightShoulderPitch].q:.4f}")
+                logger_mp.info(f"  Current:    L_ShoulderPitch={current_state[0]:.4f}, R_ShoulderPitch={current_state[7]:.4f}")
+                logger_mp.info(f"  Gains:      L_kp={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kp:.1f}, L_kd={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kd:.1f}")
+
             self.msg.crc = self.crc.Crc(self.msg)
             self.lowcmd_publisher.Write(self.msg)
             
@@ -311,6 +322,19 @@ class H1_2_ArmController:
 
     def ctrl_dual_arm(self, q_target, tauff_target, left_hand_gesture=None, right_hand_gesture=None):
         '''Set control target values q & tau of the left and right arm motors, and hand gestures.'''
+        
+        # Debug: Log what we're receiving (throttled to every 0.5s)
+        if not hasattr(self, '_last_log_time'):
+            self._last_log_time = 0
+        current_time = time.time()
+        if current_time - self._last_log_time > 0.5:
+            logger_mp.info(f"🔍 DEBUG ctrl_dual_arm received q_target:")
+            logger_mp.info(f"  [0] L_ShoulderPitch: {q_target[0]:.4f}")
+            logger_mp.info(f"  [1] L_ShoulderRoll:  {q_target[1]:.4f}")
+            logger_mp.info(f"  [7] R_ShoulderPitch: {q_target[7]:.4f}")
+            logger_mp.info(f"  [8] R_ShoulderRoll:  {q_target[8]:.4f}")
+            self._last_log_time = current_time
+        
         with self.ctrl_lock:
             self.q_target = q_target
             self.tauff_target = tauff_target

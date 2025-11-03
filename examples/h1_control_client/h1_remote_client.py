@@ -582,6 +582,14 @@ class H1RemoteClient:
             if i % 10 == 0:
                 logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
             
+            # Debug: Log shoulder pitch commands for first, middle, and later actions
+            if i == 0 or i == 10 or i == 20:
+                logger.info(f"   🔍 DEBUG Step {i}: Sending arm_joints to robot:")
+                logger.info(f"     [0] L_ShoulderPitch: {arm_joints[0]:.4f}")
+                logger.info(f"     [1] L_ShoulderRoll:  {arm_joints[1]:.4f}")
+                logger.info(f"     [7] R_ShoulderPitch: {arm_joints[7]:.4f}")
+                logger.info(f"     [8] R_ShoulderRoll:  {arm_joints[8]:.4f}")
+            
             # Send arm + hand commands to robot
             # Use same control pattern as reset
             self.robot.ctrl_dual_arm(
