@@ -698,8 +698,8 @@ class H1RemoteClient:
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
                                     tauff_target=np.zeros(14),
-                                    left_hand_gesture=0,
-                                    right_hand_gesture=0
+                                    left_hand_gesture=None,
+                                    right_hand_gesture=None
                                 )
                                 
                                 # Execute at 50Hz (matching recording rate)
