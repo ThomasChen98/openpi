@@ -564,7 +564,7 @@ class H1RemoteClient:
         logger.info(f"   Range: [{policy_actions.min():.3f}, {policy_actions.max():.3f}]")
         
         if policy_actions.shape[1] != 14:
-            logger.error(f"❌ Invalid action dimension: {policy_actions.shape[1]}, expected 14")
+            logger.error(f"Invalid action dimension: {policy_actions.shape[1]}, expected 14")
             return
         
         # Increase velocity limit for policy execution (30 rad/s for faster shoulder movement)
@@ -697,9 +697,7 @@ class H1RemoteClient:
                                 # Send joint commands directly to robot
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
-                                    tauff_target=np.zeros(14),
-                                    left_hand_gesture=None,
-                                    right_hand_gesture=None
+                                    tauff_target=np.zeros(14)
                                 )
                                 
                                 # Execute at 50Hz (matching recording rate)

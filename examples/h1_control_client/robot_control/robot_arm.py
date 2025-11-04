@@ -431,16 +431,17 @@ class H1_2_ArmController:
         self.arm_velocity_limit = 30.0
 
     def _Is_weak_motor(self, motor_index):
+        # TODO: Note that we commented out the left and right shoulderpitch to designate them as strong motors from now on
         weak_motors = [
             H1_2_JointIndex.kLeftAnkle.value,
             H1_2_JointIndex.kRightAnkle.value,
             # Left arm
-            H1_2_JointIndex.kLeftShoulderPitch.value,
+            # H1_2_JointIndex.kLeftShoulderPitch.value,
             H1_2_JointIndex.kLeftShoulderRoll.value,
             H1_2_JointIndex.kLeftShoulderYaw.value,
             H1_2_JointIndex.kLeftElbowPitch.value,
             # Right arm
-            H1_2_JointIndex.kRightShoulderPitch.value,
+            # H1_2_JointIndex.kRightShoulderPitch.value,
             H1_2_JointIndex.kRightShoulderRoll.value,
             H1_2_JointIndex.kRightShoulderYaw.value,
             H1_2_JointIndex.kRightElbowPitch.value,
