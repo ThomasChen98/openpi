@@ -567,12 +567,15 @@ class H1RemoteClient:
             logger.error(f"❌ Invalid action dimension: {policy_actions.shape[1]}, expected 14")
             return
         
+        # Increase velocity limit for policy execution (30 rad/s for faster shoulder movement)
+        self.robot.speed_instant_max()
+        
         action_sequence = self.policy_actions_to_ee_poses(policy_actions)
         
         logger.info(f"   Executing {len(action_sequence)} actions...")
         logger.info(f"   First action: {action_sequence[0]['arm_joints']}")
         
-        # Execute with same timing as reset (250Hz)
+        # Execute at 50Hz (matches policy recording rate)
         for i, action in enumerate(action_sequence):
             arm_joints = action['arm_joints']
             left_hand = action['left_hand']

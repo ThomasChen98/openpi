@@ -391,6 +391,10 @@ class H1_2_ArmController:
     def ctrl_dual_arm_go_home(self):
         '''Move both the left and right arms of the robot to their home position (zombie pose - arms extended forward).'''
         logger_mp.info("[H1_2_ArmController] ctrl_dual_arm_go_home start...")
+        
+        # Increase velocity limit for faster homing
+        self.speed_instant_max()
+        
         max_attempts = 100
         current_attempts = 0
         
