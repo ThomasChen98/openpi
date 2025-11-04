@@ -459,9 +459,14 @@ def main(args: Args) -> None:
             )
             
             execute_robot_button = server.gui.add_button(
-                "🚀 Execute on Robot",
+                "Execute on Robot",
                 disabled=True,
                 hint="Execute predicted actions on real robot"
+            )
+            
+            replay_teleop_button = server.gui.add_button(
+                "Replay Teleop Data",
+                hint="Replay raw teleop joint commands from HDF5 (bypass policy)"
             )
             
             use_live_cam = server.gui.add_checkbox(
@@ -680,6 +685,75 @@ def main(args: Args) -> None:
                 def _(_):
                     modal.close()
                     robot_status.value = "Execution cancelled"
+        
+        # Replay teleop button callback
+        @replay_teleop_button.on_click
+        def _(event):
+            # Get current frame and determine replay window
+            current_frame = int(frame_slider.value)
+            
+            # Replay 50 frames starting from current frame (or until end of data)
+            end_frame = min(current_frame + 50, len(data['actions']))
+            num_frames = end_frame - current_frame
+            
+            if num_frames < 10:
+                robot_status.value = f"Not enough frames to replay (need at least 10, have {num_frames})"
+                return
+            
+            # Get raw teleop actions from HDF5
+            teleop_actions = data['actions'][current_frame:end_frame]
+            
+            # Create confirmation modal
+            with server.gui.add_modal("Confirm Teleop Replay") as modal:
+                server.gui.add_markdown(
+                    f"**⚠️ About to replay {num_frames} teleop frames**\n\n"
+                    f"Frame range: {current_frame} → {end_frame-1}\n\n"
+                    f"This will execute the **raw recorded joint commands** from the HDF5 file.\n\n"
+                    f"**This bypasses the policy entirely** - good for testing if the robot "
+                    f"can physically perform the recorded motions.\n\n"
+                    f"**Duration:** ~{num_frames/50:.1f}s at 50Hz"
+                )
+                
+                confirm_replay_button = server.gui.add_button(
+                    "🎮 Start Replay",
+                    color="green"
+                )
+                cancel_replay_button = server.gui.add_button("Cancel")
+                
+                @confirm_replay_button.on_click
+                def _(_):
+                    modal.close()
+                    
+                    async def do_replay():
+                        robot_status.value = f"🎮 Replaying {num_frames} teleop frames..."
+                        reset_robot_button.disabled = True
+                        execute_robot_button.disabled = True
+                        replay_teleop_button.disabled = True
+                        infer_button.disabled = True
+                        
+                        try:
+                            result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "replay_teleop", "actions": teleop_actions.tolist()}
+                            )
+                            
+                            robot_status.value = f"Teleop replay complete: {result.get('message', 'OK')}"
+                        except Exception as e:
+                            print(f"Teleop replay error: {e}")
+                            robot_status.value = f"Teleop replay error: {str(e)}"
+                        finally:
+                            reset_robot_button.disabled = False
+                            execute_robot_button.disabled = False
+                            replay_teleop_button.disabled = False
+                            infer_button.disabled = False
+                    
+                    run_async(do_replay())
+                
+                @cancel_replay_button.on_click
+                def _(_):
+                    modal.close()
+                    robot_status.value = "Replay cancelled"
         
         # Emergency stop button callback
         @estop_button.on_click

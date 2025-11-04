@@ -674,6 +674,40 @@ class H1RemoteClient:
                             
                             response = {"status": "success", "message": f"Executed {len(actions)} actions"}
                         
+                        elif cmd == "replay_teleop":
+                            # Replay raw teleop joint commands (bypass policy/IK)
+                            actions = np.array(data["actions"], dtype=np.float32)
+                            logger.info(f"Replaying {len(actions)} teleop frames...")
+                            logger.info(f"   Action shape: {actions.shape}")
+                            logger.info(f"   Duration: ~{len(actions)/50:.1f}s at 50Hz")
+                            
+                            # Set velocity limit to max for better tracking
+                            self.robot.speed_instant_max()
+                            
+                            # Execute actions directly at 50Hz (recorded rate)
+                            for i, arm_joints in enumerate(actions):
+                                # Only use first 14 joints (dual arm)
+                                if len(arm_joints) > 14:
+                                    arm_joints = arm_joints[:14]
+                                
+                                # Log progress every 10 frames
+                                if i % 10 == 0:
+                                    logger.info(f"   Frame {i}/{len(actions)}")
+                                
+                                # Send joint commands directly to robot
+                                self.robot.ctrl_dual_arm(
+                                    q_target=arm_joints,
+                                    tauff_target=np.zeros(14),
+                                    left_hand_gesture=0,
+                                    right_hand_gesture=0
+                                )
+                                
+                                # Execute at 50Hz (matching recording rate)
+                                await asyncio.sleep(1.0 / 50)
+                            
+                            logger.info(f"Teleop replay complete")
+                            response = {"status": "success", "message": f"Replayed {len(actions)} frames"}
+                        
                         elif cmd == "reset":
                             # Reset to joint positions
                             target = np.array(data["joints"], dtype=np.float32)
