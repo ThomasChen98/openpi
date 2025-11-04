@@ -599,8 +599,8 @@ class H1RemoteClient:
                 right_hand_gesture=right_hand
             )
             
-            # Control at 250Hz (same as reset command)
-            time.sleep(1.0 / 250)
+            # Control at 50Hz (matches policy recording rate)
+            time.sleep(1.0 / 50)
         
         logger.info("✅ Action chunk execution complete")
     

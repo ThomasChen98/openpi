@@ -389,18 +389,25 @@ class H1_2_ArmController:
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in H1_2_JointArmIndex])
     
     def ctrl_dual_arm_go_home(self):
-        '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
+        '''Move both the left and right arms of the robot to their home position (zombie pose - arms extended forward).'''
         logger_mp.info("[H1_2_ArmController] ctrl_dual_arm_go_home start...")
         max_attempts = 100
         current_attempts = 0
+        
+        # Zombie pose: arms extended straight forward
+        home_q = np.zeros(14)
+        home_q[0] = -1.57  # Left shoulder pitch (forward)
+        home_q[7] = -1.57  # Right shoulder pitch (forward)
+        
         with self.ctrl_lock:
-            self.q_target = np.zeros(14)
+            self.q_target = home_q
             # self.tauff_target = np.zeros(14)
-        tolerance = 0.05  # Tolerance threshold for joint angles to determine "close to zero", can be adjusted based on your motor's precision requirements
+        tolerance = 0.05  # Tolerance threshold for joint angles
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
-            if np.all(np.abs(current_q) < tolerance):
-                logger_mp.info("[H1_2_ArmController] both arms have reached the home position.")
+            target_diff = np.abs(current_q - home_q)
+            if np.all(target_diff < tolerance):
+                logger_mp.info("[H1_2_ArmController] both arms have reached the home position (zombie pose).")
                 break
             current_attempts += 1
             time.sleep(0.05)
