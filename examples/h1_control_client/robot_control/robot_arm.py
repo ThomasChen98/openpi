@@ -269,8 +269,12 @@ class H1_2_ArmController:
     def clip_arm_q_target(self, target_q, velocity_limit):
         current_q = self.get_current_dual_arm_q()
         delta = target_q - current_q
-        motion_scale = np.max(np.abs(delta)) / (velocity_limit * self.control_dt)
-        cliped_arm_q_target = current_q + delta / max(motion_scale, 1.0)
+        
+        # Clip each joint independently (not all joints together)
+        max_delta = velocity_limit * self.control_dt
+        clipped_delta = np.clip(delta, -max_delta, max_delta)
+        cliped_arm_q_target = current_q + clipped_delta
+        
         return cliped_arm_q_target
 
     def _ctrl_motor_state(self):
