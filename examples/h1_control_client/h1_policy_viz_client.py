@@ -259,6 +259,61 @@ async def send_robot_command(host: str, port: int, command: dict) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+async def get_live_observation_from_robot(host: str, port: int, prompt: str) -> dict:
+    """Get live observation from robot (camera feeds + state).
+    
+    Args:
+        host: Robot client host
+        port: Robot client port
+        prompt: Task prompt for the policy
+        
+    Returns:
+        Observation dictionary formatted for policy inference:
+        {
+            "state": np.ndarray (14,),
+            "images": {
+                "base_0_rgb": np.ndarray (224, 224, 3),
+                "left_wrist_0_rgb": np.ndarray (224, 224, 3),
+                "right_wrist_0_rgb": np.ndarray (224, 224, 3)
+            },
+            "prompt": str
+        }
+    """
+    import base64
+    from io import BytesIO
+    
+    # Request observation from robot
+    response = await send_robot_command(host, port, {"command": "get_observation"})
+    
+    if response["status"] != "success":
+        raise RuntimeError(f"Failed to get observation: {response.get('message', 'Unknown error')}")
+    
+    # Decode base64 images
+    def decode_base64_img(b64_str: str) -> np.ndarray:
+        img_bytes = base64.b64decode(b64_str)
+        img = Image.open(BytesIO(img_bytes))
+        img_array = np.array(img)
+        # Resize to 224x224 if needed
+        if img_array.shape[:2] != (224, 224):
+            img = img.resize((224, 224), Image.LANCZOS)
+            img_array = np.array(img)
+        return img_array
+    
+    # Extract and format observation
+    state = np.array(response["state"], dtype=np.float32)
+    images = {
+        "base_0_rgb": decode_base64_img(response["images"]["base_0_rgb"]),
+        "left_wrist_0_rgb": decode_base64_img(response["images"]["left_wrist_0_rgb"]),
+        "right_wrist_0_rgb": decode_base64_img(response["images"]["right_wrist_0_rgb"]),
+    }
+    
+    return {
+        "state": state,
+        "images": images,
+        "prompt": prompt
+    }
+
+
 def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
     """Convert 14-dim actions to URDF format (27 robot joints + 12 hand joints).
     
@@ -372,6 +427,7 @@ def main(args: Args) -> None:
     current_frame = args.start_frame
     predicted_actions = None
     action_chunk_horizon = 10  # Default action horizon
+    last_live_observation = None  # Store last live observation for display
     is_playing_actions = False
     action_play_idx = 0
     show_ground_truth = True
@@ -475,6 +531,18 @@ def main(args: Args) -> None:
                 hint="Use robot cameras for inference instead of dataset"
             )
             
+            single_step_button = server.gui.add_button(
+                "Single Step Inference",
+                disabled=True,
+                hint="Get observation → infer → execute once"
+            )
+            
+            continuous_button = server.gui.add_button(
+                "Start Continuous",
+                disabled=True,
+                hint="Toggle continuous inference loop"
+            )
+            
             server.gui.add_markdown("###  Safety")
             estop_button = server.gui.add_button(
                 " EMERGENCY STOP",
@@ -527,49 +595,74 @@ def main(args: Args) -> None:
         if predicted_actions is not None and show_predicted_cb.value:
             update_visualization()
     
+    # Live camera checkbox callback (enable/disable live inference buttons)
+    if args.robot_execution:
+        @use_live_cam.on_update
+        def _(_):
+            single_step_button.disabled = not use_live_cam.value
+            continuous_button.disabled = not use_live_cam.value
+    
     # Inference button callback
     @infer_button.on_click
     def _(_):
         nonlocal predicted_actions, action_chunk_horizon, show_ground_truth
         
-        # Get observation at current frame
-        inference_status.value = f"Running inference for frame {current_frame}..."
-        obs = get_observation_at_frame(data, current_frame, args.prompt)
+        async def do_inference():
+            nonlocal predicted_actions, action_chunk_horizon, last_live_observation
+            
+            # Get observation - either from live robot or HDF5 dataset
+            if args.robot_execution and use_live_cam.value:
+                inference_status.value = "Getting live observation from robot..."
+                try:
+                    obs = await get_live_observation_from_robot(
+                        args.robot_host, args.robot_port, args.prompt
+                    )
+                    last_live_observation = obs  # Store for camera display
+                    inference_status.value = "Running inference on live observation..."
+                except Exception as e:
+                    inference_status.value = f"Error getting observation: {e}"
+                    print(f"Error getting live observation: {e}")
+                    return
+            else:
+                inference_status.value = f"Running inference for frame {current_frame}..."
+                obs = get_observation_at_frame(data, current_frame, args.prompt)
+            
+            # Run inference
+            start_time = time.time()
+            result = policy.infer(obs)
+            inference_time = time.time() - start_time
+            
+            # Extract predicted actions
+            predicted_actions = result['actions']
+            action_chunk_horizon = predicted_actions.shape[0]
+            
+            # Update UI
+            source = "live robot" if (args.robot_execution and use_live_cam.value) else f"frame {current_frame}"
+            inference_status.value = (
+                f"✓ Got {action_chunk_horizon} actions from {source} ({inference_time*1000:.1f}ms) "
+                f"→ Toggle 'Show Predicted Actions' to view"
+            )
+            
+            # Enable playback controls
+            play_actions_button.disabled = False
+            show_predicted_cb.disabled = False
+            action_index_slider.disabled = False
+            action_index_slider.max = action_chunk_horizon - 1
+            action_index_slider.value = 0
+            
+            # Don't automatically switch to predicted view - let user toggle manually
+            # This prevents sudden robot movement
+            
+            print(f"\nInference complete ({source}):")
+            print(f"  Action chunk shape: {predicted_actions.shape}")
+            print(f"  Inference time: {inference_time*1000:.1f}ms")
+            print(f"  → Toggle 'Show Predicted Actions' to view predictions")
+            
+            # Enable execute button if robot execution is enabled
+            if args.robot_execution:
+                execute_robot_button.disabled = False
         
-        # Run inference
-        start_time = time.time()
-        result = policy.infer(obs)
-        inference_time = time.time() - start_time
-        
-        # Extract predicted actions
-        predicted_actions = result['actions']
-        action_chunk_horizon = predicted_actions.shape[0]
-        
-        # Update UI
-        inference_status.value = (
-            f"✓ Got {action_chunk_horizon} actions ({inference_time*1000:.1f}ms) "
-            f"→ Toggle 'Show Predicted Actions' to view"
-        )
-        
-        # Enable playback controls
-        play_actions_button.disabled = False
-        show_predicted_cb.disabled = False
-        action_index_slider.disabled = False
-        action_index_slider.max = action_chunk_horizon - 1
-        action_index_slider.value = 0
-        
-        # Don't automatically switch to predicted view - let user toggle manually
-        # This prevents sudden robot movement
-        
-        print(f"\nInference complete:")
-        print(f"  Frame: {current_frame}")
-        print(f"  Action chunk shape: {predicted_actions.shape}")
-        print(f"  Inference time: {inference_time*1000:.1f}ms")
-        print(f"  → Toggle 'Show Predicted Actions' to view predictions")
-        
-        # Enable execute button if robot execution is enabled
-        if args.robot_execution:
-            execute_robot_button.disabled = False
+        run_async(do_inference())
     
     # === NEW: Robot execution callbacks ===
     if args.robot_execution:
@@ -755,6 +848,157 @@ def main(args: Args) -> None:
                     modal.close()
                     robot_status.value = "Replay cancelled"
         
+        # Single-step inference button callback
+        @single_step_button.on_click
+        def _(event):
+            async def do_single_step():
+                nonlocal predicted_actions, action_chunk_horizon, last_live_observation
+                
+                robot_status.value = "Getting live observation..."
+                single_step_button.disabled = True
+                continuous_button.disabled = True
+                reset_robot_button.disabled = True
+                execute_robot_button.disabled = True
+                infer_button.disabled = True
+                
+                try:
+                    # Get live observation from robot
+                    obs = await get_live_observation_from_robot(
+                        args.robot_host, args.robot_port, args.prompt
+                    )
+                    last_live_observation = obs  # Store for camera display
+                    
+                    # Run inference
+                    robot_status.value = "Running policy inference..."
+                    start_time = time.time()
+                    result = policy.infer(obs)
+                    inference_time = time.time() - start_time
+                    
+                    # Extract predicted actions
+                    predicted_actions = result['actions']
+                    action_chunk_horizon = predicted_actions.shape[0]
+                    
+                    # Update visualization
+                    robot_status.value = f"Executing {action_chunk_horizon} actions..."
+                    action_index_slider.max = action_chunk_horizon - 1
+                    action_index_slider.value = 0
+                    show_predicted_cb.disabled = False
+                    action_index_slider.disabled = False
+                    
+                    # Execute on robot
+                    result = await send_robot_command(
+                        args.robot_host,
+                        args.robot_port,
+                        {"command": "execute", "actions": predicted_actions.tolist()}
+                    )
+                    
+                    if result["status"] == "success":
+                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms inference)"
+                    else:
+                        robot_status.value = f"Error: {result.get('message')}"
+                    
+                except Exception as e:
+                    robot_status.value = f"Error: {str(e)}"
+                    print(f"Single-step error: {e}")
+                finally:
+                    single_step_button.disabled = not use_live_cam.value
+                    continuous_button.disabled = not use_live_cam.value
+                    reset_robot_button.disabled = False
+                    execute_robot_button.disabled = False
+                    infer_button.disabled = False
+            
+            run_async(do_single_step())
+        
+        # Continuous inference button callback
+        is_continuous_running = False
+        
+        @continuous_button.on_click
+        def _(event):
+            nonlocal is_continuous_running
+            
+            if not is_continuous_running:
+                # Start continuous mode
+                is_continuous_running = True
+                continuous_button.name = "Stop Continuous"
+                continuous_button.color = "red"
+                
+                # Disable conflicting buttons
+                single_step_button.disabled = True
+                reset_robot_button.disabled = True
+                execute_robot_button.disabled = True
+                infer_button.disabled = True
+                replay_teleop_button.disabled = True
+                frame_slider.disabled = True
+                
+                async def continuous_loop():
+                    nonlocal predicted_actions, action_chunk_horizon, is_continuous_running, last_live_observation
+                    
+                    loop_count = 0
+                    while is_continuous_running:
+                        try:
+                            loop_count += 1
+                            robot_status.value = f"Continuous #{loop_count}: Getting observation..."
+                            
+                            # Get live observation
+                            obs = await get_live_observation_from_robot(
+                                args.robot_host, args.robot_port, args.prompt
+                            )
+                            last_live_observation = obs  # Store for camera display
+                            
+                            # Run inference
+                            robot_status.value = f"Continuous #{loop_count}: Running inference..."
+                            start_time = time.time()
+                            result = policy.infer(obs)
+                            inference_time = time.time() - start_time
+                            
+                            # Extract predicted actions
+                            predicted_actions = result['actions']
+                            action_chunk_horizon = predicted_actions.shape[0]
+                            
+                            # Update UI
+                            action_index_slider.max = action_chunk_horizon - 1
+                            action_index_slider.value = 0
+                            show_predicted_cb.disabled = False
+                            action_index_slider.disabled = False
+                            
+                            # Execute on robot
+                            robot_status.value = f"Continuous #{loop_count}: Executing actions..."
+                            result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "execute", "actions": predicted_actions.tolist()}
+                            )
+                            
+                            if result["status"] == "success":
+                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms)"
+                            else:
+                                robot_status.value = f"Error in loop #{loop_count}: {result.get('message')}"
+                                is_continuous_running = False
+                                break
+                            
+                        except Exception as e:
+                            robot_status.value = f"Error in continuous loop: {str(e)}"
+                            print(f"Continuous loop error: {e}")
+                            is_continuous_running = False
+                            break
+                    
+                    # Cleanup after stopping
+                    continuous_button.name = "Start Continuous"
+                    continuous_button.color = None
+                    single_step_button.disabled = not use_live_cam.value
+                    reset_robot_button.disabled = False
+                    execute_robot_button.disabled = False
+                    infer_button.disabled = False
+                    replay_teleop_button.disabled = False
+                    frame_slider.disabled = False
+                    robot_status.value = f"Continuous mode stopped after {loop_count} loops"
+                
+                run_async(continuous_loop())
+            else:
+                # Stop continuous mode
+                is_continuous_running = False
+                robot_status.value = "Stopping continuous mode..."
+        
         # Emergency stop button callback
         @estop_button.on_click
         def _(event):
@@ -803,6 +1047,16 @@ def main(args: Args) -> None:
     
     def update_camera_displays():
         """Update camera image displays with proper transformations and positioning."""
+        # Check if we should use live camera feeds
+        use_live = args.robot_execution and use_live_cam.value and last_live_observation is not None
+        
+        # Map live observation image keys to camera topics
+        live_image_map = {
+            'base_0_rgb': 'ego_cam',  # or 'cam_high' depending on dataset
+            'left_wrist_0_rgb': 'cam_left_wrist',
+            'right_wrist_0_rgb': 'cam_right_wrist',
+        }
+        
         for topic in data['camera_topics']:
             if not camera_checkboxes[topic].value:
                 # Remove image if checkbox is unchecked
@@ -813,18 +1067,36 @@ def main(args: Args) -> None:
                     pass
                 continue
             
-            # Get image data
-            if data['image_formats'][topic] == 'array':
-                img_array = data['camera_data'][topic][current_frame]
-                # Convert to uint8 if needed
-                if img_array.dtype != np.uint8:
-                    img_array = (img_array * 255).astype(np.uint8)
-                # Convert BGR to RGB (swap channels 0 and 2)
-                img_array = img_array[:, :, [2, 1, 0]]
-            else:  # JPEG format
-                img_data = data['camera_data'][topic][current_frame]
-                img = decode_jpeg_image(img_data)
-                img_array = np.array(img)
+            # Get image data - either from live observation or HDF5
+            if use_live:
+                # Find matching live image key for this topic
+                live_key = None
+                for key, mapped_topic in live_image_map.items():
+                    if mapped_topic == topic or (topic in ['ego_cam', 'cam_high'] and key == 'base_0_rgb'):
+                        live_key = key
+                        break
+                
+                if live_key and live_key in last_live_observation['images']:
+                    img_array = last_live_observation['images'][live_key]
+                    # Ensure it's uint8
+                    if img_array.dtype != np.uint8:
+                        img_array = (img_array * 255).astype(np.uint8)
+                else:
+                    # Skip if no matching live image
+                    continue
+            else:
+                # Get image from HDF5
+                if data['image_formats'][topic] == 'array':
+                    img_array = data['camera_data'][topic][current_frame]
+                    # Convert to uint8 if needed
+                    if img_array.dtype != np.uint8:
+                        img_array = (img_array * 255).astype(np.uint8)
+                    # Convert BGR to RGB (swap channels 0 and 2)
+                    img_array = img_array[:, :, [2, 1, 0]]
+                else:  # JPEG format
+                    img_data = data['camera_data'][topic][current_frame]
+                    img = decode_jpeg_image(img_data)
+                    img_array = np.array(img)
             
             # Apply transformations (same as data_replay.py)
             img_array = np.flipud(img_array)  # Flip vertically
