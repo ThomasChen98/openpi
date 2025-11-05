@@ -389,32 +389,24 @@ class H1_2_ArmController:
         return np.array([self.lowstate_buffer.GetData().motor_state[id].dq for id in H1_2_JointArmIndex])
     
     def ctrl_dual_arm_go_home(self):
-        '''Move both the left and right arms of the robot to their home position (zombie pose - arms extended forward).'''
+        '''Move both the left and right arms of the robot to their home position by setting the target joint angles (q) and torques (tau) to zero.'''
         logger_mp.info("[H1_2_ArmController] ctrl_dual_arm_go_home start...")
-        
-        # Increase velocity limit for faster homing
-        self.speed_instant_max()
-        
         max_attempts = 100
         current_attempts = 0
-        
-        # Zombie pose: arms extended straight forward
-        home_q = np.zeros(14)
-        home_q[0] = -1.57  # Left shoulder pitch (forward)
-        home_q[7] = -1.57  # Right shoulder pitch (forward)
-        
         with self.ctrl_lock:
-            self.q_target = home_q
+            self.q_target = np.zeros(14)
             # self.tauff_target = np.zeros(14)
-        tolerance = 0.05  # Tolerance threshold for joint angles
+        tolerance = 0.05  # Tolerance threshold for joint angles to determine "close to zero", can be adjusted based on your motor's precision requirements
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
-            target_diff = np.abs(current_q - home_q)
-            if np.all(target_diff < tolerance):
-                logger_mp.info("[H1_2_ArmController] both arms have reached the home position (zombie pose).")
+            if np.all(np.abs(current_q) < tolerance):
+                logger_mp.info("[H1_2_ArmController] both arms have reached the home position.")
                 break
             current_attempts += 1
             time.sleep(0.05)
+
+
+        
 
     def speed_gradual_max(self, t = 5.0):
         '''Parameter t is the total time required for arms velocity to gradually increase to its maximum value, in seconds. The default is 5.0.'''
@@ -424,7 +416,7 @@ class H1_2_ArmController:
 
     def speed_instant_max(self):
         '''set arms velocity to the maximum value immediately, instead of gradually increasing.'''
-        self.arm_velocity_limit = 30.0
+        self.arm_velocity_limit = 20.0
 
     def _Is_weak_motor(self, motor_index):
         weak_motors = [

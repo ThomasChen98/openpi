@@ -613,13 +613,7 @@ class H1RemoteClient:
             if i % 10 == 0:
                 logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
             
-            # Debug: Log shoulder pitch commands for first, middle, and later actions
-            if i == 0 or i == 10 or i == 20:
-                logger.info(f"   🔍 DEBUG Step {i}: Sending arm_joints to robot:")
-                logger.info(f"     [0] L_ShoulderPitch: {arm_joints[0]:.4f}")
-                logger.info(f"     [1] L_ShoulderRoll:  {arm_joints[1]:.4f}")
-                logger.info(f"     [7] R_ShoulderPitch: {arm_joints[7]:.4f}")
-                logger.info(f"     [8] R_ShoulderRoll:  {arm_joints[8]:.4f}")
+            
             
             # Send arm + hand commands to robot
             # Use same control pattern as reset
@@ -679,14 +673,14 @@ class H1RemoteClient:
         - {"command": "emergency_stop"}  # Stop robot
         """
         async def handle_command(websocket):
-            logger.info(f"🔌 Viz client connected from {websocket.remote_address}")
+            logger.info(f" Viz client connected from {websocket.remote_address}")
             
             try:
                 async for message in websocket:
                     data = json.loads(message)
                     cmd = data.get("command")
                     
-                    logger.info(f"📨 Received: {cmd}")
+                    logger.info(f" Received: {cmd}")
                     
                     try:
                         if cmd == "ping":
@@ -696,7 +690,7 @@ class H1RemoteClient:
                         elif cmd == "execute":
                             # Execute action chunk
                             actions = np.array(data["actions"], dtype=np.float32)
-                            logger.info(f"🚀 Executing {len(actions)} actions...")
+                            logger.info(f" Executing {len(actions)} actions...")
                             
                             self.execute_action_chunk(actions)
                             

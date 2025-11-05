@@ -172,3 +172,5 @@ collected_data/
 training_data/
 
 *.hdf5
+
+checkpoints/
