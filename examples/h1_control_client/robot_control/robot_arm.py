@@ -167,19 +167,19 @@ class H1_2_ArmController:
             self.right_hand_pub = ChannelPublisher("rt/inspire_hand/ctrl/r", inspire_hand_ctrl)
             self.right_hand_pub.Init()
             
-            logger_mp.info("✅ Hand DDS communication initialized")
+            logger_mp.info("Hand DDS communication initialized")
             
             # Initialize bridges
             self.init_hand_bridges()
             
         except Exception as e:
-            logger_mp.error(f"❌ Failed to initialize hand control: {e}")
+            logger_mp.error(f"Failed to initialize hand control: {e}")
             self.hand_control = False
     
     def init_hand_bridges(self):
         """Initialize bridges that connect DDS to physical hands"""
         try:
-            logger_mp.info("🌉 Initializing hand bridges...")
+            logger_mp.info("Initializing hand bridges...")
             
             # Create bridge handlers
             self.left_bridge_handler = inspire_sdk.ModbusDataHandler(
@@ -189,7 +189,7 @@ class H1_2_ArmController:
                 initDDS=False,  # We already initialized DDS
                 network=self.network_interface
             )
-            logger_mp.info(f"✅ Left hand bridge created (IP: {self.left_hand_ip})")
+            logger_mp.info(f"Left hand bridge created (IP: {self.left_hand_ip})")
             
             self.right_bridge_handler = inspire_sdk.ModbusDataHandler(
                 ip=self.right_hand_ip,
@@ -198,14 +198,14 @@ class H1_2_ArmController:
                 initDDS=False,  # We already initialized DDS
                 network=self.network_interface
             )
-            logger_mp.info(f"✅ Right hand bridge created (IP: {self.right_hand_ip})")
+            logger_mp.info(f"Right hand bridge created (IP: {self.right_hand_ip})")
             
             # Start bridge threads
             self.start_hand_bridge_threads()
             
         except Exception as e:
-            logger_mp.error(f"❌ Failed to initialize bridges: {e}")
-            logger_mp.warning("⚠️  Hands will not be controlled - check hand IPs and network")
+            logger_mp.error(f"Failed to initialize bridges: {e}")
+            logger_mp.warning("Hands will not be controlled - check hand IPs and network")
     
     def start_hand_bridge_threads(self):
         """Start bridge threads for both hands"""
@@ -229,12 +229,12 @@ class H1_2_ArmController:
         right_thread.start()
         self.bridge_threads.append(right_thread)
         
-        logger_mp.info("🚀 Both hand bridges started!")
+        logger_mp.info("Both hand bridges started")
         time.sleep(1)  # Let bridges initialize
 
     def run_hand_bridge(self, handler, name):
         """Run a single bridge (DDS ↔ Modbus)"""
-        logger_mp.info(f"🌉 {name} bridge thread started")
+        logger_mp.info(f"{name} bridge thread started")
         
         while self.bridge_running:
             try:
@@ -244,16 +244,16 @@ class H1_2_ArmController:
                 time.sleep(0.02)  # ~50Hz
                 
             except Exception as e:
-                logger_mp.error(f"❌ {name} bridge error: {e}")
+                logger_mp.error(f"{name} bridge error: {e}")
                 time.sleep(1)
 
     def stop_hand_bridges(self):
         """Stop all bridge threads"""
-        logger_mp.info("🛑 Stopping hand bridges...")
+        logger_mp.info("Stopping hand bridges...")
         self.bridge_running = False
         for thread in self.bridge_threads:
             thread.join(timeout=2)
-        logger_mp.info("✅ Hand bridges stopped")
+        logger_mp.info("Hand bridges stopped")
 
     def _subscribe_motor_state(self):
         while True:
@@ -269,12 +269,8 @@ class H1_2_ArmController:
     def clip_arm_q_target(self, target_q, velocity_limit):
         current_q = self.get_current_dual_arm_q()
         delta = target_q - current_q
-        
-        # Clip each joint independently (not all joints together)
-        max_delta = velocity_limit * self.control_dt
-        clipped_delta = np.clip(delta, -max_delta, max_delta)
-        cliped_arm_q_target = current_q + clipped_delta
-        
+        motion_scale = np.max(np.abs(delta)) / (velocity_limit * self.control_dt)
+        cliped_arm_q_target = current_q + delta / max(motion_scale, 1.0)
         return cliped_arm_q_target
 
     def _ctrl_motor_state(self):
@@ -301,7 +297,7 @@ class H1_2_ArmController:
             self._ctrl_iter += 1
             if self._ctrl_iter % 125 == 0:  # Log every 0.5s at 250Hz
                 current_state = self.get_current_dual_arm_q()
-                logger_mp.info(f"🔍 DEBUG DDS publish (iter {self._ctrl_iter}):")
+                logger_mp.info(f"DEBUG DDS publish (iter {self._ctrl_iter}):")
                 logger_mp.info(f"  Commanding: L_ShoulderPitch[13]={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].q:.4f}, R_ShoulderPitch[20]={self.msg.motor_cmd[H1_2_JointIndex.kRightShoulderPitch].q:.4f}")
                 logger_mp.info(f"  Current:    L_ShoulderPitch={current_state[0]:.4f}, R_ShoulderPitch={current_state[7]:.4f}")
                 logger_mp.info(f"  Gains:      L_kp={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kp:.1f}, L_kd={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kd:.1f}")
@@ -332,7 +328,7 @@ class H1_2_ArmController:
             self._last_log_time = 0
         current_time = time.time()
         if current_time - self._last_log_time > 0.5:
-            logger_mp.info(f"🔍 DEBUG ctrl_dual_arm received q_target:")
+            logger_mp.info(f"DEBUG ctrl_dual_arm received q_target:")
             logger_mp.info(f"  [0] L_ShoulderPitch: {q_target[0]:.4f}")
             logger_mp.info(f"  [1] L_ShoulderRoll:  {q_target[1]:.4f}")
             logger_mp.info(f"  [7] R_ShoulderPitch: {q_target[7]:.4f}")
@@ -431,17 +427,16 @@ class H1_2_ArmController:
         self.arm_velocity_limit = 30.0
 
     def _Is_weak_motor(self, motor_index):
-        # TODO: Note that we commented out the left and right shoulderpitch to designate them as strong motors from now on
         weak_motors = [
             H1_2_JointIndex.kLeftAnkle.value,
             H1_2_JointIndex.kRightAnkle.value,
             # Left arm
-            # H1_2_JointIndex.kLeftShoulderPitch.value,
+            H1_2_JointIndex.kLeftShoulderPitch.value,
             H1_2_JointIndex.kLeftShoulderRoll.value,
             H1_2_JointIndex.kLeftShoulderYaw.value,
             H1_2_JointIndex.kLeftElbowPitch.value,
             # Right arm
-            # H1_2_JointIndex.kRightShoulderPitch.value,
+            H1_2_JointIndex.kRightShoulderPitch.value,
             H1_2_JointIndex.kRightShoulderRoll.value,
             H1_2_JointIndex.kRightShoulderYaw.value,
             H1_2_JointIndex.kRightElbowPitch.value,

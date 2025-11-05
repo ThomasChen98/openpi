@@ -552,6 +552,34 @@ class H1RemoteClient:
         
         return action_sequence
     
+    def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
+        """
+        Compute gravity compensation torques for given joint positions using RNEA.
+        
+        This computes the torques needed to hold the robot at the given pose
+        (counteracting gravity), which should be added as feedforward to PD control.
+        
+        Args:
+            joint_positions: (14,) array of arm joint positions
+            
+        Returns:
+            gravity_torques: (14,) array of feedforward torques for gravity compensation
+        """
+        # Use Pinocchio RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
+        # With zero velocity and zero acceleration, this gives us pure gravity compensation
+        zero_velocity = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        zero_acceleration = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        
+        gravity_torques = pin.rnea(
+            self.ik_solver.reduced_robot.model,
+            self.ik_solver.reduced_robot.data,
+            joint_positions,
+            zero_velocity,
+            zero_acceleration
+        )
+        
+        return gravity_torques
+    
     def execute_action_chunk(self, policy_actions: np.ndarray):
         """
         Execute a chunk of policy actions on the robot
@@ -680,6 +708,7 @@ class H1RemoteClient:
                             logger.info(f"Replaying {len(actions)} teleop frames...")
                             logger.info(f"   Action shape: {actions.shape}")
                             logger.info(f"   Duration: ~{len(actions)/50:.1f}s at 50Hz")
+                            logger.info(f"   Computing gravity compensation for all frames...")
                             
                             # Set velocity limit to max for better tracking
                             self.robot.speed_instant_max()
@@ -690,14 +719,19 @@ class H1RemoteClient:
                                 if len(arm_joints) > 14:
                                     arm_joints = arm_joints[:14]
                                 
+                                # Compute gravity compensation torques for this pose
+                                gravity_torques = self.compute_gravity_compensation(arm_joints)
+                                
                                 # Log progress every 10 frames
                                 if i % 10 == 0:
                                     logger.info(f"   Frame {i}/{len(actions)}")
+                                    if i == 0:
+                                        logger.info(f"   Gravity torques (first frame): L_shoulder={gravity_torques[0]:.2f}Nm, R_shoulder={gravity_torques[7]:.2f}Nm")
                                 
-                                # Send joint commands directly to robot
+                                # Send joint commands WITH gravity compensation
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
-                                    tauff_target=np.zeros(14)
+                                    tauff_target=gravity_torques
                                 )
                                 
                                 # Execute at 50Hz (matching recording rate)
@@ -707,11 +741,11 @@ class H1RemoteClient:
                             response = {"status": "success", "message": f"Replayed {len(actions)} frames"}
                         
                         elif cmd == "reset":
-                            # Reset to joint positions
+                            # Reset to joint positions with gravity compensation
                             target = np.array(data["joints"], dtype=np.float32)
                             duration = data.get("duration", 2.0)
                             
-                            logger.info(f"🔄 Resetting to joints over {duration}s...")
+                            logger.info(f"Resetting to joints over {duration}s...")
                             
                             # Smooth interpolation
                             current = self.robot.get_current_dual_arm_q()
@@ -720,9 +754,13 @@ class H1RemoteClient:
                             for i in range(steps):
                                 alpha = (i + 1) / steps
                                 interp = current * (1 - alpha) + target * alpha
+                                
+                                # Compute gravity compensation for interpolated position
+                                gravity_torques = self.compute_gravity_compensation(interp)
+                                
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
-                                    tauff_target=np.zeros(14)
+                                    tauff_target=gravity_torques
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             
