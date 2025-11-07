@@ -151,6 +151,41 @@ def euler_to_quaternion(pitch: float, yaw: float, roll: float) -> tuple[float, f
     return (w, x, y, z)
 
 
+def extract_hand_joints_for_urdf_14dof(joint_positions: np.ndarray) -> np.ndarray:
+    """Extract and map hand joints for 14 DoF datasets to URDF joint order.
+    
+    For 14 DoF datasets: 14 DoF upper body only (no hand data)
+    - All 14 dimensions: upper body joints
+    
+    We need to:
+    1. Pad the 14 upper body joints to 27 robot joints (add 13 zeros for legs)
+    2. Use zeros for all 12 hand joints (neutral pose)
+    
+    Args:
+        joint_positions: Raw joint positions from HDF5 data (14 dims)
+        
+    Returns:
+        Joint positions padded for URDF (39 dims: 27 robot + 12 hand)
+    """
+    if len(joint_positions) != 14:
+        raise ValueError(f"Expected 14 DoF input, got {len(joint_positions)} DoF")
+    
+    # Extract upper body joints (all 14 dimensions)
+    upper_body_joints = joint_positions[:14]
+    
+    # Pad with 13 zeros for leg joints to make it 27 robot joints total
+    leg_joints_zeros = np.zeros(13)
+    robot_joints = np.concatenate([leg_joints_zeros, upper_body_joints])
+    
+    # Use zeros for all hand joints (neutral pose)
+    hand_joint_values_scaled = np.zeros(12)
+    
+    # Combine robot joints with zero hand joints
+    all_joints = np.concatenate([robot_joints, hand_joint_values_scaled])
+    
+    return all_joints
+
+
 def extract_hand_joints_for_urdf_26dof(joint_positions: np.ndarray) -> np.ndarray:
     """Extract and map hand joints for 26 DoF datasets to URDF joint order.
     
@@ -278,16 +313,18 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
     Returns:
         Joint positions mapped to URDF order (39 dims: 27 robot + 12 hand)
     """
-    if len(joint_positions) == 26:
+    if len(joint_positions) == 14:
+        return extract_hand_joints_for_urdf_14dof(joint_positions)
+    elif len(joint_positions) == 26:
         return extract_hand_joints_for_urdf_26dof(joint_positions)
     elif len(joint_positions) == 51:
         return extract_hand_joints_for_urdf_51dof(joint_positions)
     else:
-        raise ValueError(f"Unsupported action space dimension: {len(joint_positions)}. Expected 26 or 51 DoF.")
+        raise ValueError(f"Unsupported action space dimension: {len(joint_positions)}. Expected 14, 26, or 51 DoF.")
 
 
 def main(
-    hdf5_path: str = "../processed_data/circular.hdf5",
+    hdf5_path: str = "../h1_data_raw/box_action/episode_5.hdf5",
     urdf_path: str = "../assets/h1_2/h1_2.urdf",
     fps: float = 30.0,
     start_frame: int = 0,
@@ -440,7 +477,12 @@ def main(
     print(f"FPS: {fps}")
     
     # Detect dataset type and print appropriate info
-    if data['num_joints'] == 26:
+    if data['num_joints'] == 14:
+        print(f"Dataset type: 14 DoF (upper body only)")
+        print(f"- Upper body joints (0-13) used directly")
+        print(f"- Leg joints padded with zeros (neutral pose)")
+        print(f"- Hand joints set to zeros (neutral pose)")
+    elif data['num_joints'] == 26:
         print(f"Dataset type: 26 DoF (14 upper body + 12 hand joints)")
         print(f"- Upper body joints (0-13) used directly")
         print(f"- Leg joints padded with zeros (neutral pose)")
