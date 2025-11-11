@@ -618,6 +618,8 @@ def main(args: Args) -> None:
                         args.robot_host, args.robot_port, args.prompt
                     )
                     last_live_observation = obs  # Store for camera display
+                    # Update camera displays with live feeds
+                    update_camera_displays()
                     inference_status.value = "Running inference on live observation..."
                 except Exception as e:
                     inference_status.value = f"Error getting observation: {e}"
@@ -868,6 +870,9 @@ def main(args: Args) -> None:
                     )
                     last_live_observation = obs  # Store for camera display
                     
+                    # Update camera displays with live feeds
+                    update_camera_displays()
+                    
                     # Run inference
                     robot_status.value = "Running policy inference..."
                     start_time = time.time()
@@ -884,6 +889,11 @@ def main(args: Args) -> None:
                     action_index_slider.value = 0
                     show_predicted_cb.disabled = False
                     action_index_slider.disabled = False
+                    
+                    # Enable predicted actions visualization and update
+                    show_predicted_cb.value = True
+                    show_gt_cb.value = False
+                    update_visualization()
                     
                     # Execute on robot
                     result = await send_robot_command(
@@ -945,6 +955,9 @@ def main(args: Args) -> None:
                             )
                             last_live_observation = obs  # Store for camera display
                             
+                            # Update camera displays with live feeds
+                            update_camera_displays()
+                            
                             # Run inference
                             robot_status.value = f"Continuous #{loop_count}: Running inference..."
                             start_time = time.time()
@@ -960,6 +973,11 @@ def main(args: Args) -> None:
                             action_index_slider.value = 0
                             show_predicted_cb.disabled = False
                             action_index_slider.disabled = False
+                            
+                            # Enable predicted actions visualization and update
+                            show_predicted_cb.value = True
+                            show_gt_cb.value = False
+                            update_visualization()
                             
                             # Execute on robot
                             robot_status.value = f"Continuous #{loop_count}: Executing actions..."

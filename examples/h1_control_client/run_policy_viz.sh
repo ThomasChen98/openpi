@@ -7,7 +7,7 @@ set -e
 HDF5_PATH="${HDF5_PATH:-h1_data_processed/box_action/good/episode_2.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-use two hands to lift up the lid}" # check if this is right in case of overfitting
+PROMPT="${PROMPT:-use two hands to lift up the lid, then place it to the left of the bowl}" # check if this is right in case of overfitting
 
 # Color codes for output
 GREEN='\033[0;32m'
