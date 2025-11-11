@@ -272,9 +272,9 @@ async def get_live_observation_from_robot(host: str, port: int, prompt: str) -> 
         {
             "state": np.ndarray (14,),
             "images": {
-                "base_0_rgb": np.ndarray (224, 224, 3),
-                "left_wrist_0_rgb": np.ndarray (224, 224, 3),
-                "right_wrist_0_rgb": np.ndarray (224, 224, 3)
+                "cam_head": np.ndarray (224, 224, 3),
+                "cam_left_wrist": np.ndarray (224, 224, 3),
+                "cam_right_wrist": np.ndarray (224, 224, 3)
             },
             "prompt": str
         }
@@ -299,12 +299,12 @@ async def get_live_observation_from_robot(host: str, port: int, prompt: str) -> 
             img_array = np.array(img)
         return img_array
     
-    # Extract and format observation
+    # Extract and format observation (using policy's expected camera names)
     state = np.array(response["state"], dtype=np.float32)
     images = {
-        "base_0_rgb": decode_base64_img(response["images"]["base_0_rgb"]),
-        "left_wrist_0_rgb": decode_base64_img(response["images"]["left_wrist_0_rgb"]),
-        "right_wrist_0_rgb": decode_base64_img(response["images"]["right_wrist_0_rgb"]),
+        "cam_head": decode_base64_img(response["images"]["cam_head"]),
+        "cam_left_wrist": decode_base64_img(response["images"]["cam_left_wrist"]),
+        "cam_right_wrist": decode_base64_img(response["images"]["cam_right_wrist"]),
     }
     
     return {
@@ -1052,9 +1052,9 @@ def main(args: Args) -> None:
         
         # Map live observation image keys to camera topics
         live_image_map = {
-            'base_0_rgb': 'ego_cam',  # or 'cam_high' depending on dataset
-            'left_wrist_0_rgb': 'cam_left_wrist',
-            'right_wrist_0_rgb': 'cam_right_wrist',
+            'cam_head': 'ego_cam',  # or 'cam_high' depending on dataset
+            'cam_left_wrist': 'cam_left_wrist',
+            'cam_right_wrist': 'cam_right_wrist',
         }
         
         for topic in data['camera_topics']:
@@ -1072,7 +1072,7 @@ def main(args: Args) -> None:
                 # Find matching live image key for this topic
                 live_key = None
                 for key, mapped_topic in live_image_map.items():
-                    if mapped_topic == topic or (topic in ['ego_cam', 'cam_high'] and key == 'base_0_rgb'):
+                    if mapped_topic == topic or (topic in ['ego_cam', 'cam_high'] and key == 'cam_head'):
                         live_key = key
                         break
                 

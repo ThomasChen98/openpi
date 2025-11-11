@@ -1004,15 +1004,16 @@ _CONFIGS = [
         ),
         data=LeRobotH1DataConfig(
             # Replace with your custom DROID LeRobot dataset repo id.
-            repo_id="ThomasChen98/h1_circular",
+            repo_id="ThomasChen98/h1_box_action",
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=True,
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
-        num_train_steps=2000,
+        num_train_steps=1000,
         batch_size=32,
         save_interval=200,
+        keep_period=200,
         # lr_schedule=_optimizer.CosineDecaySchedule(
         #     warmup_steps=10_000,
         #     peak_lr=5e-5,

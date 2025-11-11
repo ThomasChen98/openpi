@@ -4,10 +4,10 @@
 set -e
 
 # Default values
-HDF5_PATH="${HDF5_PATH:-processed_data/circular.hdf5}"
+HDF5_PATH="${HDF5_PATH:-h1_data_processed/box_action/good/episode_2.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-move arm circularly}"
+PROMPT="${PROMPT:-use two hands to lift up the lid}" # check if this is right in case of overfitting
 
 # Color codes for output
 GREEN='\033[0;32m'
@@ -28,7 +28,7 @@ echo -e "${YELLOW}Note: Make sure the policy server is running first!${NC}"
 echo -e "${YELLOW}Start server with:${NC}"
 echo -e "  uv run scripts/serve_policy.py policy:checkpoint \\"
 echo -e "    --policy.config=pi05_h1_finetune \\"
-echo -e "    --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_H50/1999"
+echo -e "    --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_box_activate_h50/1999"
 echo ""
 echo -e "${GREEN}Starting visualization client...${NC}"
 echo ""

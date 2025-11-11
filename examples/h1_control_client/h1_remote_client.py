@@ -116,6 +116,8 @@ class H1RemoteClient:
     - Camera streaming (head from robot via ZMQ, wrists from laptop USB)
     """
     
+
+    # TODO: HIGH PRIORITY, ensure that we don't have a janky start by reordering the robot initialization appropriately
     def __init__(self,
                  server_host: str = "localhost",
                  server_port: int = 5006,
@@ -269,7 +271,7 @@ class H1RemoteClient:
     
     def _init_wrist_cameras(self):
         """Initialize direct USB wrist cameras on laptop (RealSense D405)"""
-        print(f"   📹 Initializing wrist cameras...")
+        print(f"     Initializing wrist cameras...")
         print(f"      Resolution: 480x640 RGB")
         print(f"      Type: RealSense D405 cameras")
         print(f"      Left serial: 218622271789")
@@ -280,7 +282,7 @@ class H1RemoteClient:
         right_serial = "241222076627"
 
         # Try left wrist camera (RealSense)
-        print(f"      ⏳ Testing left wrist camera (RealSense)...")
+        print(f"       Testing left wrist camera (RealSense)...")
         try:
             left_cam = RealSenseCamera(
                 img_shape=[480, 640],  # height, width
@@ -290,12 +292,12 @@ class H1RemoteClient:
             # Test if we can actually read a frame
             test_frame = left_cam.get_frame()
             if test_frame is None:
-                print(f"      ⚠ Left wrist camera (serial: {left_serial}) opened but cannot read frames")
+                print(f"       Left wrist camera (serial: {left_serial}) opened but cannot read frames")
                 print(f"         Camera device exists but no video stream")
                 print(f"         Will use dummy image for left wrist")
                 self.left_wrist_camera = None
             else:
-                print(f"      ✓ Left wrist camera connected!")
+                print(f"       Left wrist camera connected!")
                 print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
                 print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
                 print(f"         Mean intensity: {test_frame.mean():.1f}")
@@ -314,7 +316,7 @@ class H1RemoteClient:
             self.left_wrist_camera = None
 
         # Try right wrist camera (RealSense)
-        print(f"      ⏳ Testing right wrist camera (RealSense)...")
+        print(f"       Testing right wrist camera (RealSense)...")
         try:
             right_cam = RealSenseCamera(
                 img_shape=[480, 640],  # height, width
@@ -324,12 +326,12 @@ class H1RemoteClient:
             # Test if we can actually read a frame
             test_frame = right_cam.get_frame()
             if test_frame is None:
-                print(f"      ⚠ Right wrist camera (serial: {right_serial}) opened but cannot read frames")
+                print(f"       Right wrist camera (serial: {right_serial}) opened but cannot read frames")
                 print(f"         Camera device exists but no video stream")
                 print(f"         Will use dummy image for right wrist")
                 self.right_wrist_camera = None
             else:
-                print(f"      ✓ Right wrist camera connected!")
+                print(f"       Right wrist camera connected!")
                 print(f"         Frame shape: {test_frame.shape}, dtype: {test_frame.dtype}")
                 print(f"         Data range: [{test_frame.min()}, {test_frame.max()}]")
                 print(f"         Mean intensity: {test_frame.mean():.1f}")
@@ -504,17 +506,17 @@ class H1RemoteClient:
             self.right_wrist_frame_count = 0
             self.session_start_time = current_time
         
-        # OpenPi model expects this structure
+        # OpenPi model expects this structure (cam_head, cam_left_wrist, cam_right_wrist)
         observation = {
             "image": {
-                "base_0_rgb": base_image,
-                "left_wrist_0_rgb": left_wrist_image,
-                "right_wrist_0_rgb": right_wrist_image,
+                "cam_head": base_image,
+                "cam_left_wrist": left_wrist_image,
+                "cam_right_wrist": right_wrist_image,
             },
             "image_mask": {
-                "base_0_rgb": True,
-                "left_wrist_0_rgb": True,
-                "right_wrist_0_rgb": True,
+                "cam_head": True,
+                "cam_left_wrist": True,
+                "cam_right_wrist": True,
             },
             "state": current_arm_q,  # 14 arm joints
             "prompt": self.prompt,
@@ -795,9 +797,9 @@ class H1RemoteClient:
                                 "status": "success",
                                 "state": obs["state"].tolist(),
                                 "images": {
-                                    "base_0_rgb": img_to_base64(obs["image"]["base_0_rgb"]),
-                                    "left_wrist_0_rgb": img_to_base64(obs["image"]["left_wrist_0_rgb"]),
-                                    "right_wrist_0_rgb": img_to_base64(obs["image"]["right_wrist_0_rgb"]),
+                                    "cam_head": img_to_base64(obs["image"]["cam_head"]),
+                                    "cam_left_wrist": img_to_base64(obs["image"]["cam_left_wrist"]),
+                                    "cam_right_wrist": img_to_base64(obs["image"]["cam_right_wrist"]),
                                 }
                             }
                             
@@ -967,7 +969,7 @@ def main():
     
     if args.listen_mode:
         # Listen mode - wait for commands from viz client
-        print("\n🎧 Starting in LISTEN MODE")
+        print("\n Starting in LISTEN MODE")
         print(f"   Listening on port {args.listen_port}")
         print(f"   Waiting for commands from viz client...")
         print()
