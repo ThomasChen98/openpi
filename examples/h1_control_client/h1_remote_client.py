@@ -604,6 +604,7 @@ class H1RemoteClient:
         
         logger.info(f"   Executing {len(action_sequence)} actions...")
         logger.info(f"   First action: {action_sequence[0]['arm_joints']}")
+        logger.info(f"   Computing gravity compensation for precise tracking...")
         
         # Execute at 50Hz (matches policy recording rate)
         for i, action in enumerate(action_sequence):
@@ -611,17 +612,17 @@ class H1RemoteClient:
             left_hand = action['left_hand']
             right_hand = action['right_hand']
             
+            # Compute gravity compensation torques for this pose
+            gravity_torques = self.compute_gravity_compensation(arm_joints)
+            
             # Log every 10th action
             if i % 10 == 0:
                 logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
             
-            
-            
-            # Send arm + hand commands to robot
-            # Use same control pattern as reset
+            # Send arm + hand commands to robot with gravity compensation
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14),
+                tauff_target=gravity_torques,
                 left_hand_gesture=left_hand,
                 right_hand_gesture=right_hand
             )
