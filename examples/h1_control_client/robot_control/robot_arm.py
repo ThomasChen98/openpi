@@ -327,13 +327,6 @@ class H1_2_ArmController:
         if not hasattr(self, '_last_log_time'):
             self._last_log_time = 0
         current_time = time.time()
-        if current_time - self._last_log_time > 0.5:
-            logger_mp.info(f"DEBUG ctrl_dual_arm received q_target:")
-            logger_mp.info(f"  [0] L_ShoulderPitch: {q_target[0]:.4f}")
-            logger_mp.info(f"  [1] L_ShoulderRoll:  {q_target[1]:.4f}")
-            logger_mp.info(f"  [7] R_ShoulderPitch: {q_target[7]:.4f}")
-            logger_mp.info(f"  [8] R_ShoulderRoll:  {q_target[8]:.4f}")
-            self._last_log_time = current_time
         
         with self.ctrl_lock:
             self.q_target = q_target

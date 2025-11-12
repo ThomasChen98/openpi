@@ -870,48 +870,54 @@ class H1RemoteClient:
                             # Execute action chunk and record if recording is active
                             actions = np.array(data["actions"], dtype=np.float32)
                             logger.info(f" Executing {len(actions)} actions...")
+                            logger.info(f" Recording state: is_recording={self.is_recording}, episode_writer={self.episode_writer is not None}")
                             
                             # If recording, save data during execution with parallel image capture
                             if self.is_recording and self.episode_writer is not None:
-                                # Execute action chunk with synchronized recording
-                                self.robot.speed_instant_max()
-                                
-                                for i, action in enumerate(actions):
-                                    arm_joints = action[:14] if len(action) > 14 else action
+                                logger.info(f" RECORDING PATH: Will record {len(actions)} timesteps")
+                                try:
+                                    # Execute action chunk with synchronized recording
+                                    self.robot.speed_instant_max()
                                     
-                                    # Record timestamp BEFORE execution for temporal alignment
-                                    exec_timestamp = time.time()
+                                    for i, action in enumerate(actions):
+                                        arm_joints = action[:14] if len(action) > 14 else action
+                                        
+                                        # Record timestamp BEFORE execution for temporal alignment
+                                        exec_timestamp = time.time()
+                                        
+                                        # Compute gravity compensation
+                                        gravity_torques = self.compute_gravity_compensation(arm_joints)
+                                        
+                                        # Execute action
+                                        self.robot.ctrl_dual_arm(
+                                            q_target=arm_joints,
+                                            tauff_target=gravity_torques
+                                        )
+                                        
+                                        # Get current executed state
+                                        current_state = self.robot.get_current_dual_arm_q()
+                                        
+                                        # Get synchronized images from buffer (every 5 frames = 10Hz)
+                                        # This gives us temporally aligned images with execution
+                                        if i % 5 == 0:
+                                            images = self._get_closest_images(exec_timestamp)
+                                        else:
+                                            images = None
+                                        
+                                        # Save timestep with temporally aligned data
+                                        self.episode_writer.add_timestep(
+                                            qpos=current_state,
+                                            action=arm_joints,
+                                            images=images
+                                        )
+                                        
+                                        # Control at 50Hz
+                                        await asyncio.sleep(1.0 / 50)
                                     
-                                    # Compute gravity compensation
-                                    gravity_torques = self.compute_gravity_compensation(arm_joints)
-                                    
-                                    # Execute action
-                                    self.robot.ctrl_dual_arm(
-                                        q_target=arm_joints,
-                                        tauff_target=gravity_torques
-                                    )
-                                    
-                                    # Get current executed state
-                                    current_state = self.robot.get_current_dual_arm_q()
-                                    
-                                    # Get synchronized images from buffer (every 5 frames = 10Hz)
-                                    # This gives us temporally aligned images with execution
-                                    if i % 5 == 0:
-                                        images = self._get_closest_images(exec_timestamp)
-                                    else:
-                                        images = None
-                                    
-                                    # Save timestep with temporally aligned data
-                                    self.episode_writer.add_timestep(
-                                        qpos=current_state,
-                                        action=arm_joints,
-                                        images=images
-                                    )
-                                    
-                                    # Control at 50Hz
-                                    await asyncio.sleep(1.0 / 50)
-                                
-                                logger.info(f"Recorded {len(actions)} timesteps to episode")
+                                    logger.info(f" RECORDED {len(actions)} timesteps to episode")
+                                except Exception as e:
+                                    logger.error(f" ERROR during recording: {e}", exc_info=True)
+                                    raise
                             else:
                                 # Normal execution without recording
                                 self.execute_action_chunk(actions)
@@ -1079,6 +1085,7 @@ class H1RemoteClient:
                                     self.start_image_capture()
                                     
                                     self.is_recording = True
+                                    logger.info(f"SET is_recording=True, episode_writer={self.episode_writer is not None}")
                                     logger.info(f"Started recording to {save_dir}/{label_name}")
                                     logger.info("Started parallel image capture at 10Hz")
                                     response = {
