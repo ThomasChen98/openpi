@@ -221,6 +221,13 @@ class H1RemoteClient:
         # Recording state
         self.episode_writer = None
         self.is_recording = False
+        
+        # Image capture for recording
+        self.image_capture_running = False
+        self.image_buffer = []  # Buffer of (timestamp, images_dict)
+        self.image_buffer_lock = threading.Lock()
+        self.image_capture_thread = None
+        self.max_image_buffer_size = 100  # Keep last 100 images (~10 seconds at 10Hz)
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
@@ -403,6 +410,142 @@ class H1RemoteClient:
             print(f"   Make sure server is running:")
             print(f"   uv run scripts/mock_policy_server.py --port {self.server_port}")
             return False
+    
+    def _capture_images_only(self) -> dict:
+        """
+        Capture only camera images (no state). Used for parallel image capture.
+        
+        Returns:
+            Dictionary of images with camera names as keys
+        """
+        # Create dummy image (224x224 RGB, gray)
+        dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
+        
+        images = {}
+        
+        # Get head camera (from robot via ZMQ)
+        if self.head_img_array is not None:
+            try:
+                head_image = self.head_img_array.copy()
+                if np.any(head_image != 0):
+                    base_image = cv2.resize(head_image, (224, 224))
+                    base_image = cv2.cvtColor(base_image, cv2.COLOR_BGR2RGB)
+                    images["ego_cam"] = base_image
+                else:
+                    images["ego_cam"] = dummy_image
+            except Exception:
+                images["ego_cam"] = dummy_image
+        else:
+            images["ego_cam"] = dummy_image
+        
+        # Get left wrist camera
+        if self.left_wrist_camera is not None:
+            try:
+                left_wrist_frame = self.left_wrist_camera.get_frame()
+                if left_wrist_frame is not None:
+                    left_wrist_image = cv2.resize(left_wrist_frame, (224, 224))
+                    left_wrist_image = cv2.cvtColor(left_wrist_image, cv2.COLOR_BGR2RGB)
+                    images["cam_left_wrist"] = left_wrist_image
+                else:
+                    images["cam_left_wrist"] = dummy_image
+            except Exception:
+                images["cam_left_wrist"] = dummy_image
+        else:
+            images["cam_left_wrist"] = dummy_image
+        
+        # Get right wrist camera
+        if self.right_wrist_camera is not None:
+            try:
+                right_wrist_frame = self.right_wrist_camera.get_frame()
+                if right_wrist_frame is not None:
+                    right_wrist_image = cv2.resize(right_wrist_frame, (224, 224))
+                    right_wrist_image = cv2.cvtColor(right_wrist_image, cv2.COLOR_BGR2RGB)
+                    images["cam_right_wrist"] = right_wrist_image
+                else:
+                    images["cam_right_wrist"] = dummy_image
+            except Exception:
+                images["cam_right_wrist"] = dummy_image
+        else:
+            images["cam_right_wrist"] = dummy_image
+        
+        return images
+    
+    def _image_capture_loop(self):
+        """
+        Continuous image capture thread running at 10Hz.
+        Buffers images with timestamps for synchronized recording.
+        """
+        logger.info("Image capture thread started")
+        
+        while self.image_capture_running:
+            try:
+                # Capture images
+                timestamp = time.time()
+                images = self._capture_images_only()
+                
+                # Add to buffer
+                with self.image_buffer_lock:
+                    self.image_buffer.append((timestamp, images))
+                    # Keep buffer size limited
+                    if len(self.image_buffer) > self.max_image_buffer_size:
+                        self.image_buffer.pop(0)
+                
+                # Sleep to maintain ~10Hz
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error in image capture loop: {e}")
+                time.sleep(0.1)
+        
+        logger.info("Image capture thread stopped")
+    
+    def _get_closest_images(self, target_timestamp: float) -> dict:
+        """
+        Get the images closest to the target timestamp from buffer.
+        
+        Args:
+            target_timestamp: Target timestamp to find closest images for
+            
+        Returns:
+            Dictionary of images
+        """
+        with self.image_buffer_lock:
+            if not self.image_buffer:
+                # Return dummy images if buffer is empty
+                dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
+                return {
+                    "ego_cam": dummy_image,
+                    "cam_left_wrist": dummy_image,
+                    "cam_right_wrist": dummy_image
+                }
+            
+            # Find closest image by timestamp
+            closest_idx = min(
+                range(len(self.image_buffer)),
+                key=lambda i: abs(self.image_buffer[i][0] - target_timestamp)
+            )
+            
+            return self.image_buffer[closest_idx][1]
+    
+    def start_image_capture(self):
+        """Start continuous image capture for recording"""
+        if not self.image_capture_running:
+            self.image_capture_running = True
+            self.image_buffer = []
+            self.image_capture_thread = threading.Thread(
+                target=self._image_capture_loop,
+                daemon=True
+            )
+            self.image_capture_thread.start()
+            logger.info("Started continuous image capture at 10Hz")
+    
+    def stop_image_capture(self):
+        """Stop continuous image capture"""
+        if self.image_capture_running:
+            self.image_capture_running = False
+            if self.image_capture_thread is not None:
+                self.image_capture_thread.join(timeout=2.0)
+            logger.info("Stopped continuous image capture")
     
     def get_observation(self) -> dict:
         """
@@ -728,16 +871,16 @@ class H1RemoteClient:
                             actions = np.array(data["actions"], dtype=np.float32)
                             logger.info(f" Executing {len(actions)} actions...")
                             
-                            # If recording, save data during execution
+                            # If recording, save data during execution with parallel image capture
                             if self.is_recording and self.episode_writer is not None:
-                                # Get current observation for recording
-                                obs = self.get_observation()
-                                
-                                # Execute action chunk with recording
+                                # Execute action chunk with synchronized recording
                                 self.robot.speed_instant_max()
                                 
                                 for i, action in enumerate(actions):
                                     arm_joints = action[:14] if len(action) > 14 else action
+                                    
+                                    # Record timestamp BEFORE execution for temporal alignment
+                                    exec_timestamp = time.time()
                                     
                                     # Compute gravity compensation
                                     gravity_torques = self.compute_gravity_compensation(arm_joints)
@@ -751,16 +894,14 @@ class H1RemoteClient:
                                     # Get current executed state
                                     current_state = self.robot.get_current_dual_arm_q()
                                     
-                                    # Save timestep (with images only on first frame)
-                                    if i == 0:
-                                        images = {
-                                            "ego_cam": obs["image"]["cam_head"],
-                                            "cam_left_wrist": obs["image"]["cam_left_wrist"],
-                                            "cam_right_wrist": obs["image"]["cam_right_wrist"],
-                                        }
+                                    # Get synchronized images from buffer (every 5 frames = 10Hz)
+                                    # This gives us temporally aligned images with execution
+                                    if i % 5 == 0:
+                                        images = self._get_closest_images(exec_timestamp)
                                     else:
                                         images = None
                                     
+                                    # Save timestep with temporally aligned data
                                     self.episode_writer.add_timestep(
                                         qpos=current_state,
                                         action=arm_joints,
@@ -769,6 +910,8 @@ class H1RemoteClient:
                                     
                                     # Control at 50Hz
                                     await asyncio.sleep(1.0 / 50)
+                                
+                                logger.info(f"Recorded {len(actions)} timesteps to episode")
                             else:
                                 # Normal execution without recording
                                 self.execute_action_chunk(actions)
@@ -917,7 +1060,7 @@ class H1RemoteClient:
                             logger.info(" Observation sent")
                         
                         elif cmd == "start_recording":
-                            # Start episode recording
+                            # Start episode recording with parallel image capture
                             save_dir = data.get("save_dir", "./data/policy_episodes")
                             label_name = data.get("label_name", "default")
                             
@@ -931,8 +1074,13 @@ class H1RemoteClient:
                                         fps=50
                                     )
                                     self.episode_writer.start_recording()
+                                    
+                                    # Start continuous image capture
+                                    self.start_image_capture()
+                                    
                                     self.is_recording = True
                                     logger.info(f"Started recording to {save_dir}/{label_name}")
+                                    logger.info("Started parallel image capture at 10Hz")
                                     response = {
                                         "status": "success",
                                         "message": f"Started recording episode {self.episode_writer.episode_idx} for label '{label_name}'",
@@ -944,16 +1092,20 @@ class H1RemoteClient:
                                     response = {"status": "error", "message": f"Failed to start recording: {e}"}
                         
                         elif cmd == "stop_recording":
-                            # Stop episode recording
+                            # Stop episode recording and image capture
                             if not self.is_recording:
                                 response = {"status": "error", "message": "Not currently recording"}
                             else:
                                 try:
+                                    # Stop image capture first
+                                    self.stop_image_capture()
+                                    
                                     filepath = self.episode_writer.filepath
                                     episode_length = self.episode_writer.get_current_length()
                                     self.episode_writer.stop_recording()
                                     self.is_recording = False
                                     logger.info(f"Stopped recording, saved to {filepath}")
+                                    logger.info(f"Captured {episode_length} timesteps")
                                     response = {
                                         "status": "success",
                                         "message": f"Stopped recording, saved {episode_length} timesteps",
@@ -991,6 +1143,11 @@ class H1RemoteClient:
     def cleanup(self):
         """Cleanup resources before exit"""
         print("\n    Cleaning up resources...")
+        
+        # Stop image capture if running
+        if self.image_capture_running:
+            print("   Stopping image capture...")
+            self.stop_image_capture()
 
         # Stop head camera client
         print("   📹 Stopping head camera client...")
