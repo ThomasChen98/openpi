@@ -4,7 +4,13 @@
 
 ### 1. Start Robot Client (on client computer)
 
-Navigate to `openpi/examples/h1_control_client`:
+In one terminal, establish SSH tunnel to P6000 server:
+
+```bash
+ssh -R 5007:localhost:5007 -L 8080:localhost:8080 yuxin@msc-server
+```
+
+In another terminal on the client computer, navigate to `openpi/examples/h1_control_client`:
 
 ```bash
 conda activate h1_client
