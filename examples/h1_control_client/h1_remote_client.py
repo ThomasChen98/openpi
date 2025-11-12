@@ -51,6 +51,7 @@ from io import BytesIO
 import base64
 import websockets
 from websockets.server import serve
+from pathlib import Path
 
 # Setup logging
 logging.basicConfig(
@@ -75,6 +76,14 @@ try:
 except ImportError:
     print("ERROR: Could not import robot_control modules!")
     print("Make sure you're running from the h1_control_client directory")
+    sys.exit(1)
+
+# Import episode writer for recording
+try:
+    from utils.episode_writer_hdf5 import EpisodeWriterHDF5
+except ImportError:
+    print("ERROR: Could not import episode writer!")
+    print("Make sure utils/episode_writer_hdf5.py exists")
     sys.exit(1)
 
 # Import camera utilities from xr_teleoperate
@@ -190,6 +199,10 @@ class H1RemoteClient:
         self.head_frame_count = 0
         self.left_wrist_frame_count = 0
         self.right_wrist_frame_count = 0
+        
+        # Recording state
+        self.episode_writer = None
+        self.is_recording = False
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
@@ -674,6 +687,8 @@ class H1RemoteClient:
         - {"command": "get_state"}  # Get current robot state
         - {"command": "get_observation"}  # Get live observation
         - {"command": "emergency_stop"}  # Stop robot
+        - {"command": "start_recording", "save_dir": "..."}  # Start episode recording
+        - {"command": "stop_recording"}  # Stop and save episode
         """
         async def handle_command(websocket):
             logger.info(f" Viz client connected from {websocket.remote_address}")
@@ -763,6 +778,40 @@ class H1RemoteClient:
                             
                             response = {"status": "success", "message": "Reset complete"}
                         
+                        elif cmd == "reset_zombie":
+                            # Reset to zombie pose (arms fully extended forward)
+                            duration = data.get("duration", 3.0)
+                            
+                            logger.info(f"Resetting to zombie pose over {duration}s...")
+                            
+                            # Zombie pose: arms extended forward at shoulder height
+                            # Left arm: shoulder raised, elbow extended
+                            # Right arm: shoulder raised, elbow extended
+                            zombie_pose = np.array([
+                                1.57, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,  # Left arm
+                                1.57, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0   # Right arm
+                            ], dtype=np.float32)
+                            
+                            # Smooth interpolation
+                            current = self.robot.get_current_dual_arm_q()
+                            steps = int(duration * 250)
+                            
+                            for i in range(steps):
+                                alpha = (i + 1) / steps
+                                interp = current * (1 - alpha) + zombie_pose * alpha
+                                
+                                # Compute gravity compensation for interpolated position
+                                gravity_torques = self.compute_gravity_compensation(interp)
+                                
+                                self.robot.ctrl_dual_arm(
+                                    q_target=interp,
+                                    tauff_target=gravity_torques
+                                )
+                                await asyncio.sleep(1.0 / 250)
+                            
+                            logger.info("Zombie pose complete")
+                            response = {"status": "success", "message": "Reset to zombie pose complete"}
+                        
                         elif cmd == "get_state":
                             # Get current state
                             state = self.robot.get_current_dual_arm_q()
@@ -805,6 +854,116 @@ class H1RemoteClient:
                             }
                             
                             logger.info(" Observation sent")
+                        
+                        elif cmd == "start_recording":
+                            # Start episode recording
+                            save_dir = data.get("save_dir", "./data/policy_episodes")
+                            label_name = data.get("label_name", "default")
+                            
+                            if self.is_recording:
+                                response = {"status": "error", "message": "Already recording"}
+                            else:
+                                try:
+                                    self.episode_writer = EpisodeWriterHDF5(
+                                        save_dir=save_dir,
+                                        label_name=label_name,
+                                        fps=50
+                                    )
+                                    self.episode_writer.start_recording()
+                                    self.is_recording = True
+                                    logger.info(f"Started recording to {save_dir}/{label_name}")
+                                    response = {
+                                        "status": "success",
+                                        "message": f"Started recording episode {self.episode_writer.episode_idx} for label '{label_name}'",
+                                        "filepath": self.episode_writer.filepath,
+                                        "label_name": label_name,
+                                        "episode_idx": self.episode_writer.episode_idx
+                                    }
+                                except Exception as e:
+                                    response = {"status": "error", "message": f"Failed to start recording: {e}"}
+                        
+                        elif cmd == "stop_recording":
+                            # Stop episode recording
+                            if not self.is_recording:
+                                response = {"status": "error", "message": "Not currently recording"}
+                            else:
+                                try:
+                                    filepath = self.episode_writer.filepath
+                                    episode_length = self.episode_writer.get_current_length()
+                                    self.episode_writer.stop_recording()
+                                    self.is_recording = False
+                                    logger.info(f"Stopped recording, saved to {filepath}")
+                                    response = {
+                                        "status": "success",
+                                        "message": f"Stopped recording, saved {episode_length} timesteps",
+                                        "filepath": filepath,
+                                        "episode_length": episode_length
+                                    }
+                                except Exception as e:
+                                    response = {"status": "error", "message": f"Failed to stop recording: {e}"}
+                        
+                        elif cmd == "continuous_execute":
+                            # Continuous execution with live camera feed
+                            # Get observation, infer, execute in loop
+                            try:
+                                obs = self.get_observation()
+                                
+                                # Run policy inference (need policy client)
+                                if self.policy_client is None:
+                                    response = {"status": "error", "message": "Policy client not connected"}
+                                else:
+                                    # Get action chunk from policy
+                                    policy_response = self.policy_client.infer(obs)
+                                    action_chunk = policy_response["actions"]
+                                    
+                                    # Set velocity limit for execution
+                                    self.robot.speed_instant_max()
+                                    
+                                    # Execute action chunk and record simultaneously
+                                    for i, action in enumerate(action_chunk):
+                                        arm_joints = action[:14] if len(action) > 14 else action
+                                        
+                                        # Compute gravity compensation
+                                        gravity_torques = self.compute_gravity_compensation(arm_joints)
+                                        
+                                        # Execute action
+                                        self.robot.ctrl_dual_arm(
+                                            q_target=arm_joints,
+                                            tauff_target=gravity_torques
+                                        )
+                                        
+                                        # Record if recording is enabled (only record every 5th frame to save space)
+                                        if self.is_recording and self.episode_writer is not None and i % 5 == 0:
+                                            # Get current executed state
+                                            current_state = self.robot.get_current_dual_arm_q()
+                                            
+                                            # Get current images (only on first frame to avoid redundancy)
+                                            if i == 0:
+                                                images = {
+                                                    "ego_cam": obs["image"]["cam_head"],
+                                                    "cam_left_wrist": obs["image"]["cam_left_wrist"],
+                                                    "cam_right_wrist": obs["image"]["cam_right_wrist"],
+                                                }
+                                            else:
+                                                images = None  # Don't re-save images for every action
+                                            
+                                            self.episode_writer.add_timestep(
+                                                qpos=current_state,
+                                                action=arm_joints,
+                                                images=images
+                                            )
+                                        
+                                        # Control at 50Hz
+                                        await asyncio.sleep(1.0 / 50)
+                                    
+                                    response = {
+                                        "status": "success",
+                                        "message": f"Executed {len(action_chunk)} actions",
+                                        "recorded": self.is_recording
+                                    }
+                            except Exception as e:
+                                logger.error(f"Continuous execute error: {e}", exc_info=True)
+                                response = {"status": "error", "message": str(e)}
                         
                         else:
                             response = {"status": "error", "message": f"Unknown command: {cmd}"}

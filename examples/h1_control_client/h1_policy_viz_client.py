@@ -514,6 +514,11 @@ def main(args: Args) -> None:
                 hint="Move robot to selected frame's joint positions"
             )
             
+            reset_zombie_button = server.gui.add_button(
+                "🧟 Reset to Zombie Pose",
+                hint="Move arms to fully extended forward position"
+            )
+            
             execute_robot_button = server.gui.add_button(
                 "Execute on Robot",
                 disabled=True,
@@ -541,6 +546,33 @@ def main(args: Args) -> None:
                 "Start Continuous",
                 disabled=True,
                 hint="Toggle continuous inference loop"
+            )
+            
+            server.gui.add_markdown("### 💾 Recording")
+            
+            label_name_input = server.gui.add_text(
+                "Label Name",
+                initial_value="default",
+                hint="Task/label name for organizing episodes (e.g., 'pick_cube', 'stack_blocks')"
+            )
+            
+            recording_status = server.gui.add_text(
+                "Recording Status",
+                initial_value="Not recording",
+                disabled=True,
+            )
+            
+            start_recording_button = server.gui.add_button(
+                "Start Recording",
+                color="green",
+                hint="Start recording observations and actions to HDF5"
+            )
+            
+            stop_recording_button = server.gui.add_button(
+                "Stop Recording",
+                disabled=True,
+                color="red",
+                hint="Stop and save episode"
             )
             
             server.gui.add_markdown("###  Safety")
@@ -693,6 +725,7 @@ def main(args: Args) -> None:
                     async def do_reset():
                         robot_status.value = f"🔄 Resetting to frame {current_frame}..."
                         reset_robot_button.disabled = True
+                        reset_zombie_button.disabled = True
                         execute_robot_button.disabled = True
                         
                         try:
@@ -710,6 +743,7 @@ def main(args: Args) -> None:
                             robot_status.value = f" Reset error: {str(e)}"
                         finally:
                             reset_robot_button.disabled = False
+                            reset_zombie_button.disabled = False
                             if predicted_actions is not None:
                                 execute_robot_button.disabled = False
                     
@@ -719,6 +753,59 @@ def main(args: Args) -> None:
                 def _(_):
                     modal.close()
                     robot_status.value = "Reset cancelled"
+        
+        # Reset to zombie pose button callback
+        @reset_zombie_button.on_click
+        def _(event):
+            # Create confirmation modal
+            with server.gui.add_modal("🧟 Confirm Zombie Pose Reset") as modal:
+                server.gui.add_markdown(
+                    f"## Reset Robot to Zombie Pose?\n\n"
+                    f"The robot will move its arms to a fully extended forward position:\n"
+                    f"- Shoulders raised to ~90 degrees\n"
+                    f"- Elbows fully extended\n\n"
+                    f"**Duration:** 3.0 seconds\n\n"
+                    f"**Make sure the workspace is clear!**"
+                )
+                
+                confirm_zombie = server.gui.add_button("Confirm Zombie Reset", color="green")
+                cancel_zombie = server.gui.add_button("Cancel")
+                
+                @confirm_zombie.on_click
+                def _(_):
+                    modal.close()
+                    
+                    async def do_zombie_reset():
+                        robot_status.value = "🧟 Resetting to zombie pose..."
+                        reset_robot_button.disabled = True
+                        reset_zombie_button.disabled = True
+                        execute_robot_button.disabled = True
+                        
+                        try:
+                            result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "reset_zombie", "duration": 3.0}
+                            )
+                            
+                            if result["status"] == "success":
+                                robot_status.value = "🧟 Zombie pose reset complete"
+                            else:
+                                robot_status.value = f"Zombie reset failed: {result.get('message')}"
+                        except Exception as e:
+                            robot_status.value = f"Zombie reset error: {str(e)}"
+                        finally:
+                            reset_robot_button.disabled = False
+                            reset_zombie_button.disabled = False
+                            if predicted_actions is not None:
+                                execute_robot_button.disabled = False
+                    
+                    run_async(do_zombie_reset())
+                
+                @cancel_zombie.on_click
+                def _(_):
+                    modal.close()
+                    robot_status.value = "Zombie reset cancelled"
         
         # Execute on robot button callback
         @execute_robot_button.on_click
@@ -921,10 +1008,11 @@ def main(args: Args) -> None:
         
         # Continuous inference button callback
         is_continuous_running = False
+        auto_started_recording = False
         
         @continuous_button.on_click
         def _(event):
-            nonlocal is_continuous_running
+            nonlocal is_continuous_running, auto_started_recording
             
             if not is_continuous_running:
                 # Start continuous mode
@@ -941,7 +1029,41 @@ def main(args: Args) -> None:
                 frame_slider.disabled = True
                 
                 async def continuous_loop():
-                    nonlocal predicted_actions, action_chunk_horizon, is_continuous_running, last_live_observation
+                    nonlocal predicted_actions, action_chunk_horizon, is_continuous_running, last_live_observation, auto_started_recording
+                    
+                    # Auto-start recording if not already recording
+                    recording_was_started = False
+                    label_name = label_name_input.value.strip() or "default"
+                    
+                    try:
+                        status_check = await send_robot_command(
+                            args.robot_host,
+                            args.robot_port,
+                            {"command": "ping"}
+                        )
+                        
+                        # Start recording automatically with current label
+                        record_result = await send_robot_command(
+                            args.robot_host,
+                            args.robot_port,
+                            {
+                                "command": "start_recording",
+                                "save_dir": "./data/policy_episodes",
+                                "label_name": label_name
+                            }
+                        )
+                        
+                        if record_result["status"] == "success":
+                            recording_status.value = f"Recording '{record_result['label_name']}/episode_{record_result['episode_idx']}.hdf5'"
+                            stop_recording_button.disabled = False
+                            start_recording_button.disabled = True
+                            label_name_input.disabled = True
+                            recording_was_started = True
+                            auto_started_recording = True
+                            print(f"Auto-started recording: {record_result['filepath']}")
+                    except Exception as e:
+                        print(f"Could not start recording: {e}")
+                        recording_status.value = f"Recording not available: {e}"
                     
                     loop_count = 0
                     while is_continuous_running:
@@ -949,56 +1071,53 @@ def main(args: Args) -> None:
                             loop_count += 1
                             robot_status.value = f"Continuous #{loop_count}: Getting observation..."
                             
-                            # Get live observation
-                            obs = await get_live_observation_from_robot(
-                                args.robot_host, args.robot_port, args.prompt
-                            )
-                            last_live_observation = obs  # Store for camera display
-                            
-                            # Update camera displays with live feeds
-                            update_camera_displays()
-                            
-                            # Run inference
-                            robot_status.value = f"Continuous #{loop_count}: Running inference..."
-                            start_time = time.time()
-                            result = policy.infer(obs)
-                            inference_time = time.time() - start_time
-                            
-                            # Extract predicted actions
-                            predicted_actions = result['actions']
-                            action_chunk_horizon = predicted_actions.shape[0]
-                            
-                            # Update UI
-                            action_index_slider.max = action_chunk_horizon - 1
-                            action_index_slider.value = 0
-                            show_predicted_cb.disabled = False
-                            action_index_slider.disabled = False
-                            
-                            # Enable predicted actions visualization and update
-                            show_predicted_cb.value = True
-                            show_gt_cb.value = False
-                            update_visualization()
-                            
-                            # Execute on robot
-                            robot_status.value = f"Continuous #{loop_count}: Executing actions..."
+                            # Use continuous_execute command which handles recording internally
                             result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "execute", "actions": predicted_actions.tolist()}
+                                {"command": "continuous_execute"}
                             )
                             
-                            if result["status"] == "success":
-                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms)"
-                            else:
+                            if result["status"] != "success":
                                 robot_status.value = f"Error in loop #{loop_count}: {result.get('message')}"
                                 is_continuous_running = False
                                 break
+                            
+                            # Update visualization
+                            try:
+                                # Get live observation for display
+                                obs = await get_live_observation_from_robot(
+                                    args.robot_host, args.robot_port, args.prompt
+                                )
+                                last_live_observation = obs
+                                update_camera_displays()
+                            except:
+                                pass
+                            
+                            robot_status.value = f"✓ Continuous #{loop_count} complete (recorded: {result.get('recorded', False)})"
                             
                         except Exception as e:
                             robot_status.value = f"Error in continuous loop: {str(e)}"
                             print(f"Continuous loop error: {e}")
                             is_continuous_running = False
                             break
+                    
+                    # Auto-stop recording if we started it
+                    if recording_was_started and auto_started_recording:
+                        try:
+                            stop_result = await send_robot_command(
+                                args.robot_host,
+                                args.robot_port,
+                                {"command": "stop_recording"}
+                            )
+                            if stop_result["status"] == "success":
+                                recording_status.value = f"Saved {stop_result['episode_length']} timesteps"
+                                start_recording_button.disabled = False
+                                label_name_input.disabled = False
+                                print(f"Auto-stopped recording: {stop_result['filepath']}")
+                            auto_started_recording = False
+                        except Exception as e:
+                            print(f"Could not stop recording: {e}")
                     
                     # Cleanup after stopping
                     continuous_button.name = "Start Continuous"
@@ -1016,6 +1135,73 @@ def main(args: Args) -> None:
                 # Stop continuous mode
                 is_continuous_running = False
                 robot_status.value = "Stopping continuous mode..."
+        
+        # Recording button callbacks
+        @start_recording_button.on_click
+        def _(event):
+            async def do_start_recording():
+                label_name = label_name_input.value.strip()
+                if not label_name:
+                    recording_status.value = "Error: Label name cannot be empty"
+                    return
+                
+                recording_status.value = f"Starting recording for '{label_name}'..."
+                start_recording_button.disabled = True
+                label_name_input.disabled = True
+                
+                try:
+                    result = await send_robot_command(
+                        args.robot_host,
+                        args.robot_port,
+                        {
+                            "command": "start_recording",
+                            "save_dir": "./data/policy_episodes",
+                            "label_name": label_name
+                        }
+                    )
+                    
+                    if result["status"] == "success":
+                        recording_status.value = f"Recording '{result['label_name']}/episode_{result['episode_idx']}.hdf5'"
+                        stop_recording_button.disabled = False
+                        robot_status.value = f"Recording started: {result['label_name']}"
+                    else:
+                        recording_status.value = f"Failed: {result.get('message')}"
+                        start_recording_button.disabled = False
+                        label_name_input.disabled = False
+                except Exception as e:
+                    recording_status.value = f"Error: {str(e)}"
+                    start_recording_button.disabled = False
+                    label_name_input.disabled = False
+            
+            run_async(do_start_recording())
+        
+        @stop_recording_button.on_click
+        def _(event):
+            async def do_stop_recording():
+                recording_status.value = "Stopping recording..."
+                stop_recording_button.disabled = True
+                
+                try:
+                    result = await send_robot_command(
+                        args.robot_host,
+                        args.robot_port,
+                        {"command": "stop_recording"}
+                    )
+                    
+                    if result["status"] == "success":
+                        recording_status.value = f"Saved {result['episode_length']} timesteps"
+                        start_recording_button.disabled = False
+                        label_name_input.disabled = False
+                        robot_status.value = "Recording stopped and saved"
+                        print(f"Saved episode: {result['filepath']}")
+                    else:
+                        recording_status.value = f"Failed: {result.get('message')}"
+                        stop_recording_button.disabled = False
+                except Exception as e:
+                    recording_status.value = f"Error: {str(e)}"
+                    stop_recording_button.disabled = False
+            
+            run_async(do_stop_recording())
         
         # Emergency stop button callback
         @estop_button.on_click

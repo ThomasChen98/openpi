@@ -1,5 +1,1 @@
-from .weighted_moving_filter import WeightedMovingFilter
-
-__all__ = ['WeightedMovingFilter']
-
-
+"""Utilities for H1 control client"""

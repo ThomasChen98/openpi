@@ -2,6 +2,7 @@ import numpy as np
 import threading
 import time
 from enum import IntEnum
+from tqdm import tqdm
 
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize # dds
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import ( LowCmd_  as hg_LowCmd, LowState_ as hg_LowState) # idl for g1, h1_2
@@ -108,9 +109,11 @@ class H1_2_ArmController:
         self.subscribe_thread.daemon = True
         self.subscribe_thread.start()
 
-        while not self.lowstate_buffer.GetData():
-            time.sleep(0.1)
-            logger_mp.warning("[H1_2_ArmController] Waiting to subscribe dds...")
+        # Wait for DDS connection with progress bar
+        with tqdm(desc="Waiting for DDS connection", unit="attempt", bar_format='{l_bar}{bar}| {elapsed}') as pbar:
+            while not self.lowstate_buffer.GetData():
+                time.sleep(0.1)
+                pbar.update(1)
         logger_mp.info("[H1_2_ArmController] Subscribe dds ok.")
         
         # Initialize hand DDS communication if hand control is enabled
@@ -298,11 +301,7 @@ class H1_2_ArmController:
             self._ctrl_iter += 1
             if self._ctrl_iter % 125 == 0:  # Log every 0.5s at 250Hz
                 current_state = self.get_current_dual_arm_q()
-                logger_mp.info(f"DEBUG DDS publish (iter {self._ctrl_iter}):")
-                logger_mp.info(f"  Commanding: L_ShoulderPitch[13]={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].q:.4f}, R_ShoulderPitch[20]={self.msg.motor_cmd[H1_2_JointIndex.kRightShoulderPitch].q:.4f}")
-                logger_mp.info(f"  Current:    L_ShoulderPitch={current_state[0]:.4f}, R_ShoulderPitch={current_state[7]:.4f}")
-                logger_mp.info(f"  Gains:      L_kp={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kp:.1f}, L_kd={self.msg.motor_cmd[H1_2_JointIndex.kLeftShoulderPitch].kd:.1f}")
-
+                
             self.msg.crc = self.crc.Crc(self.msg)
             self.lowcmd_publisher.Write(self.msg)
             

@@ -5,7 +5,7 @@ Usage:
 uv run training_data/h1/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10
 
 For a directory with multiple HDF5 files:
-uv run training_data/h1/convert_h1_data_to_lerobot.py --data_dir training_data/h1/ --repo_id your_hf_username/h1_circular --num_repeats 3
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir examples/h1_control_client/h1_data_processed/box_action/good/ --repo_id ThomasChen98/h1_box_action_with_lang --num_repeats 4
 
 If you want to push your dataset to the Hugging Face Hub:
 uv run training_data/h1/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10 --push_to_hub
@@ -210,7 +210,7 @@ def main(
                         "cam_right_wrist": cam_right_wrist_resized,
                         "qpos": qpos[step_idx].astype(np.float32),
                         "action": actions[step_idx].astype(np.float32),
-                        "task": "h1 control task",
+                        "task": "slowly lift up the lid of the box with both hands and put it on the table",
                     }
                 )
             
