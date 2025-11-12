@@ -1071,30 +1071,46 @@ def main(args: Args) -> None:
                             loop_count += 1
                             robot_status.value = f"Continuous #{loop_count}: Getting observation..."
                             
-                            # Use continuous_execute command which handles recording internally
-                            result = await send_robot_command(
+                            # Get live observation from robot
+                            obs = await get_live_observation_from_robot(
+                                args.robot_host, args.robot_port, args.prompt
+                            )
+                            last_live_observation = obs
+                            update_camera_displays()
+                            
+                            # Run inference
+                            robot_status.value = f"Continuous #{loop_count}: Running inference..."
+                            start_time = time.time()
+                            result = policy.infer(obs)
+                            inference_time = time.time() - start_time
+                            
+                            # Extract predicted actions
+                            predicted_actions = result['actions']
+                            action_chunk_horizon = predicted_actions.shape[0]
+                            
+                            # Update UI
+                            action_index_slider.max = action_chunk_horizon - 1
+                            action_index_slider.value = 0
+                            show_predicted_cb.disabled = False
+                            action_index_slider.disabled = False
+                            show_predicted_cb.value = True
+                            show_gt_cb.value = False
+                            update_visualization()
+                            
+                            # Execute on robot (this now handles recording internally)
+                            robot_status.value = f"Continuous #{loop_count}: Executing actions..."
+                            exec_result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "continuous_execute"}
+                                {"command": "execute", "actions": predicted_actions.tolist()}
                             )
                             
-                            if result["status"] != "success":
-                                robot_status.value = f"Error in loop #{loop_count}: {result.get('message')}"
+                            if exec_result["status"] == "success":
+                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms)"
+                            else:
+                                robot_status.value = f"Error in loop #{loop_count}: {exec_result.get('message')}"
                                 is_continuous_running = False
                                 break
-                            
-                            # Update visualization
-                            try:
-                                # Get live observation for display
-                                obs = await get_live_observation_from_robot(
-                                    args.robot_host, args.robot_port, args.prompt
-                                )
-                                last_live_observation = obs
-                                update_camera_displays()
-                            except:
-                                pass
-                            
-                            robot_status.value = f"✓ Continuous #{loop_count} complete (recorded: {result.get('recorded', False)})"
                             
                         except Exception as e:
                             robot_status.value = f"Error in continuous loop: {str(e)}"

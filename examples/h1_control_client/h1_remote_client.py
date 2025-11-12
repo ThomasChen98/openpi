@@ -724,11 +724,54 @@ class H1RemoteClient:
                             response = {"status": "success", "message": "pong"}
                         
                         elif cmd == "execute":
-                            # Execute action chunk
+                            # Execute action chunk and record if recording is active
                             actions = np.array(data["actions"], dtype=np.float32)
                             logger.info(f" Executing {len(actions)} actions...")
                             
-                            self.execute_action_chunk(actions)
+                            # If recording, save data during execution
+                            if self.is_recording and self.episode_writer is not None:
+                                # Get current observation for recording
+                                obs = self.get_observation()
+                                
+                                # Execute action chunk with recording
+                                self.robot.speed_instant_max()
+                                
+                                for i, action in enumerate(actions):
+                                    arm_joints = action[:14] if len(action) > 14 else action
+                                    
+                                    # Compute gravity compensation
+                                    gravity_torques = self.compute_gravity_compensation(arm_joints)
+                                    
+                                    # Execute action
+                                    self.robot.ctrl_dual_arm(
+                                        q_target=arm_joints,
+                                        tauff_target=gravity_torques
+                                    )
+                                    
+                                    # Get current executed state
+                                    current_state = self.robot.get_current_dual_arm_q()
+                                    
+                                    # Save timestep (with images only on first frame)
+                                    if i == 0:
+                                        images = {
+                                            "ego_cam": obs["image"]["cam_head"],
+                                            "cam_left_wrist": obs["image"]["cam_left_wrist"],
+                                            "cam_right_wrist": obs["image"]["cam_right_wrist"],
+                                        }
+                                    else:
+                                        images = None
+                                    
+                                    self.episode_writer.add_timestep(
+                                        qpos=current_state,
+                                        action=arm_joints,
+                                        images=images
+                                    )
+                                    
+                                    # Control at 50Hz
+                                    await asyncio.sleep(1.0 / 50)
+                            else:
+                                # Normal execution without recording
+                                self.execute_action_chunk(actions)
                             
                             response = {"status": "success", "message": f"Executed {len(actions)} actions"}
                         
@@ -920,68 +963,6 @@ class H1RemoteClient:
                                 except Exception as e:
                                     response = {"status": "error", "message": f"Failed to stop recording: {e}"}
                         
-                        elif cmd == "continuous_execute":
-                            # Continuous execution with live camera feed
-                            # Get observation, infer, execute in loop
-                            try:
-                                obs = self.get_observation()
-                                
-                                # Run policy inference (need policy client)
-                                if self.policy_client is None:
-                                    response = {"status": "error", "message": "Policy client not connected"}
-                                else:
-                                    # Get action chunk from policy
-                                    policy_response = self.policy_client.infer(obs)
-                                    action_chunk = policy_response["actions"]
-                                    
-                                    # Set velocity limit for execution
-                                    self.robot.speed_instant_max()
-                                    
-                                    # Execute action chunk and record simultaneously
-                                    for i, action in enumerate(action_chunk):
-                                        arm_joints = action[:14] if len(action) > 14 else action
-                                        
-                                        # Compute gravity compensation
-                                        gravity_torques = self.compute_gravity_compensation(arm_joints)
-                                        
-                                        # Execute action
-                                        self.robot.ctrl_dual_arm(
-                                            q_target=arm_joints,
-                                            tauff_target=gravity_torques
-                                        )
-                                        
-                                        # Record if recording is enabled (only record every 5th frame to save space)
-                                        if self.is_recording and self.episode_writer is not None and i % 5 == 0:
-                                            # Get current executed state
-                                            current_state = self.robot.get_current_dual_arm_q()
-                                            
-                                            # Get current images (only on first frame to avoid redundancy)
-                                            if i == 0:
-                                                images = {
-                                                    "ego_cam": obs["image"]["cam_head"],
-                                                    "cam_left_wrist": obs["image"]["cam_left_wrist"],
-                                                    "cam_right_wrist": obs["image"]["cam_right_wrist"],
-                                                }
-                                            else:
-                                                images = None  # Don't re-save images for every action
-                                            
-                                            self.episode_writer.add_timestep(
-                                                qpos=current_state,
-                                                action=arm_joints,
-                                                images=images
-                                            )
-                                        
-                                        # Control at 50Hz
-                                        await asyncio.sleep(1.0 / 50)
-                                    
-                                    response = {
-                                        "status": "success",
-                                        "message": f"Executed {len(action_chunk)} actions",
-                                        "recorded": self.is_recording
-                                    }
-                            except Exception as e:
-                                logger.error(f"Continuous execute error: {e}", exc_info=True)
-                                response = {"status": "error", "message": str(e)}
                         
                         else:
                             response = {"status": "error", "message": f"Unknown command: {cmd}"}
