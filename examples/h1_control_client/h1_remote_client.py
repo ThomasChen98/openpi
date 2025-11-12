@@ -124,9 +124,7 @@ class H1RemoteClient:
     - Inspire hand bridges (hands connected to laptop)
     - Camera streaming (head from robot via ZMQ, wrists from laptop USB)
     """
-    
 
-    # TODO: HIGH PRIORITY, ensure that we don't have a janky start by reordering the robot initialization appropriately
     def __init__(self,
                  server_host: str = "localhost",
                  server_port: int = 5006,
@@ -163,26 +161,46 @@ class H1RemoteClient:
         )
         print("   Robot controller ready")
         
-        # Initialize cameras
-        print(" Initializing cameras...")
-        self._init_head_camera_client(head_camera_server_ip, head_camera_server_port)
-        self._init_wrist_cameras()
+        # Initialize cameras in background to not block robot control
+        print(" Initializing cameras (in background)...")
+        self.cameras_ready = False
+        self.head_camera_server_ip = head_camera_server_ip
+        self.head_camera_server_port = head_camera_server_port
         
-        # Report camera status
-        working_cameras = []
-        if self.head_img_array is not None:
-            working_cameras.append("head")
-        if self.left_wrist_camera is not None:
-            working_cameras.append("left wrist")
-        if self.right_wrist_camera is not None:
-            working_cameras.append("right wrist")
+        # Pre-initialize camera attributes to None (will be set by background thread)
+        self.head_img_array = None
+        self.head_camera_client = None
+        self.left_wrist_camera = None
+        self.right_wrist_camera = None
         
-        if len(working_cameras) == 3:
-            print("   Cameras ready: All cameras working!")
-        elif len(working_cameras) > 0:
-            print(f"   Cameras ready: {', '.join(working_cameras)} working (others using dummy images)")
-        else:
-            print("   Cameras ready: All using dummy images (policy will still run)")
+        def init_cameras_thread():
+            """Background thread for camera initialization"""
+            self._init_head_camera_client(self.head_camera_server_ip, self.head_camera_server_port)
+            self._init_wrist_cameras()
+            
+            # Report camera status once initialized
+            working_cameras = []
+            if self.head_img_array is not None:
+                working_cameras.append("head")
+            if self.left_wrist_camera is not None:
+                working_cameras.append("left wrist")
+            if self.right_wrist_camera is not None:
+                working_cameras.append("right wrist")
+            
+            if len(working_cameras) == 3:
+                print("   Cameras ready: All cameras working!")
+            elif len(working_cameras) > 0:
+                print(f"   Cameras ready: {', '.join(working_cameras)} working (others using dummy images)")
+            else:
+                print("   Cameras ready: All using dummy images (policy will still run)")
+            
+            self.cameras_ready = True
+            
+        camera_init_thread = threading.Thread(target=init_cameras_thread, daemon=True)
+        camera_init_thread.start()
+        
+        print("   Cameras initializing in background...")
+        print("   Robot control continues while cameras connect")
         
         # Frame counter and timing for performance monitoring
         self.frame_count = 0

@@ -515,7 +515,7 @@ def main(args: Args) -> None:
             )
             
             reset_zombie_button = server.gui.add_button(
-                "🧟 Reset to Zombie Pose",
+                "Reset to Zombie Pose",
                 hint="Move arms to fully extended forward position"
             )
             
@@ -789,7 +789,7 @@ def main(args: Args) -> None:
                             )
                             
                             if result["status"] == "success":
-                                robot_status.value = "🧟 Zombie pose reset complete"
+                                robot_status.value = "Zombie pose reset complete"
                             else:
                                 robot_status.value = f"Zombie reset failed: {result.get('message')}"
                         except Exception as e:
