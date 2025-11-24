@@ -324,8 +324,8 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
 
 
 def main(
-    hdf5_path: str = "../h1_data_raw/box_action/episode_2.hdf5",
-    urdf_path: str = "../assets/h1_2/h1_2.urdf",
+    hdf5_path: str = "h1_data_raw/episode_20.hdf5",
+    urdf_path: str = "assets/h1_2/h1_2.urdf",
     fps: float = 30.0,
     start_frame: int = 0,
     load_meshes: bool = True,
@@ -343,7 +343,8 @@ def main(
     """
     
     # Convert relative paths to absolute
-    script_dir = Path(__file__).parent
+    # Resolve relative to h1_control_client directory (parent of utils)
+    script_dir = Path(__file__).parent.parent
     if not os.path.isabs(hdf5_path):
         hdf5_path = str(script_dir / hdf5_path)
     if not os.path.isabs(urdf_path):

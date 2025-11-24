@@ -7,7 +7,7 @@
 In one terminal, establish SSH tunnel to P6000 server:
 
 ```bash
-ssh -R 5007:localhost:5007 -L 8080:localhost:8080 yuxin@msc-server
+ssh -R 5007:localhost:5007 -L 8080:localhost:8080 P6000
 ```
 
 In another terminal on the client computer, navigate to `openpi/examples/h1_control_client`:
@@ -17,7 +17,14 @@ conda activate h1_client
 python3 h1_remote_client.py --listen-mode
 ```
 
-### 2. Start Policy Visualization (on P6000 server)
+### 2. Start image service
+
+In another terminal on the P6000 server, 
+```bah
+python3 image_server image_server.py
+```
+
+### 3. Start Policy Visualization (on P6000 server)
 
 In a new terminal, navigate to `openpi`:
 
@@ -26,7 +33,7 @@ source .venv/bin/activate
 ./run_policy_viz.sh --robot-execution
 ```
 
-### 3. Start Policy Server (on P6000 server)
+### 4. Start Policy Server (on P6000 server)
 
 In another terminal:
 

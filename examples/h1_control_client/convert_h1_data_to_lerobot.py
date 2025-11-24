@@ -210,7 +210,7 @@ def main(
                         "cam_right_wrist": cam_right_wrist_resized,
                         "qpos": qpos[step_idx].astype(np.float32),
                         "action": actions[step_idx].astype(np.float32),
-                        "task": "slowly lift up the lid of the box with both hands and put it on the table",
+                        "task": "pour the water into the cup",
                     }
                 )
             

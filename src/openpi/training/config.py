@@ -1004,7 +1004,7 @@ _CONFIGS = [
         ),
         data=LeRobotH1DataConfig(
             # Replace with your custom DROID LeRobot dataset repo id.
-            repo_id="ThomasChen98/h1_box_action",
+            repo_id="ThomasChen98/h1_water_pour",
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=True,
         ),
