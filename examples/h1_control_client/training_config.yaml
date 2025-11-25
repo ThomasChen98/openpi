@@ -1,0 +1,60 @@
+# H1 Training Pipeline Configuration
+# =====================================
+# This file configures the training client for the human-in-the-loop training pipeline.
+#
+# SETUP INSTRUCTIONS:
+# 1. Copy this file and modify for your environment
+# 2. Set policy_server.host to your GPU server IP (where policy is running)
+# 3. Set rsync.target to your training data destination on P6000
+# 4. Adjust robot IPs if your network differs from defaults
+
+# Policy Server Configuration
+# ---------------------------
+# The client polls this server to check when new weights are ready.
+# The server must have the /training_status endpoint (added by our modifications).
+policy_server:
+  host: "localhost"           # Policy server hostname/IP (e.g., "192.168.1.100" or "msc-server")
+  port: 8000                  # Policy server port (default OpenPi port)
+  poll_interval_sec: 5        # How often to poll for training status (seconds)
+
+# Robot Configuration
+# -------------------
+# Network and device settings for H1-2 robot.
+# These should match your robot's network configuration.
+robot:
+  network_interface: "eno1"   # Network interface for DDS communication (check with `ip addr`)
+  
+  # Inspire hand IP addresses (on robot's internal network 192.168.123.x)
+  left_hand_ip: "192.168.123.211"
+  right_hand_ip: "192.168.123.210"
+  
+  # Head camera server (image_server.py running on robot)
+  # The robot streams head camera frames over ZMQ to this address
+  head_camera_server_ip: "192.168.123.163"   # Robot's IP address
+  head_camera_server_port: 5555              # Default image_server port
+
+# Recording Configuration
+# -----------------------
+# Where and how to save episode data.
+recording:
+  save_dir: "./data/training_epochs"  # Base directory for saved episodes
+  fps: 50                              # Recording frequency in Hz (matches control rate)
+  image_quality: 85                    # JPEG compression quality (1-100)
+
+# Rsync Configuration for Data Upload
+# ------------------------------------
+# After each training session, data is synced to the remote server.
+# Make sure SSH keys are set up for passwordless auth.
+rsync:
+  enabled: true                                          # Set to false to skip sync
+  target: "yuxin@p6000.local:/data/h1_training/"         # Remote path (user@host:path)
+  options: "-avz --progress"                             # rsync options
+  ssh_key: "~/.ssh/id_rsa"                               # SSH key (optional, leave empty to use default)
+
+# Training Session Settings
+# -------------------------
+training:
+  default_label: "training_session"  # Default label for episodes (can include task name)
+  auto_sync: true                    # Automatically sync after session ends
+  confirm_end: true                  # Require confirmation before ending session
+

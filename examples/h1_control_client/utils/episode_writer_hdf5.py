@@ -11,6 +11,8 @@ File structure:
         cam_left_wrist: [T,] - JPEG compressed images
         cam_right_wrist: [T,] - JPEG compressed images
 /action: [T, 14] - predicted joint positions from policy
+/phase: [T,] - string labels ("policy" or "human") for training pipeline
+/advantage: [T,] - boolean labels (True = good demo, False = poor demo)
 """
 
 import h5py
@@ -54,6 +56,8 @@ class EpisodeWriterHDF5:
         self.qpos_buffer = []  # Executed joint positions
         self.action_buffer = []  # Predicted joint positions
         self.image_buffers = {}  # {camera_name: [frames]}
+        self.phase_buffer = []  # Phase labels ("policy" or "human")
+        self.advantage_buffer = []  # Advantage labels (True/False/None)
         
         self.recording = False
         
@@ -65,9 +69,11 @@ class EpisodeWriterHDF5:
         self.qpos_buffer = []
         self.action_buffer = []
         self.image_buffers = {}
+        self.phase_buffer = []
+        self.advantage_buffer = []
         logger.info(f"Started recording episode {self.episode_idx}")
     
-    def add_timestep(self, qpos, action, images=None):
+    def add_timestep(self, qpos, action, images=None, phase="policy", advantage=None):
         """
         Add a single timestep to the episode
         
@@ -75,12 +81,16 @@ class EpisodeWriterHDF5:
             qpos: Executed joint positions array [14] (arm joints)
             action: Predicted joint positions array [14] (policy output)
             images: Dict of {camera_name: image_array} where image is [H, W, 3] RGB uint8
+            phase: Phase label - "policy" (robot executing) or "human" (operator adjusting)
+            advantage: Advantage label - True (good demo), False (poor demo), None (pending)
         """
         if not self.recording:
             return
         
         self.qpos_buffer.append(np.array(qpos, dtype=np.float32))
         self.action_buffer.append(np.array(action, dtype=np.float32))
+        self.phase_buffer.append(phase)
+        self.advantage_buffer.append(advantage)
         
         if images is not None:
             for camera_name, image in images.items():
@@ -91,6 +101,24 @@ class EpisodeWriterHDF5:
                     image = (np.clip(image, 0, 1) * 255).astype(np.uint8)
                 self.image_buffers[camera_name].append(image)
     
+    def label_phase_advantage(self, phase_name: str, advantage: bool):
+        """
+        Retroactively label all unlabeled frames in a specific phase with an advantage value.
+        
+        This is used after the policy execution phase ends to label all those frames
+        as either "good" (advantage=True) or "poor" (advantage=False) demonstrations.
+        
+        Args:
+            phase_name: Phase to label ("policy" or "human")
+            advantage: Advantage value to apply (True = good demo, False = poor demo)
+        """
+        labeled_count = 0
+        for i, phase in enumerate(self.phase_buffer):
+            if phase == phase_name and self.advantage_buffer[i] is None:
+                self.advantage_buffer[i] = advantage
+                labeled_count += 1
+        logger.info(f"Labeled {labeled_count} '{phase_name}' frames with advantage={advantage}")
+
     def stop_recording(self):
         """Stop recording and save to HDF5 file with JPEG compression"""
         if not self.recording:
@@ -154,14 +182,36 @@ class EpisodeWriterHDF5:
                 # Save actions (predicted joint positions)
                 f.create_dataset('action', data=action_data, compression='gzip')
                 
+                # Save phase labels as variable-length strings
+                phase_data = np.array(self.phase_buffer, dtype='S10')  # Fixed-length strings
+                f.create_dataset('phase', data=phase_data, compression='gzip')
+                
+                # Save advantage labels as booleans (convert None to False for storage)
+                # Store as int8: 1=True (good), 0=False (poor), -1=None (unlabeled)
+                advantage_data = np.array(
+                    [1 if a is True else (0 if a is False else -1) for a in self.advantage_buffer],
+                    dtype=np.int8
+                )
+                f.create_dataset('advantage', data=advantage_data, compression='gzip')
+                
                 # Save metadata as attributes
                 f.attrs['episode_length'] = episode_length
                 f.attrs['fps'] = self.fps
                 f.attrs['timestamp'] = datetime.now().isoformat()
+                
+                # Count phase statistics
+                policy_frames = sum(1 for p in self.phase_buffer if p == "policy")
+                human_frames = sum(1 for p in self.phase_buffer if p == "human")
+                advantage_frames = sum(1 for a in self.advantage_buffer if a is True)
+                f.attrs['policy_frames'] = policy_frames
+                f.attrs['human_frames'] = human_frames
+                f.attrs['advantage_frames'] = advantage_frames
             
             logger.info(f"Episode saved successfully: {self.filepath}")
             logger.info(f"  Label: {self.label_name}")
             logger.info(f"  qpos: {qpos_data.shape}, action: {action_data.shape}")
+            logger.info(f"  Phase breakdown: {policy_frames} policy, {human_frames} human")
+            logger.info(f"  Advantage frames: {advantage_frames}/{episode_length}")
             
             # Prepare for next episode (increment and update filepath)
             self.episode_idx += 1
@@ -179,4 +229,14 @@ class EpisodeWriterHDF5:
     def get_current_length(self):
         """Get number of timesteps in current recording"""
         return len(self.qpos_buffer)
+    
+    def get_phase_counts(self):
+        """Get count of frames per phase in current recording"""
+        policy_count = sum(1 for p in self.phase_buffer if p == "policy")
+        human_count = sum(1 for p in self.phase_buffer if p == "human")
+        return {"policy": policy_count, "human": human_count}
+    
+    def get_unlabeled_count(self):
+        """Get count of frames without advantage labels"""
+        return sum(1 for a in self.advantage_buffer if a is None)
 

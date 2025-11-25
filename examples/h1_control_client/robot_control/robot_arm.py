@@ -83,6 +83,9 @@ class H1_2_ArmController:
         self._gradual_start_time = None
         self._gradual_time = None
         
+        # Damping mode flag - when True, arms have zero PD gains (can be moved freely)
+        self.damping_mode = False
+        
         # Hand control parameters - default to open position
         self.left_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
         self.right_hand_gesture = np.full(INSPIRE_HAND_DOF_PER_HAND, INSPIRE_HAND_OPEN)
@@ -438,6 +441,39 @@ class H1_2_ArmController:
             H1_2_JointIndex.kRightWristYaw.value,
         ]
         return motor_index.value in wrist_motors
+
+    def enter_damping_mode(self):
+        """
+        Enter damping mode - zero PD gains so arms can be moved freely.
+        Only gravity compensation torques are applied.
+        """
+        logger_mp.info("[H1_2_ArmController] Entering damping mode...")
+        with self.ctrl_lock:
+            for id in H1_2_JointArmIndex:
+                self.msg.motor_cmd[id].kp = 0.0
+                self.msg.motor_cmd[id].kd = 0.0
+            self.damping_mode = True
+        logger_mp.info("[H1_2_ArmController] Damping mode active - arms can be moved freely")
+
+    def exit_damping_mode(self):
+        """
+        Exit damping mode - restore normal PD gains for position control.
+        """
+        logger_mp.info("[H1_2_ArmController] Exiting damping mode...")
+        with self.ctrl_lock:
+            for id in H1_2_JointArmIndex:
+                if self._Is_wrist_motor(id):
+                    self.msg.motor_cmd[id].kp = self.kp_wrist
+                    self.msg.motor_cmd[id].kd = self.kd_wrist
+                else:
+                    self.msg.motor_cmd[id].kp = self.kp_low
+                    self.msg.motor_cmd[id].kd = self.kd_low
+            self.damping_mode = False
+        logger_mp.info("[H1_2_ArmController] Normal position control restored")
+
+    def is_damping_mode(self):
+        """Check if currently in damping mode."""
+        return self.damping_mode
 
 class H1_2_JointArmIndex(IntEnum):
     # Left arm

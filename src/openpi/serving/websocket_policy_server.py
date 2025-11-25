@@ -1,5 +1,6 @@
 import asyncio
 import http
+import json
 import logging
 import time
 import traceback
@@ -29,7 +30,22 @@ class WebsocketPolicyServer:
         self._host = host
         self._port = port
         self._metadata = metadata or {}
+        # Training status for training pipeline integration
+        self._training_ready = True  # Default to ready (policy is loaded and can be used)
+        self._training_epoch = 0
         logging.getLogger("websockets.server").setLevel(logging.INFO)
+
+    def set_training_status(self, ready: bool, epoch: int | None = None) -> None:
+        """Update training status for client polling.
+        
+        Args:
+            ready: Whether the policy is ready for inference (training complete)
+            epoch: Current training epoch number
+        """
+        self._training_ready = ready
+        if epoch is not None:
+            self._training_epoch = epoch
+        logger.info(f"Training status updated: ready={ready}, epoch={self._training_epoch}")
 
     def serve_forever(self) -> None:
         asyncio.run(self.run())
@@ -41,9 +57,27 @@ class WebsocketPolicyServer:
             self._port,
             compression=None,
             max_size=None,
-            process_request=_health_check,
+            process_request=self._process_request,
         ) as server:
             await server.serve_forever()
+
+    def _process_request(
+        self, connection: _server.ServerConnection, request: _server.Request
+    ) -> _server.Response | None:
+        """Handle HTTP requests before WebSocket upgrade."""
+        if request.path == "/healthz":
+            return connection.respond(http.HTTPStatus.OK, "OK\n")
+        if request.path == "/training_status":
+            status = {
+                "ready": self._training_ready,
+                "epoch": self._training_epoch,
+            }
+            return connection.respond(
+                http.HTTPStatus.OK,
+                json.dumps(status) + "\n",
+            )
+        # Continue with normal WebSocket handling
+        return None
 
     async def _handler(self, websocket: _server.ServerConnection):
         logger.info(f"Connection from {websocket.remote_address} opened")
@@ -83,8 +117,3 @@ class WebsocketPolicyServer:
                 raise
 
 
-def _health_check(connection: _server.ServerConnection, request: _server.Request) -> _server.Response | None:
-    if request.path == "/healthz":
-        return connection.respond(http.HTTPStatus.OK, "OK\n")
-    # Continue with the normal request handling.
-    return None
