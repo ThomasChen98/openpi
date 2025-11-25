@@ -227,7 +227,7 @@ class H1RemoteClient:
         self.image_buffer = []  # Buffer of (timestamp, images_dict)
         self.image_buffer_lock = threading.Lock()
         self.image_capture_thread = None
-        self.max_image_buffer_size = 100  # Keep last 100 images (~10 seconds at 10Hz)
+        self.max_image_buffer_size = 500  # Keep last 500 images (~10 seconds at 50Hz)
     
     def _init_head_camera_client(self, server_ip: str, server_port: int):
         """Initialize client to receive head camera from robot"""
@@ -472,13 +472,16 @@ class H1RemoteClient:
     
     def _image_capture_loop(self):
         """
-        Continuous image capture thread running at 10Hz.
+        Continuous image capture thread running at 50Hz.
         Buffers images with timestamps for synchronized recording.
+        Matches the joint recording rate for consistent data.
         """
-        logger.info("Image capture thread started")
+        logger.info("Image capture thread started at 50Hz")
         
         while self.image_capture_running:
             try:
+                loop_start = time.time()
+                
                 # Capture images
                 timestamp = time.time()
                 images = self._capture_images_only()
@@ -490,12 +493,14 @@ class H1RemoteClient:
                     if len(self.image_buffer) > self.max_image_buffer_size:
                         self.image_buffer.pop(0)
                 
-                # Sleep to maintain ~10Hz
-                time.sleep(0.1)
+                # Sleep to maintain ~50Hz (accounting for capture time)
+                elapsed = time.time() - loop_start
+                sleep_time = max(0, (1.0 / 50) - elapsed)
+                time.sleep(sleep_time)
                 
             except Exception as e:
                 logger.error(f"Error in image capture loop: {e}")
-                time.sleep(0.1)
+                time.sleep(0.02)
         
         logger.info("Image capture thread stopped")
     
@@ -537,7 +542,7 @@ class H1RemoteClient:
                 daemon=True
             )
             self.image_capture_thread.start()
-            logger.info("Started continuous image capture at 10Hz")
+            logger.info("Started continuous image capture at 50Hz")
     
     def stop_image_capture(self):
         """Stop continuous image capture"""
@@ -897,12 +902,8 @@ class H1RemoteClient:
                                         # Get current executed state
                                         current_state = self.robot.get_current_dual_arm_q()
                                         
-                                        # Get synchronized images from buffer (every 5 frames = 10Hz)
-                                        # This gives us temporally aligned images with execution
-                                        if i % 5 == 0:
-                                            images = self._get_closest_images(exec_timestamp)
-                                        else:
-                                            images = None
+                                        # Get synchronized images from buffer (every frame at 50Hz)
+                                        images = self._get_closest_images(exec_timestamp)
                                         
                                         # Save timestep with temporally aligned data
                                         self.episode_writer.add_timestep(
