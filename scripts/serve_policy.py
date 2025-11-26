@@ -28,6 +28,8 @@ class Checkpoint:
     config: str
     # Checkpoint directory (e.g., "checkpoints/pi0_aloha_sim/exp/10000").
     dir: str
+    # Optional: Override data_dir for configs that use LeRobotH1LocalDataConfig
+    data_dir: str | None = None
 
 
 @dataclasses.dataclass
@@ -89,8 +91,19 @@ def create_policy(args: Args) -> _policy.Policy:
     """Create a policy from the given arguments."""
     match args.policy:
         case Checkpoint():
+            config = _config.get_config(args.policy.config)
+            
+            # If data_dir is provided, override the data_dir in the config
+            if args.policy.data_dir is not None:
+                if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+                    config = dataclasses.replace(
+                        config,
+                        data=dataclasses.replace(config.data, data_dir=args.policy.data_dir)
+                    )
+                    logging.info(f"Overriding data_dir to: {args.policy.data_dir}")
+            
             return _policy_config.create_trained_policy(
-                _config.get_config(args.policy.config), args.policy.dir, default_prompt=args.default_prompt
+                config, args.policy.dir, default_prompt=args.default_prompt
             )
         case Default():
             return create_default_policy(args.env, default_prompt=args.default_prompt)

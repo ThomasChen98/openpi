@@ -356,6 +356,71 @@ class LeRobotLiberoDataConfig(DataConfigFactory):
 
 
 @dataclasses.dataclass(frozen=True)
+class LeRobotH1LocalDataConfig(DataConfigFactory):
+    """
+    This config is used for H1 data stored locally (not on HuggingFace Hub).
+    Instead of repo_id pointing to HF, we use data_dir for a local path.
+    """
+    # Local directory path containing the LeRobot format dataset
+    data_dir: str = tyro.MISSING
+    # If true, will convert joint dimensions to deltas with respect to the current state before passing to the model.
+    extra_delta_transform: bool = True
+    # Action keys that will be used to read the action sequence from the dataset.
+    action_sequence_keys: Sequence[str] = ("action",)
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # For local datasets, we use the local path as the repo_id
+        # The lerobot library can accept local paths
+        repack_transforms = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "cam_head": "ego_cam",
+                            "cam_left_wrist": "cam_left_wrist",
+                            "cam_right_wrist": "cam_right_wrist",
+                        },
+                        "state": "qpos",
+                        "actions": "action",
+                        "prompt": "task",
+                    }
+                )
+            ]
+        )
+
+        data_transforms = _transforms.Group(
+            inputs=[h1_policy.H1Inputs(model_type=model_config.model_type)],
+            outputs=[h1_policy.H1Outputs()],
+        )
+
+        if self.extra_delta_transform:
+            delta_action_mask = _transforms.make_bool_mask(14)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        # For local datasets, load norm stats from the data directory itself
+        # (compute_norm_stats.py saves them there when using local paths)
+        norm_stats = self._load_norm_stats(epath.Path(self.data_dir), ".")
+
+        return dataclasses.replace(
+            self.base_config or DataConfig(),
+            repo_id=self.data_dir,  # Use local directory as repo_id
+            asset_id=self.data_dir,  # Use data_dir as asset_id for consistency
+            norm_stats=norm_stats,
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+            repack_transforms=repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
 class LeRobotH1DataConfig(DataConfigFactory):
     """
     This config is used to configure transforms that are applied at various parts of the data pipeline.
@@ -1004,7 +1069,7 @@ _CONFIGS = [
         ),
         data=LeRobotH1DataConfig(
             # Replace with your custom DROID LeRobot dataset repo id.
-            repo_id="ThomasChen98/h1_water_pour",
+            repo_id="ThomasChen98/h1_box_action",
             base_config=DataConfig(prompt_from_task=True),
             extra_delta_transform=True,
         ),
@@ -1022,6 +1087,29 @@ _CONFIGS = [
         # ),
         # optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
         # ema_decay=0.999,
+    ),
+    TrainConfig(
+        # This config is for fine-tuning pi05 on H1 data stored locally.
+        # The data should be in LeRobot format stored in a local directory.
+        # NOTE: The data_dir MUST be overridden via --data-dir parameter when training/serving
+        name="pi05_h1_auto",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # pi05 is trained with 32-dim actions
+            action_horizon=50,
+        ),
+        data=LeRobotH1LocalDataConfig(
+            # REQUIRED: Override this with --data-dir when training or serving
+            data_dir=tyro.MISSING,
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
+        num_train_steps=1000,
+        batch_size=32,
+        save_interval=200,
+        keep_period=200,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.

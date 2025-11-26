@@ -6,7 +6,7 @@ A systematic training pipeline that alternates between:
 1. Policy execution (robot runs inference)
 2. Human correction (operator adjusts robot in damping mode)
 
-All data is continuously recorded at 50Hz with phase and advantage labels.
+All data is continuously recorded at 50Hz with phase labels.
 
 State Machine:
     WAITING -> READY -> EXECUTING -> LABELING -> DAMPING -> SAVING -> DECIDING -> (loop or SYNCING)
@@ -668,15 +668,14 @@ class H1TrainingClient:
                         tauff_target=gravity_torques
                     )
                     
-                    # Record timestep (advantage=None, to be labeled later)
+                    # Record timestep
                     current_q = self.robot.get_current_dual_arm_q()
                     obs = self.get_observation()
                     self.episode_writer.add_timestep(
                         qpos=current_q,
                         action=action,
                         images=obs.get('images'),
-                        phase="policy",
-                        advantage=None  # Will be labeled in LABELING state
+                        phase="policy"
                     )
                     
                 except Exception as e:
@@ -688,23 +687,11 @@ class H1TrainingClient:
                 time.sleep(sleep_time)
     
     def run_labeling_state(self):
-        """LABELING state: User labels the execution as good/bad"""
+        """LABELING state: Transition to damping mode for human corrections"""
         print("\n" + "=" * 60)
-        print("[LABELING] Was this execution good?")
-        print("  Press 'y' for GOOD (advantage=True)")
-        print("  Press 'n' for POOR (advantage=False)")
+        print("[LABELING] Policy execution complete")
+        print("  Transitioning to damping mode for corrections...")
         print("=" * 60)
-        
-        with self.keyboard:
-            key = self.keyboard.wait_for_key({'y', 'n'}, "Your choice: ")
-            
-            advantage = (key == 'y')
-            self.episode_writer.label_phase_advantage("policy", advantage)
-            
-            if advantage:
-                logger.info("Labeled policy frames as GOOD demonstrations")
-            else:
-                logger.info("Labeled policy frames as POOR demonstrations")
         
         self.state = TrainingState.DAMPING
     
@@ -733,7 +720,7 @@ class H1TrainingClient:
                     self.state = TrainingState.SAVING
                     break
                 
-                # Record current state (damping mode frames are always advantage=True)
+                # Record current state (human corrections)
                 current_q = self.robot.get_current_dual_arm_q()
                 obs = self.get_observation()
                 
@@ -744,8 +731,7 @@ class H1TrainingClient:
                     qpos=current_q,
                     action=zero_action,
                     images=obs.get('images'),
-                    phase="human",
-                    advantage=True  # Human corrections are always positive
+                    phase="human"
                 )
                 
                 # Still send gravity compensation to keep robot supported

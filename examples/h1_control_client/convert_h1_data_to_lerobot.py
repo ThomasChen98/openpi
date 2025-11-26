@@ -2,13 +2,13 @@
 Script for converting H1 HDF5 dataset to LeRobot format.
 
 Usage:
-uv run training_data/h1/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10
 
 For a directory with multiple HDF5 files:
 uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir examples/h1_control_client/h1_data_processed/box_action/good/ --repo_id ThomasChen98/h1_box_action_with_lang --num_repeats 4
 
 If you want to push your dataset to the Hugging Face Hub:
-uv run training_data/h1/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10 --push_to_hub
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10 --push_to_hub
 
 Note: Install h5py if needed: `uv pip install h5py`
 Note: Install opencv-python for image resizing: `uv pip install opencv-python`
@@ -19,6 +19,7 @@ The resulting dataset will be saved to the $HF_LEROBOT_HOME directory.
 import shutil
 from pathlib import Path
 
+import os
 import cv2
 import h5py
 import numpy as np
@@ -78,10 +79,12 @@ def load_episode_from_hdf5(hdf5_path: str) -> dict:
 
 def main(
     data_dir: str,
+    task_description: str,
     repo_id: str = "your_hf_username/h1_circular",
     *,
     num_repeats: int = 256,
     push_to_hub: bool = False,
+    save_dir: str = None,
 ):
     """Convert H1 HDF5 data to LeRobot format.
     
@@ -90,6 +93,7 @@ def main(
         repo_id: Repository ID for the output dataset
         num_repeats: Number of times to repeat the episode sequence (to create more training data)
         push_to_hub: Whether to push the dataset to Hugging Face Hub
+        save_dir: Name of the directory to save the dataset
     """
     # Determine if data_dir is a file or directory
     data_path = Path(data_dir)
@@ -111,6 +115,12 @@ def main(
     
     # Clean up any existing dataset in the output directory
     output_path = HF_LEROBOT_HOME / repo_id
+    if save_dir is not None:
+        repo_id = save_dir
+        print(f"Using directory name: {save_dir}")
+        # Get the directory where this file is located
+        current_dir = Path(__file__).parent.resolve()
+        output_path = Path(current_dir) / 'h1_data_lerobot' / save_dir
     if output_path.exists():
         shutil.rmtree(output_path)
 
@@ -119,8 +129,9 @@ def main(
     # Based on h1_policy.py, we use 14-dim state and 14-dim actions
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
+        root=output_path,
         robot_type="h1",
-        fps=30,  # Adjust based on your data collection frequency
+        fps=50,  # Adjust based on your data collection frequency
         features={
             "ego_cam": {
                 "dtype": "image",
@@ -210,7 +221,7 @@ def main(
                         "cam_right_wrist": cam_right_wrist_resized,
                         "qpos": qpos[step_idx].astype(np.float32),
                         "action": actions[step_idx].astype(np.float32),
-                        "task": "pour the water into the cup",
+                        "task": task_description,
                     }
                 )
             

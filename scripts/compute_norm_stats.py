@@ -5,6 +5,8 @@ will compute the mean and standard deviation of the data in the dataset and save
 to the config assets directory.
 """
 
+import dataclasses
+
 import numpy as np
 import tqdm
 import tyro
@@ -86,8 +88,17 @@ def create_rlds_dataloader(
     return data_loader, num_batches
 
 
-def main(config_name: str, max_frames: int | None = None):
+def main(config_name: str, max_frames: int | None = None, data_dir: str | None = None):
     config = _config.get_config(config_name)
+    
+    # If data_dir is provided, override the data_dir in the config
+    if data_dir is not None:
+        if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+            config = dataclasses.replace(
+                config,
+                data=dataclasses.replace(config.data, data_dir=data_dir)
+            )
+    
     data_config = config.data.create(config.assets_dirs, config.model)
 
     if data_config.rlds_data_dir is not None:

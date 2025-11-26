@@ -1,1 +1,6 @@
-CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 uv run scripts/train.py pi05_h1_finetune --exp-name=pi05_h1_box_activate_h50 --overwrite
+CUDA_VISIBLE_DEVICES=0 \
+XLA_PYTHON_CLIENT_MEM_FRACTION=0.85 \
+
+uv run scripts/train.py pi05_h1_finetune \
+--exp-name=pi05_h1_box_activate_h50 \
+--overwrite

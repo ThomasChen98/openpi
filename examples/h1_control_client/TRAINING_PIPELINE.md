@@ -1,6 +1,6 @@
 # H1 Training Pipeline
 
-A human-in-the-loop training system for the H1-2 robot that alternates between policy execution and human corrections, with continuous data recording and advantage labeling.
+A human-in-the-loop training system for the H1-2 robot that alternates between policy execution and human corrections, with continuous data recording.
 
 ## Overview
 
@@ -8,8 +8,7 @@ The training pipeline implements a state machine that:
 1. Waits for a policy server to signal new weights are ready
 2. Runs the policy while recording data
 3. Allows human corrections in damping mode
-4. Labels data with "advantage" annotations for training
-5. Syncs data to a remote server for retraining
+4. Syncs data to a remote server for retraining
 
 ```
 ┌─────────┐     ┌───────┐     ┌───────────┐     ┌──────────┐
@@ -72,14 +71,12 @@ episode_N.hdf5
 │       └── cam_right_wrist [T,]  vlen uint8  - Right wrist (JPEG)
 ├── action            [T, 14]   float32  - Policy outputs (zeros during damping)
 ├── phase             [T,]      string   - "policy" or "human"
-├── advantage         [T,]      int8     - 1=good, 0=poor, -1=unlabeled
 └── attrs:
     ├── episode_length
     ├── fps
     ├── timestamp
     ├── policy_frames
-    ├── human_frames
-    └── advantage_frames
+    └── human_frames
 ```
 
 ### Recording Details
@@ -88,42 +85,6 @@ episode_N.hdf5
 - **Images**: JPEG compressed at quality=85
 - **All cameras recorded**: Head, left wrist, right wrist
 - **Continuous**: Records during both policy execution AND damping mode
-
-## Advantage Labeling
-
-Advantage labels indicate whether frames are "good" or "poor" demonstrations:
-
-| Label Value | Meaning | When Applied |
-|-------------|---------|--------------|
-| `1` (True) | Good demonstration | Human corrections, or policy execution labeled 'y' |
-| `0` (False) | Poor demonstration | Policy execution labeled 'n' |
-| `-1` (None) | Unlabeled | Should not appear in saved data |
-
-### Labeling Flow
-
-1. **During EXECUTING phase**: Frames recorded with `advantage=None` (pending)
-
-2. **After pressing 's' to stop**: User is prompted:
-   ```
-   [LABELING] Was this execution good?
-     Press 'y' for GOOD (advantage=True)
-     Press 'n' for POOR (advantage=False)
-   ```
-   All pending policy frames are retroactively labeled.
-
-3. **During DAMPING phase**: Frames automatically get `advantage=True`
-   (Human corrections are always considered positive demonstrations)
-
-### Why This Matters for Training
-
-- **advantage=True** frames: Used as positive examples (imitation learning)
-- **advantage=False** frames: Can be used for contrastive learning or filtered out
-- **phase="human"** frames: Represent human corrections/interventions
-
-This enables:
-- Learning from successful policy rollouts
-- Learning from human corrections
-- Potentially learning what NOT to do from failed rollouts
 
 ## Tester's Guide
 
@@ -171,8 +132,8 @@ python h1_training_client.py --config training_config.yaml
 
 | Key | Action |
 |-----|--------|
-| `y` | Yes / Confirm / Good |
-| `n` | No / Decline / Poor |
+| `y` | Yes / Confirm |
+| `n` | No / Decline |
 | `s` | Stop execution, enter damping mode |
 | `e` | End epoch, save data |
 | `Ctrl+C` | Emergency exit (saves current data) |
@@ -198,25 +159,16 @@ python h1_training_client.py --config training_config.yaml
    - Watch the robot's behavior
    - Press `s` when you want to stop (either because it succeeded or failed)
 
-4. **Labeling**: Rate the execution
-   ```
-   [LABELING] Was this execution good?
-     Press 'y' for GOOD (advantage=True)
-     Press 'n' for POOR (advantage=False)
-   ```
-   - `y` if the robot did well (even partial success)
-   - `n` if the robot failed or behaved poorly
-
-5. **Damping Mode**: Make corrections
+4. **Damping Mode**: Make corrections
    ```
    [DAMPING] Robot in damping mode - adjust pose freely
      Press 'e' to end epoch and save
    ```
    - Physically move the robot's arms to desired positions
    - Guide through the correct motion
-   - All movements are recorded as positive demonstrations
+   - All movements are recorded as human demonstrations
 
-6. **Save**: Episode saved to HDF5
+5. **Save**: Episode saved to HDF5
    ```
    [SAVING] Saving episode data...
      Saved: ./data/training_epochs/training_session_epoch1/episode_0.hdf5
@@ -224,34 +176,32 @@ python h1_training_client.py --config training_config.yaml
      Policy frames: 1200, Human frames: 1647
    ```
 
-7. **Continue or End**:
+6. **Continue or End**:
    ```
    [DECIDING] What's next?
      Press 'y' to start another epoch
      Press 'n' to finish training session
    ```
 
-8. **Sync**: Data uploaded to remote server
+7. **Sync**: Data uploaded to remote server
    ```
    [SYNCING] Uploading data to remote server...
    ```
 
 ### Tips for Testers
 
-1. **Label honestly**: If the policy execution was bad, label it `n`. This data is still useful for training.
+1. **Guide smoothly**: During damping mode, move the robot through the task smoothly and at a reasonable pace.
 
-2. **Guide smoothly**: During damping mode, move the robot through the task smoothly and at a reasonable pace.
+2. **Don't rush**: Take time during human corrections to demonstrate the task properly.
 
-3. **Don't rush**: Take time during human corrections to demonstrate the task properly.
+3. **Watch for limits**: Be aware of joint limits when moving the robot manually.
 
-4. **Watch for limits**: Be aware of joint limits when moving the robot manually.
-
-5. **Multiple epochs**: Do several epochs per session for more data. You can vary:
+4. **Multiple epochs**: Do several epochs per session for more data. You can vary:
    - Starting positions
    - Object placements
    - Speed of corrections
 
-6. **Emergency stop**: `Ctrl+C` will save current data and exit safely.
+5. **Emergency stop**: `Ctrl+C` will save current data and exit safely.
 
 ### Troubleshooting
 
