@@ -83,16 +83,22 @@ def load_humanoid_everyday_episode(episode_dir: Path) -> dict:
     arm_states = []
     arm_actions = []
     
-    for step in data:
+    for i, step in enumerate(data):
         # Humanoid Everyday arm_state is 14 dimensions
-        # Just use it directly - appears to already be in correct H1 format
+        # This is the sensor reading - actual measured joint positions
         arm_state = np.array(step["states"]["arm_state"], dtype=np.float32)
         arm_states.append(arm_state)
         
-        # For actions, use sol_q which is the IK solution (14 DoF)
-        # This should match the arm state format
-        arm_action = np.array(step["actions"]["sol_q"], dtype=np.float32)
-        arm_actions.append(arm_action)
+        # FIX: Use next timestep's arm_state as the action target
+        # This ensures action and state are in the same coordinate frame.
+        # Previously we used sol_q (IK motor commands) which has motor offsets
+        # that don't match sensor readings, causing ~1.3 rad systematic offset.
+        if i < len(data) - 1:
+            next_arm_state = np.array(data[i + 1]["states"]["arm_state"], dtype=np.float32)
+            arm_actions.append(next_arm_state)
+        else:
+            # For last timestep, use current state (no further motion)
+            arm_actions.append(arm_state.copy())
     
     qpos = np.array(arm_states, dtype=np.float32)  # (N, 14)
     actions = np.array(arm_actions, dtype=np.float32)  # (N, 14)
