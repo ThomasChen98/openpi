@@ -550,6 +550,15 @@ class H1TrainingClient:
         task_description = task_config.get('description',
             self.config.get('training', {}).get('default_label', 'manipulation task'))
         
+        # Remap image keys to match policy expectations
+        # OpenPi model expects (cam_head, cam_left_wrist, cam_right_wrist)
+        raw_images = obs["images"]
+        obs["images"] = {
+            "cam_head": raw_images.get("ego_cam", raw_images.get("cam_head")),
+            "cam_left_wrist": raw_images["cam_left_wrist"],
+            "cam_right_wrist": raw_images["cam_right_wrist"],
+        }
+        
         # Add prompt with Advantage=True to sample from good distribution
         obs["prompt"] = f"{task_description}, Advantage=True"
         
