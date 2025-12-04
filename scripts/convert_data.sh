@@ -108,7 +108,7 @@ echo "Found $HDF5_COUNT HDF5 file(s)"
 CONVERT_CMD="uv run examples/h1_control_client/convert_h1_data_to_lerobot.py \
     --data_dir \"$DATA_DIR\" \
     --task_description \"$TASK_DESCRIPTION\" \
-    --num_repeats $NUM_REPEATS \
+--num_repeats $NUM_REPEATS \
     --save_dir \"$SAVE_DIR\""
 
 if [ "$LABELING_MODE" != "none" ]; then
@@ -125,8 +125,8 @@ echo "  > Computing normalization statistics..."
 echo "========================================================"
 
 uv run scripts/compute_norm_stats.py \
-    --config-name "$CONFIG_NAME" \
-    --data-dir "$LEROBOT_DATA_DIR"
+--config-name "$CONFIG_NAME" \
+--data-dir "$LEROBOT_DATA_DIR"
 
 echo ""
 echo "========================================================"

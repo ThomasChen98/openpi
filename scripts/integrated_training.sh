@@ -80,7 +80,9 @@ CONFIG_NAME=$(yq -r '.policy.config_name' "$CONFIG_FILE")
 BASE_CHECKPOINT=$(yq -r '.policy.base_checkpoint // ""' "$CONFIG_FILE")
 
 # Training
-MAX_EPOCHS=$(yq -r '.training.max_epochs // 100' "$CONFIG_FILE")
+MAX_EPOCHS=$(yq -r '.training.max_epochs // 400' "$CONFIG_FILE")
+SAVE_INTERVAL=$(yq -r '.training.save_interval // 200' "$CONFIG_FILE")
+KEEP_PERIOD=$(yq -r '.training.keep_period // 100' "$CONFIG_FILE")
 NUM_REPEATS=$(yq -r '.training.num_repeats // 1' "$CONFIG_FILE")
 LABELING_MODE=$(yq -r '.training.labeling_mode // "human_labeling"' "$CONFIG_FILE")
 GPU_ID=$(yq -r '.training.gpu_id // 0' "$CONFIG_FILE")
@@ -480,6 +482,7 @@ train_epoch() {
     log_phase "Training (Epoch $EPOCH)"
     
     local train_args="--task-name $TASK_NAME --epoch $EPOCH --config-name $CONFIG_NAME --gpu $GPU_ID"
+    train_args="$train_args --max-epochs $MAX_EPOCHS --save-interval $SAVE_INTERVAL --keep-period $KEEP_PERIOD"
     
     if [ -n "$resume_from" ]; then
         train_args="$train_args --resume-from $resume_from"
@@ -516,6 +519,8 @@ show_config() {
     echo -e "  Policy Config:    $CONFIG_NAME"
     echo -e "  Base Checkpoint:  ${BASE_CHECKPOINT:-none}"
     echo -e "  Max Epochs:       $MAX_EPOCHS"
+    echo -e "  Save Interval:    $SAVE_INTERVAL"
+    echo -e "  Keep Period:      $KEEP_PERIOD"
     echo -e "  Labeling Mode:    $LABELING_MODE"
     echo -e "  GPU:              $GPU_ID"
     echo -e "  Server:           $SERVER_HOST:$SERVER_PORT"

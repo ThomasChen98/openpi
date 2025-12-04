@@ -202,7 +202,17 @@ def train_step(
     return new_state, info
 
 
-def main(config_name: str, exp_name: str, overwrite: bool = False, resume: bool = False, wandb_enabled: bool = True, data_dir: str | None = None):
+def main(
+    config_name: str,
+    exp_name: str,
+    overwrite: bool = False,
+    resume: bool = False,
+    wandb_enabled: bool = True,
+    data_dir: str | None = None,
+    max_epochs: int | None = None,
+    save_interval: int | None = None,
+    keep_period: int | None = None,
+):
     """Main training function for local datasets.
     
     Args:
@@ -212,6 +222,9 @@ def main(config_name: str, exp_name: str, overwrite: bool = False, resume: bool 
         resume: Whether to resume from the latest checkpoint
         wandb_enabled: Whether to enable Weights & Biases logging
         data_dir: Optional path to override the data_dir in the config (for LeRobotH1LocalDataConfig)
+        max_epochs: Optional number of training steps (epochs) to override num_train_steps
+        save_interval: Optional save interval (in steps/epochs) to override save_interval
+        keep_period: Optional keep period (in steps/epochs) to override keep_period
     """
     init_logging()
     logging.info(f"Running on: {platform.node()}")
@@ -227,6 +240,19 @@ def main(config_name: str, exp_name: str, overwrite: bool = False, resume: bool 
                 data=dataclasses.replace(config.data, data_dir=data_dir)
             )
             logging.info(f"Overriding data_dir to: {data_dir}")
+    
+    # Override training parameters if provided
+    if max_epochs is not None:
+        config = dataclasses.replace(config, num_train_steps=max_epochs)
+        logging.info(f"Overriding num_train_steps (max_epochs) to: {max_epochs}")
+    
+    if save_interval is not None:
+        config = dataclasses.replace(config, save_interval=save_interval)
+        logging.info(f"Overriding save_interval to: {save_interval}")
+    
+    if keep_period is not None:
+        config = dataclasses.replace(config, keep_period=keep_period)
+        logging.info(f"Overriding keep_period to: {keep_period}")
     
     # Override exp_name and flags
     config = dataclasses.replace(

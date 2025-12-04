@@ -1,6 +1,8 @@
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
+
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
-POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/pi05_h1_press_a_big_button/400}"
-DATA_DIR="${DATA_DIR:-press_a_big_button}"
+POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/pi05_h1_move_lid/999}"
+DATA_DIR="${DATA_DIR:-move_lid}"
 # Construct absolute path for data directory
 LEROBOT_DATA_DIR="$(pwd)/examples/h1_control_client/h1_data_lerobot/$DATA_DIR"
 

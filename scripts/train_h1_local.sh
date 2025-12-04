@@ -34,6 +34,18 @@ while [[ $# -gt 0 ]]; do
             GPU_ID="$2"
             shift 2
             ;;
+        --max-epochs)
+            MAX_EPOCHS="$2"
+            shift 2
+            ;;
+        --save-interval)
+            SAVE_INTERVAL="$2"
+            shift 2
+            ;;
+        --keep-period)
+            KEEP_PERIOD="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -46,6 +58,9 @@ TASK_NAME="${TASK_NAME:-press_a_big_button}"
 EPOCH_NUM="${EPOCH_NUM:-}"  # Empty means no epoch suffix
 CONFIG_NAME="${CONFIG_NAME:-pi05_h1_auto}"
 GPU_ID="${GPU_ID:-0}"
+MAX_EPOCHS="${MAX_EPOCHS:-}"  # Empty means use config default
+SAVE_INTERVAL="${SAVE_INTERVAL:-}"  # Empty means use config default
+KEEP_PERIOD="${KEEP_PERIOD:-}"  # Empty means use config default
 
 # Base directories
 BASE_LEROBOT_DIR="${BASE_LEROBOT_DIR:-examples/h1_control_client/h1_data_lerobot}"
@@ -86,6 +101,15 @@ fi
 if [ -n "$RESUME_FROM" ]; then
     echo "Resuming from: $RESUME_FROM"
 fi
+if [ -n "$MAX_EPOCHS" ]; then
+    echo "Max epochs: $MAX_EPOCHS"
+fi
+if [ -n "$SAVE_INTERVAL" ]; then
+    echo "Save interval: $SAVE_INTERVAL"
+fi
+if [ -n "$KEEP_PERIOD" ]; then
+    echo "Keep period: $KEEP_PERIOD"
+fi
 echo "========================================================"
 
 # Check if data directory exists
@@ -112,6 +136,17 @@ TRAIN_CMD="uv run scripts/train_auto.py \
 # Add resume flag if specified
 if [ -n "$RESUME_FROM" ]; then
     TRAIN_CMD="$TRAIN_CMD --resume-from \"$RESUME_FROM\""
+fi
+
+# Add training parameters if specified
+if [ -n "$MAX_EPOCHS" ]; then
+    TRAIN_CMD="$TRAIN_CMD --max-epochs $MAX_EPOCHS"
+fi
+if [ -n "$SAVE_INTERVAL" ]; then
+    TRAIN_CMD="$TRAIN_CMD --save-interval $SAVE_INTERVAL"
+fi
+if [ -n "$KEEP_PERIOD" ]; then
+    TRAIN_CMD="$TRAIN_CMD --keep-period $KEEP_PERIOD"
 fi
 
 echo ""

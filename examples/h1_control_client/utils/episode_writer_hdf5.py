@@ -48,7 +48,7 @@ class EpisodeWriterHDF5:
         
         # Create subdirectory for this label (or use save_dir directly if label_name is empty)
         if label_name:
-        self.save_dir = os.path.join(save_dir, label_name)
+            self.save_dir = os.path.join(save_dir, label_name)
         else:
             self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
