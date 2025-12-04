@@ -53,6 +53,10 @@ class Args:
     # Record the policy's behavior for debugging.
     record: bool = False
 
+    # Training epoch number for status reporting to robot clients.
+    # Used by integrated_training.sh to signal which epoch's policy is being served.
+    training_epoch: int = 0
+
     # Specifies how to load the policy. If not provided, the default policy for the environment will be used.
     policy: Checkpoint | Default = dataclasses.field(default_factory=Default)
 
@@ -127,6 +131,11 @@ def main(args: Args) -> None:
         port=args.port,
         metadata=policy_metadata,
     )
+    
+    # Set training status so robot clients can detect which epoch's policy is being served
+    server.set_training_status(ready=True, epoch=args.training_epoch)
+    logging.info(f"Training status: ready=True, epoch={args.training_epoch}")
+    
     server.serve_forever()
 
 

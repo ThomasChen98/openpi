@@ -218,6 +218,7 @@ start_server() {
         --policy.config="$CONFIG_NAME" \
         --policy.dir="$checkpoint_dir" \
         --policy.data-dir="$lerobot_data_dir" \
+        --training-epoch "$EPOCH" \
         > "$PROJECT_ROOT/logs/server_epoch${EPOCH}.log" 2>&1 &
     SERVER_PID=$!
     
@@ -477,15 +478,15 @@ convert_epoch_data() {
 }
 
 train_epoch() {
-    local resume_from="${1:-}"
+    local base_checkpoint="${1:-}"
     
     log_phase "Training (Epoch $EPOCH)"
     
     local train_args="--task-name $TASK_NAME --epoch $EPOCH --config-name $CONFIG_NAME --gpu $GPU_ID"
     train_args="$train_args --max-epochs $MAX_EPOCHS --save-interval $SAVE_INTERVAL --keep-period $KEEP_PERIOD"
     
-    if [ -n "$resume_from" ]; then
-        train_args="$train_args --resume-from $resume_from"
+    if [ -n "$base_checkpoint" ]; then
+        train_args="$train_args --base-checkpoint $base_checkpoint"
     fi
     
     ./scripts/train_h1_local.sh $train_args

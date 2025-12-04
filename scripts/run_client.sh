@@ -6,10 +6,10 @@ set -e
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
 # Default values
-HDF5_PATH="${HDF5_PATH:-h1_data_processed/box_action/good/episode_7.hdf5}"
+HDF5_PATH="${HDF5_PATH:-h1_data_processed/move_lid/epoch_0/raw/move_lid_0.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-Lift the lid off the bowl}" # check if this is right in case of overfitting
+PROMPT="${PROMPT:-Lift the lid off the bowl, Advantage=True}" # check if this is right in case of overfitting
 
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
 POLICY_DIR="${POLICY_DIR:-examples/h1_control_client/checkpoints/pi05_h1_auto/pi05_h1_press_button/999}"

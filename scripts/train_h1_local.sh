@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/train_h1_local.sh                                    # Use defaults
 #   ./scripts/train_h1_local.sh --task-name my_task --epoch 0      # With epoch
-#   ./scripts/train_h1_local.sh --resume-from checkpoints/...      # Resume from checkpoint
+#   ./scripts/train_h1_local.sh --base-checkpoint checkpoints/...  # Start from base checkpoint
 #
 # Environment variables can also be used:
 #   TASK_NAME="my_task" EPOCH_NUM=0 ./scripts/train_h1_local.sh
@@ -26,8 +26,8 @@ while [[ $# -gt 0 ]]; do
             CONFIG_NAME="$2"
             shift 2
             ;;
-        --resume-from)
-            RESUME_FROM="$2"
+        --base-checkpoint)
+            BASE_CHECKPOINT="$2"
             shift 2
             ;;
         --gpu)
@@ -73,13 +73,16 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 # Construct paths based on whether epoch is specified
 if [ -n "$EPOCH_NUM" ]; then
     # Epoch-based directory structure
+    # EXP_NAME must match the directory structure expected by integrated_training.sh
+    # train_auto.py saves to: checkpoints/{config.name}/{exp_name}/{step}
+    # So we use: exp_name = {task_name}/epoch_{N} to get: checkpoints/pi05_h1_auto/lift_lid/epoch_0/{step}
     DATA_DIR="${TASK_NAME}/epoch_${EPOCH_NUM}"
-    EXP_NAME="${CONFIG_NAME}_${TASK_NAME}_epoch${EPOCH_NUM}"
+    EXP_NAME="${TASK_NAME}/epoch_${EPOCH_NUM}"
     CHECKPOINT_DIR="$BASE_CHECKPOINT_DIR/${CONFIG_NAME}/${TASK_NAME}/epoch_${EPOCH_NUM}"
 else
     # Flat directory structure (backwards compatible)
     DATA_DIR="$TASK_NAME"
-    EXP_NAME="${CONFIG_NAME}_${TASK_NAME}"
+    EXP_NAME="${TASK_NAME}"
     CHECKPOINT_DIR="$BASE_CHECKPOINT_DIR/${CONFIG_NAME}/${TASK_NAME}"
 fi
 
@@ -98,8 +101,8 @@ echo "GPU: $GPU_ID"
 if [ -n "$EPOCH_NUM" ]; then
     echo "Epoch: $EPOCH_NUM"
 fi
-if [ -n "$RESUME_FROM" ]; then
-    echo "Resuming from: $RESUME_FROM"
+if [ -n "$BASE_CHECKPOINT" ]; then
+    echo "Base checkpoint: $BASE_CHECKPOINT"
 fi
 if [ -n "$MAX_EPOCHS" ]; then
     echo "Max epochs: $MAX_EPOCHS"
@@ -126,16 +129,39 @@ if [ ! -f "$LEROBOT_DATA_DIR/norm_stats.json" ]; then
     exit 1
 fi
 
+# Determine if we should resume or start fresh
+RESUME_FLAG=""
+if [ -d "$CHECKPOINT_DIR" ] && [ "$(ls -A $CHECKPOINT_DIR 2>/dev/null)" ]; then
+    # Checkpoint directory exists and has files - resume training
+    echo "Found existing checkpoint, will resume training..."
+    RESUME_FLAG="--resume"
+elif [ -n "$BASE_CHECKPOINT" ]; then
+    # No existing checkpoint but base checkpoint provided - copy it
+    if [ -d "$BASE_CHECKPOINT" ]; then
+        echo "Copying base checkpoint to initialize training..."
+        mkdir -p "$CHECKPOINT_DIR"
+        cp -r "$BASE_CHECKPOINT"/* "$CHECKPOINT_DIR/"
+        RESUME_FLAG="--resume"
+    else
+        echo "WARNING: Base checkpoint not found: $BASE_CHECKPOINT"
+        echo "Starting training from scratch..."
+    fi
+else
+    echo "Starting training from scratch..."
+fi
+
 # Build training command
 TRAIN_CMD="uv run scripts/train_auto.py \
     --config-name \"$CONFIG_NAME\" \
     --exp-name \"$EXP_NAME\" \
-    --overwrite \
     --data-dir \"$LEROBOT_DATA_DIR\""
 
-# Add resume flag if specified
-if [ -n "$RESUME_FROM" ]; then
-    TRAIN_CMD="$TRAIN_CMD --resume-from \"$RESUME_FROM\""
+# Add resume flag if resuming
+if [ -n "$RESUME_FLAG" ]; then
+    TRAIN_CMD="$TRAIN_CMD $RESUME_FLAG"
+else
+    # Only use --overwrite when not resuming
+    TRAIN_CMD="$TRAIN_CMD --overwrite"
 fi
 
 # Add training parameters if specified

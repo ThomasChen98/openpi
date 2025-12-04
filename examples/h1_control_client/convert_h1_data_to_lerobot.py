@@ -44,8 +44,32 @@ def resize_image(image: np.ndarray, target_height: int = 224, target_width: int 
     return cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
 
+def decompress_jpeg_images(compressed_data) -> np.ndarray:
+    """Decompress JPEG-compressed images from HDF5 variable-length arrays.
+    
+    Args:
+        compressed_data: Array of variable-length uint8 arrays (JPEG bytes)
+        
+    Returns:
+        numpy array of shape (num_frames, height, width, 3)
+    """
+    from PIL import Image
+    import io
+    
+    frames = []
+    for jpeg_bytes in compressed_data:
+        # Decompress JPEG
+        img = Image.open(io.BytesIO(bytes(jpeg_bytes)))
+        frames.append(np.array(img))
+    
+    return np.array(frames)
+
+
 def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict:
     """Load a single episode from an HDF5 file.
+    
+    Handles both old format (raw numpy arrays with ego_cam) and new format
+    (JPEG-compressed with cam_head from h1_training_client).
     
     Args:
         hdf5_path: Path to the HDF5 file
@@ -62,25 +86,49 @@ def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict
     """
     with h5py.File(hdf5_path, "r") as f:
         # Extract data from HDF5
-        actions = f["action"][:]  # Shape: (num_steps, 26)
-        qpos = f["observations"]["qpos"][:]  # Shape: (num_steps, 26)
+        actions = f["action"][:]  # Shape: (num_steps, 14 or 26)
+        qpos = f["observations"]["qpos"][:]  # Shape: (num_steps, 14 or 26)
         
-        # Load ego camera (required)
-        ego_cam = f["observations"]["images"]["ego_cam"][:]  # Shape: (num_steps, height, width, 3)
+        images_group = f["observations"]["images"]
+        
+        # Determine which camera names are present (cam_head or ego_cam)
+        if "cam_head" in images_group:
+            # New format from h1_training_client (JPEG compressed)
+            head_cam_data = images_group["cam_head"][:]
+            # Check if data is JPEG compressed (variable-length uint8) or raw
+            if head_cam_data.dtype == object or len(head_cam_data.shape) == 1:
+                ego_cam = decompress_jpeg_images(head_cam_data)
+            else:
+                ego_cam = head_cam_data
+        elif "ego_cam" in images_group:
+            # Old format (raw numpy arrays)
+            ego_cam = images_group["ego_cam"][:]
+        else:
+            raise KeyError(f"No head camera found in {hdf5_path}. Expected 'cam_head' or 'ego_cam'")
         
         # Try to load wrist cameras, use None if not present
         cam_left_wrist = None
         cam_right_wrist = None
         
-        if "cam_left_wrist" in f["observations"]["images"]:
-            cam_left_wrist = f["observations"]["images"]["cam_left_wrist"][:]
+        if "cam_left_wrist" in images_group:
+            left_data = images_group["cam_left_wrist"][:]
+            if left_data.dtype == object or len(left_data.shape) == 1:
+                cam_left_wrist = decompress_jpeg_images(left_data)
+            else:
+                cam_left_wrist = left_data
         
-        if "cam_right_wrist" in f["observations"]["images"]:
-            cam_right_wrist = f["observations"]["images"]["cam_right_wrist"][:]
+        if "cam_right_wrist" in images_group:
+            right_data = images_group["cam_right_wrist"][:]
+            if right_data.dtype == object or len(right_data.shape) == 1:
+                cam_right_wrist = decompress_jpeg_images(right_data)
+            else:
+                cam_right_wrist = right_data
         
         # Use only first 14 dimensions for state and actions (as per h1_policy.py)
-        actions = actions[:, :14]
-        qpos = qpos[:, :14]
+        if actions.shape[1] > 14:
+            actions = actions[:, :14]
+        if qpos.shape[1] > 14:
+            qpos = qpos[:, :14]
         
         # Read advantage label from metadata if requested
         advantage = None
