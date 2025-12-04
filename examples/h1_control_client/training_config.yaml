@@ -29,7 +29,9 @@ policy:
 # TRAINING CONFIGURATION - How to train
 # =============================================================================
 training:
-  max_epochs: 100                               # Maximum training epochs
+  max_epochs: 400                               # Maximum training epochs
+  save_interval: 200                            # Save interval (in epochs)
+  keep_period: 100                              # Keep period (in epochs)
   num_repeats: 1                                # Times to repeat data during training
   labeling_mode: "human_labeling"               # none, human_labeling, reward_labeling
   gpu_id: 0                                     # Which GPU to use
@@ -62,7 +64,7 @@ data:
   # Remote sync settings (robot -> P6000)
   rsync:
     enabled: true
-    target: "yuxin@p6000.local:/home/yuxin/Projects/openpi/data/training_epochs"
+    target: "P6000:/home/yuxin/Projects/openpi/data/training_epochs"
     options: "-avz --progress"
     ssh_key: "~/.ssh/id_rsa"
 
@@ -80,3 +82,6 @@ pipeline:
   start_phase: "data_collection"                # data_collection or training
   start_epoch: 0                                # Starting epoch number
   auto_sync: true                               # Auto-sync after session ends
+
+
+

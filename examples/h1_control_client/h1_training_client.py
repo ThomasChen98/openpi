@@ -549,22 +549,17 @@ class H1TrainingClient:
             right_image = dummy_image
         
         if for_policy:
-            # Format matching h1_remote_client for policy inference
-            # OpenPi model expects "image" key with camera names
+            # Format matching h1_policy_viz_client for policy inference
+            # H1Inputs transform expects "images" (plural) key with camera names
             task_config = self.config.get('task', {})
             task_description = task_config.get('description',
                 self.config.get('training', {}).get('default_label', 'manipulation task'))
             
             return {
-                "image": {
+                "images": {
                     "cam_head": head_image,
                     "cam_left_wrist": left_image,
                     "cam_right_wrist": right_image,
-                },
-                "image_mask": {
-                    "cam_head": True,
-                    "cam_left_wrist": True,
-                    "cam_right_wrist": True,
                 },
                 "state": current_q,
                 "prompt": f"{task_description}, Advantage=True",
@@ -826,9 +821,9 @@ class H1TrainingClient:
                 try:
                     # Query policy for action chunk (50 actions)
                     chunk_count += 1
-                    logger.info(f"🔄 Querying policy for chunk {chunk_count}...")
+                    logger.info(f" Querying policy for chunk {chunk_count}...")
                     action_chunk = self.query_policy()
-                    
+                
                     # Execute the full action chunk at 50Hz
                     # This will check for 's' key between each action
                     actions_executed = self.execute_action_chunk(action_chunk)
@@ -838,8 +833,8 @@ class H1TrainingClient:
                     if actions_executed < len(action_chunk):
                         stopped_by_user = True
                         logger.info(f"User stopped execution after {total_actions} total actions")
-                        self.state = TrainingState.LABELING
-                        break
+                    self.state = TrainingState.LABELING
+                    break
                     
                 except Exception as e:
                     logger.error(f"Policy execution error: {e}")
@@ -870,17 +865,17 @@ class H1TrainingClient:
         # Stop adding frames but don't save yet
         if self.recording_active:
             self.recording_active = False
-            logger.info(f"⏹️ Stopped recording: {frame_count} frames captured")
+            logger.info(f" Stopped recording: {frame_count} frames captured")
         
         with self.keyboard:
             key = self.keyboard.wait_for_key({'g', 'b'}, "Label this episode (g/b): ")
             
             if key == 'g':
                 self.current_advantage_label = True
-                logger.info("✅ Episode labeled as GOOD (Advantage=True)")
+                logger.info(" Episode labeled as GOOD (Advantage=True)")
             else:
                 self.current_advantage_label = False
-                logger.info("❌ Episode labeled as BAD (Advantage=False)")
+                logger.info(" Episode labeled as BAD (Advantage=False)")
             
             # Set the advantage label on the episode writer
             if self.episode_writer:
