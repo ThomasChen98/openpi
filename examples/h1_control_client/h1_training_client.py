@@ -459,7 +459,7 @@ class H1TrainingClient:
         )
         self.episode_writer.start_recording()
         self.recording_active = True
-        logger.info(f"📹 Started recording: {self.episode_writer.filepath}")
+        logger.info(f"Started recording: {self.episode_writer.filepath}")
         logger.info(f"   Task: {task_name}")
         logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
     
@@ -758,7 +758,7 @@ class H1TrainingClient:
                     self.epoch_num = current_epoch
                     self.episode_num = 0  # Reset episode count for new epoch
                     
-                    logger.info(f"🆕 New weights available! Starting EPOCH {self.epoch_num}")
+                    logger.info(f"New weights available! Starting EPOCH {self.epoch_num}")
                     self.state = TrainingState.READY
                     return
             
@@ -822,7 +822,7 @@ class H1TrainingClient:
                 try:
                     # Query policy for action chunk (50 actions)
                     chunk_count += 1
-                    logger.info(f"🔄 Querying policy for chunk {chunk_count}...")
+                    logger.info(f"Querying policy for chunk {chunk_count}...")
                     action_chunk = self.query_policy()
                 
                     # Execute the full action chunk at 50Hz
