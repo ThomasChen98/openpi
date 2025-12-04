@@ -11,6 +11,10 @@ All data is continuously recorded at 50Hz with phase labels.
 State Machine:
     WAITING -> READY -> EXECUTING -> LABELING -> DAMPING -> SAVING -> DECIDING -> (loop or SYNCING)
 
+Key concepts:
+    - EPOCH: A training cycle with a specific policy checkpoint. Multiple episodes per epoch.
+    - EPISODE: A single rollout/trajectory recorded during EXECUTING state.
+
 Usage:
     python h1_training_client.py --config training_config.yaml
 """
@@ -41,6 +45,14 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# OpenPi client import for image_tools
+try:
+    from openpi_client import image_tools
+    IMAGE_TOOLS_AVAILABLE = True
+except ImportError:
+    logger.warning("openpi_client.image_tools not available, using basic image conversion")
+    IMAGE_TOOLS_AVAILABLE = False
 
 # Import camera utilities from xr_teleoperate
 try:
@@ -158,6 +170,8 @@ class H1TrainingClient:
         # State tracking
         self.state = TrainingState.WAITING
         self.epoch_num = 0
+        self.episode_num = 0  # Episode count WITHIN current epoch
+        self.total_episodes = 0  # Total episodes across all epochs
         self.running = True
         self.last_policy_epoch = -1  # Track which policy epoch we've seen
         
@@ -181,6 +195,10 @@ class H1TrainingClient:
         self.recording_active = False
         self.current_phase = "policy"
         self.current_advantage_label = None  # True = good, False = bad
+        
+        # Action chunk execution state
+        self.current_action_chunk = None  # Current action chunk from policy
+        self.action_chunk_idx = 0  # Index into current action chunk
         
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -413,7 +431,7 @@ class H1TrainingClient:
         return {"ready": False, "epoch": -1}
     
     def start_recording(self, label_name: str = None):
-        """Start recording a new episode"""
+        """Start recording a new episode within the current epoch."""
         from utils.episode_writer_hdf5 import EpisodeWriterHDF5
         
         # Get recording settings
@@ -441,8 +459,9 @@ class H1TrainingClient:
         )
         self.episode_writer.start_recording()
         self.recording_active = True
-        logger.info(f"Started recording: {self.episode_writer.filepath}")
-        logger.info(f"  Task: {task_name}, Epoch: {self.epoch_num}")
+        logger.info(f"📹 Started recording: {self.episode_writer.filepath}")
+        logger.info(f"   Task: {task_name}")
+        logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
     
     def stop_recording(self):
         """Stop and save the current recording (emergency/cleanup use)"""
@@ -464,65 +483,102 @@ class H1TrainingClient:
             
             self.recording_active = False
     
-    def get_observation(self) -> dict:
-        """Get current observation from robot with real camera feeds"""
+    def get_observation(self, for_policy: bool = False) -> dict:
+        """
+        Get current observation from robot with real camera feeds.
+        
+        Args:
+            for_policy: If True, format observation for policy inference (matching h1_remote_client).
+                       If False, format for recording (simpler format).
+        
+        Returns:
+            Observation dict with state and images
+        """
         # Get current joint positions
         current_q = self.robot.get_current_dual_arm_q()
         
         # Dummy image for fallback
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
         
-        images = {}
-        
-        # Head camera (from robot via ZMQ)
+        # Get head camera (from robot via ZMQ)
         if self.head_img_array is not None:
             try:
                 head_frame = self.head_img_array.copy()
                 if np.any(head_frame != 0):
                     head_image = cv2.resize(head_frame, (224, 224))
                     head_image = cv2.cvtColor(head_image, cv2.COLOR_BGR2RGB)
-                    images["ego_cam"] = head_image
+                    if IMAGE_TOOLS_AVAILABLE:
+                        head_image = image_tools.convert_to_uint8(head_image)
                 else:
-                    images["ego_cam"] = dummy_image
+                    head_image = dummy_image
             except Exception:
-                images["ego_cam"] = dummy_image
+                head_image = dummy_image
         else:
-            images["ego_cam"] = dummy_image
+            head_image = dummy_image
         
-        # Left wrist camera
+        # Get left wrist camera
         if self.left_wrist_camera is not None:
             try:
                 left_frame = self.left_wrist_camera.get_frame()
                 if left_frame is not None:
                     left_image = cv2.resize(left_frame, (224, 224))
                     left_image = cv2.cvtColor(left_image, cv2.COLOR_BGR2RGB)
-                    images["cam_left_wrist"] = left_image
+                    if IMAGE_TOOLS_AVAILABLE:
+                        left_image = image_tools.convert_to_uint8(left_image)
                 else:
-                    images["cam_left_wrist"] = dummy_image
+                    left_image = dummy_image
             except Exception:
-                images["cam_left_wrist"] = dummy_image
+                left_image = dummy_image
         else:
-            images["cam_left_wrist"] = dummy_image
+            left_image = dummy_image
         
-        # Right wrist camera
+        # Get right wrist camera
         if self.right_wrist_camera is not None:
             try:
                 right_frame = self.right_wrist_camera.get_frame()
                 if right_frame is not None:
                     right_image = cv2.resize(right_frame, (224, 224))
                     right_image = cv2.cvtColor(right_image, cv2.COLOR_BGR2RGB)
-                    images["cam_right_wrist"] = right_image
+                    if IMAGE_TOOLS_AVAILABLE:
+                        right_image = image_tools.convert_to_uint8(right_image)
                 else:
-                    images["cam_right_wrist"] = dummy_image
+                    right_image = dummy_image
             except Exception:
-                images["cam_right_wrist"] = dummy_image
+                right_image = dummy_image
         else:
-            images["cam_right_wrist"] = dummy_image
+            right_image = dummy_image
         
-        return {
-            "state": current_q,
-            "images": images,
-        }
+        if for_policy:
+            # Format matching h1_remote_client for policy inference
+            # OpenPi model expects "image" key with camera names
+            task_config = self.config.get('task', {})
+            task_description = task_config.get('description',
+                self.config.get('training', {}).get('default_label', 'manipulation task'))
+            
+            return {
+                "image": {
+                    "cam_head": head_image,
+                    "cam_left_wrist": left_image,
+                    "cam_right_wrist": right_image,
+                },
+                "image_mask": {
+                    "cam_head": True,
+                    "cam_left_wrist": True,
+                    "cam_right_wrist": True,
+                },
+                "state": current_q,
+                "prompt": f"{task_description}, Advantage=True",
+            }
+        else:
+            # Format for recording (HDF5) - simpler structure
+            return {
+                "state": current_q,
+                "images": {
+                    "cam_head": head_image,
+                    "cam_left_wrist": left_image,
+                    "cam_right_wrist": right_image,
+                },
+            }
     
     def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
         """Compute gravity compensation torques"""
@@ -541,32 +597,90 @@ class H1TrainingClient:
         
         return gravity_torques
     
-    def execute_policy_step(self) -> np.ndarray:
-        """Execute one policy inference step and return the action"""
-        obs = self.get_observation()
+    def query_policy(self) -> np.ndarray:
+        """
+        Query the policy server for an action chunk.
         
-        # Get task description (supports both old and new config structure)
-        task_config = self.config.get('task', {})
-        task_description = task_config.get('description',
-            self.config.get('training', {}).get('default_label', 'manipulation task'))
+        Returns:
+            Action chunk of shape (action_horizon, action_dim), typically (50, 14)
+        """
+        # Get observation formatted for policy inference
+        obs = self.get_observation(for_policy=True)
         
-        # Remap image keys to match policy expectations
-        # OpenPi model expects (cam_head, cam_left_wrist, cam_right_wrist)
-        raw_images = obs["images"]
-        obs["images"] = {
-            "cam_head": raw_images.get("ego_cam", raw_images.get("cam_head")),
-            "cam_left_wrist": raw_images["cam_left_wrist"],
-            "cam_right_wrist": raw_images["cam_right_wrist"],
-        }
-        
-        # Add prompt with Advantage=True to sample from good distribution
-        obs["prompt"] = f"{task_description}, Advantage=True"
-        
-        # Get action from policy
+        # Query policy for action chunk
         response = self.policy_client.infer(obs)
-        action = response["actions"][0]  # Take first action from chunk
+        action_chunk = response["actions"]  # Shape: (50, action_dim)
         
-        return action
+        logger.info(f"Received action chunk: shape={action_chunk.shape}")
+        logger.info(f"   Range: [{action_chunk.min():.3f}, {action_chunk.max():.3f}]")
+        
+        return action_chunk
+    
+    def execute_action_chunk(self, action_chunk: np.ndarray) -> int:
+        """
+        Execute a full action chunk on the robot at 50Hz, recording each timestep.
+        
+        This matches h1_remote_client's execute_action_chunk behavior:
+        - Executes all actions in the chunk at 50Hz
+        - Records state and images for each timestep
+        - Checks for stop signal between actions
+        
+        Args:
+            action_chunk: Array of shape (N, 14) with arm joint actions
+            
+        Returns:
+            Number of actions executed (may be less than N if stopped early)
+        """
+        control_period = 1.0 / 50  # 50Hz
+        actions_executed = 0
+        
+        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz...")
+        
+        for i, action in enumerate(action_chunk):
+            loop_start = time.time()
+            
+            # Check for stop key (non-blocking)
+            key = self.keyboard.get_key(timeout=0.001)
+            if key and key.lower() == 's':
+                logger.info(f"Stop signal received at action {i}/{len(action_chunk)}")
+                return actions_executed
+            
+            # Ensure action is correct dimension
+            arm_joints = action[:14] if len(action) > 14 else action
+            
+            # Compute gravity compensation
+            gravity_torques = self.compute_gravity_compensation(arm_joints)
+            
+            # Send command to robot
+            self.robot.ctrl_dual_arm(
+                q_target=arm_joints,
+                tauff_target=gravity_torques
+            )
+            
+            # Record timestep if recording is active
+            if self.recording_active and self.episode_writer:
+                current_q = self.robot.get_current_dual_arm_q()
+                obs = self.get_observation(for_policy=False)
+                self.episode_writer.add_timestep(
+                    qpos=current_q,
+                    action=arm_joints,
+                    images=obs.get('images'),
+                    phase="policy"
+                )
+            
+            actions_executed += 1
+            
+            # Log progress every 10 actions
+            if i % 10 == 0:
+                logger.info(f"   Step {i}/{len(action_chunk)}: joints = [{arm_joints[0]:.2f}, {arm_joints[1]:.2f}, ...]")
+            
+            # Maintain 50Hz control rate
+            elapsed = time.time() - loop_start
+            sleep_time = max(0, control_period - elapsed)
+            time.sleep(sleep_time)
+        
+        logger.info(f"Executed {actions_executed} actions")
+        return actions_executed
     
     def rsync_to_remote(self) -> bool:
         """
@@ -620,9 +734,15 @@ class H1TrainingClient:
             return False
     
     def run_waiting_state(self):
-        """WAITING state: Poll for new policy weights"""
+        """
+        WAITING state: Poll for new policy weights.
+        
+        When new weights are detected, we start a NEW EPOCH (epoch_num increments).
+        This is the ONLY place where epoch_num should change.
+        """
         print("\n" + "=" * 60)
         print("[WAITING] Polling policy server for new weights...")
+        print(f"  Current: epoch {self.epoch_num}, {self.episode_num} episodes collected")
         print("=" * 60)
         
         poll_interval = self.config.get('policy_server', {}).get('poll_interval_sec', 5)
@@ -634,7 +754,12 @@ class H1TrainingClient:
                 current_epoch = status.get('epoch', 0)
                 if current_epoch > self.last_policy_epoch:
                     self.last_policy_epoch = current_epoch
-                    logger.info(f"New weights available! Policy epoch: {current_epoch}")
+                    
+                    # NEW EPOCH - increment epoch_num and reset episode counter
+                    self.epoch_num += 1
+                    self.episode_num = 0  # Reset episode count for new epoch
+                    
+                    logger.info(f"🆕 New weights available! Starting EPOCH {self.epoch_num}")
                     self.state = TrainingState.READY
                     return
             
@@ -642,102 +767,117 @@ class H1TrainingClient:
             time.sleep(poll_interval)
     
     def run_ready_state(self):
-        """READY state: Wait for user confirmation to start epoch"""
+        """
+        READY state: Wait for user confirmation to start a new EPISODE.
+        
+        Multiple episodes can be collected within the same epoch.
+        Episode count increments here; epoch count only changes in WAITING state.
+        """
         print("\n" + "=" * 60)
-        print(f"[READY] New weights available!")
-        print(f"  Press 'y' to start epoch {self.epoch_num + 1}, 'n' to skip")
+        print(f"[READY] Policy ready (Epoch {self.epoch_num})")
+        print(f"  Episodes collected this epoch: {self.episode_num}")
+        print(f"  Press 'y' to start episode {self.episode_num + 1}")
+        print(f"  Press 'n' to finish this epoch and wait for new training")
         print("=" * 60)
         
         with self.keyboard:
             key = self.keyboard.wait_for_key({'y', 'n'}, "Your choice: ")
             
             if key == 'y':
-                self.epoch_num += 1
+                # Start a new EPISODE within the current epoch
+                self.episode_num += 1
+                self.total_episodes += 1
                 self.start_recording()
                 self.state = TrainingState.EXECUTING
             else:
-                logger.info("Skipped this epoch")
-                self.state = TrainingState.WAITING
+                # User wants to finish this epoch - go to SYNCING
+                logger.info(f"Finishing epoch {self.epoch_num} with {self.episode_num} episodes")
+                self.state = TrainingState.SYNCING
     
     def run_executing_state(self):
-        """EXECUTING state: Run policy inference with recording"""
+        """
+        EXECUTING state: Run policy inference with recording.
+        
+        This properly executes action chunks like h1_remote_client:
+        1. Query policy ONCE to get action chunk (50 actions)
+        2. Execute ALL 50 actions at 50Hz
+        3. Repeat until user presses 's' to stop
+        
+        This ensures smooth robot motion and proper frame count.
+        """
         print("\n" + "=" * 60)
-        print(f"[EXECUTING] Running policy (epoch {self.epoch_num})")
-        print("  Press 's' to stop execution and enter damping mode")
+        print(f"[EXECUTING] Running policy (epoch {self.epoch_num}, episode {self.episode_num})")
+        print("  Press 's' to stop execution and enter labeling mode")
+        print("  Each policy query returns 50 actions executed at 50Hz (~1 second)")
         print("=" * 60)
         
         self.current_phase = "policy"
         self.robot.speed_instant_max()
         
-        control_rate = 50  # Hz
-        control_period = 1.0 / control_rate
+        chunk_count = 0
+        total_actions = 0
+        stopped_by_user = False
         
         with self.keyboard:
             while self.running and self.state == TrainingState.EXECUTING:
-                loop_start = time.time()
-                
-                # Check for stop key
-                key = self.keyboard.get_key(timeout=0.001)
-                if key and key.lower() == 's':
-                    logger.info("Stop signal received")
-                    self.state = TrainingState.LABELING
-                    break
-                
-                # Execute policy step
                 try:
-                    action = self.execute_policy_step()
+                    # Query policy for action chunk (50 actions)
+                    chunk_count += 1
+                    logger.info(f"🔄 Querying policy for chunk {chunk_count}...")
+                    action_chunk = self.query_policy()
                     
-                    # Compute gravity compensation
-                    gravity_torques = self.compute_gravity_compensation(action)
+                    # Execute the full action chunk at 50Hz
+                    # This will check for 's' key between each action
+                    actions_executed = self.execute_action_chunk(action_chunk)
+                    total_actions += actions_executed
                     
-                    # Send command to robot
-                    self.robot.ctrl_dual_arm(
-                        q_target=action,
-                        tauff_target=gravity_torques
-                    )
-                    
-                    # Record timestep
-                    current_q = self.robot.get_current_dual_arm_q()
-                    obs = self.get_observation()
-                    self.episode_writer.add_timestep(
-                        qpos=current_q,
-                        action=action,
-                        images=obs.get('images'),
-                        phase="policy"
-                    )
+                    # If we didn't execute all actions, user pressed 's'
+                    if actions_executed < len(action_chunk):
+                        stopped_by_user = True
+                        logger.info(f"User stopped execution after {total_actions} total actions")
+                        self.state = TrainingState.LABELING
+                        break
                     
                 except Exception as e:
                     logger.error(f"Policy execution error: {e}")
-                
-                # Maintain control rate
-                elapsed = time.time() - loop_start
-                sleep_time = max(0, control_period - elapsed)
-                time.sleep(sleep_time)
+                    import traceback
+                    traceback.print_exc()
+                    # On error, transition to labeling to let user decide
+                    self.state = TrainingState.LABELING
+                    break
+        
+        logger.info(f"Execution complete: {chunk_count} chunks, {total_actions} total actions")
+        if self.recording_active and self.episode_writer:
+            logger.info(f"Recorded {self.episode_writer.get_current_length()} frames")
     
     def run_labeling_state(self):
         """LABELING state: Stop recording and prompt for advantage label"""
+        frame_count = 0
+        if self.recording_active and self.episode_writer:
+            frame_count = self.episode_writer.get_current_length()
+        
         print("\n" + "=" * 60)
-        print("[LABELING] Policy execution complete")
+        print(f"[LABELING] Episode {self.episode_num} execution complete")
+        print(f"  Recorded {frame_count} frames ({frame_count/50:.1f} seconds)")
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
         print("=" * 60)
         
-        # Stop recording immediately - we only record during policy execution
-        if self.recording_active and self.episode_writer:
-            # Don't save yet - just stop adding frames
+        # Stop adding frames but don't save yet
+        if self.recording_active:
             self.recording_active = False
-            logger.info(f"Stopped recording: {self.episode_writer.get_current_length()} frames captured")
+            logger.info(f"⏹️ Stopped recording: {frame_count} frames captured")
         
         with self.keyboard:
             key = self.keyboard.wait_for_key({'g', 'b'}, "Label this episode (g/b): ")
             
             if key == 'g':
                 self.current_advantage_label = True
-                logger.info("Episode labeled as GOOD (Advantage=True)")
+                logger.info("✅ Episode labeled as GOOD (Advantage=True)")
             else:
                 self.current_advantage_label = False
-                logger.info("Episode labeled as BAD (Advantage=False)")
+                logger.info("❌ Episode labeled as BAD (Advantage=False)")
             
             # Set the advantage label on the episode writer
             if self.episode_writer:
@@ -791,7 +931,7 @@ class H1TrainingClient:
         """SAVING state: Save the episode with advantage label"""
         advantage_str = "GOOD (Advantage=True)" if self.current_advantage_label else "BAD (Advantage=False)"
         print("\n" + "=" * 60)
-        print(f"[SAVING] Saving episode data (Label: {advantage_str})...")
+        print(f"[SAVING] Saving episode {self.episode_num} (Label: {advantage_str})...")
         print("=" * 60)
         
         # The advantage label was already set in LABELING state
@@ -803,29 +943,38 @@ class H1TrainingClient:
             self.episode_writer.stop_recording()
             
             logger.info(f"Saved episode: {filepath}")
-            logger.info(f"  Total timesteps: {length}")
-            logger.info(f"  Advantage: {advantage_str}")
+            logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
+            logger.info(f"   Total frames: {length} (at 50Hz = {length/50:.1f}s)")
+            logger.info(f"   Advantage: {advantage_str}")
         
         # Reset for next episode
         self.current_advantage_label = None
         self.state = TrainingState.DECIDING
     
     def run_deciding_state(self):
-        """DECIDING state: User decides to continue or end"""
+        """
+        DECIDING state: User decides to continue collecting more episodes or end.
+        
+        Options:
+        - 'y': Collect another episode within the SAME epoch
+        - 'n': Finish this epoch, sync data, and wait for new training
+        """
         print("\n" + "=" * 60)
-        print("[DECIDING] What's next?")
-        print("  Press 'y' to start another epoch")
-        print("  Press 'n' to finish training session")
+        print(f"[DECIDING] Epoch {self.epoch_num} - Episode {self.episode_num} complete")
+        print(f"  Total episodes this epoch: {self.episode_num}")
+        print("  Press 'y' to collect another episode (same epoch)")
+        print("  Press 'n' to finish epoch and sync data")
         print("=" * 60)
         
         with self.keyboard:
             key = self.keyboard.wait_for_key({'y', 'n'}, "Your choice: ")
             
             if key == 'y':
+                # Continue collecting episodes in the same epoch
                 self.state = TrainingState.READY
             else:
-                # Confirm end
-                print("\nAre you sure you want to end this training session?")
+                # Confirm end of epoch
+                print(f"\nFinish epoch {self.epoch_num} with {self.episode_num} episodes?")
                 confirm = self.keyboard.wait_for_key({'y', 'n'}, "Confirm (y/n): ")
                 
                 if confirm == 'y':
@@ -834,13 +983,19 @@ class H1TrainingClient:
                     self.state = TrainingState.READY
     
     def run_syncing_state(self):
-        """SYNCING state: Sync data to remote server"""
+        """
+        SYNCING state: Sync data to remote server.
+        
+        After syncing, go back to WAITING to collect more data with new training.
+        User can press Ctrl+C if they want to end the session entirely.
+        """
         print("\n" + "=" * 60)
-        print("[SYNCING] Uploading data to remote server...")
+        print(f"[SYNCING] Epoch {self.epoch_num} complete with {self.episode_num} episodes")
+        print("  Uploading data to remote server...")
         print("=" * 60)
         
-        training_config = self.config.get('training', {})
-        if training_config.get('auto_sync', True):
+        rsync_config = self.config.get('rsync', {})
+        if rsync_config.get('enabled', False):
             success = self.rsync_to_remote()
             if success:
                 logger.info("Data synced successfully")
@@ -849,10 +1004,29 @@ class H1TrainingClient:
         else:
             logger.info("Auto-sync disabled, skipping...")
         
-        self.state = TrainingState.FINISHED
+        # Ask user if they want to continue to next epoch or finish
+        print("\n" + "=" * 60)
+        print("  Data sync complete!")
+        print("  Press 'y' to wait for next training epoch")
+        print("  Press 'n' to end training session")
+        print("=" * 60)
+        
+        with self.keyboard:
+            key = self.keyboard.wait_for_key({'y', 'n'}, "Your choice: ")
+            
+            if key == 'y':
+                logger.info("Returning to WAITING for next epoch...")
+                self.state = TrainingState.WAITING
+            else:
+                self.state = TrainingState.FINISHED
     
-    def run(self):
-        """Main training loop"""
+    def run(self, start_immediately: bool = False):
+        """
+        Main training loop.
+        
+        Args:
+            start_immediately: If True, skip WAITING and go directly to READY
+        """
         print("\n" + "=" * 70)
         print("  H1-2 Training Pipeline Client")
         print("=" * 70)
@@ -882,6 +1056,12 @@ class H1TrainingClient:
         print("    'n' - No/decline")
         print("    Ctrl+C - Emergency exit")
         print("=" * 70)
+        
+        # If start_immediately, skip WAITING and go to READY
+        if start_immediately:
+            logger.info("--start-immediately: Skipping WAITING state")
+            self.epoch_num = 1  # Start at epoch 1
+            self.state = TrainingState.READY
         
         # State machine loop
         try:
@@ -914,6 +1094,7 @@ class H1TrainingClient:
         print("\n" + "=" * 70)
         print("  Training session complete!")
         print(f"  Completed {self.epoch_num} epoch(s)")
+        print(f"  Total episodes collected: {self.total_episodes}")
         print("=" * 70)
         
         return 0
@@ -978,6 +1159,11 @@ def main():
         default="training_config.yaml",
         help="Path to configuration file"
     )
+    parser.add_argument(
+        "--start-immediately",
+        action="store_true",
+        help="Skip WAITING state and start collecting data immediately"
+    )
     
     args = parser.parse_args()
     
@@ -987,7 +1173,7 @@ def main():
         return 1
     
     client = H1TrainingClient(args.config)
-    return client.run()
+    return client.run(start_immediately=args.start_immediately)
 
 
 if __name__ == "__main__":
