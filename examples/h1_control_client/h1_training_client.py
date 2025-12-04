@@ -180,6 +180,7 @@ class H1TrainingClient:
         # Recording state
         self.recording_active = False
         self.current_phase = "policy"
+        self.current_advantage_label = None  # True = good, False = bad
         
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -415,39 +416,53 @@ class H1TrainingClient:
         """Start recording a new episode"""
         from utils.episode_writer_hdf5 import EpisodeWriterHDF5
         
+        # Get recording settings
         recording_config = self.config.get('recording', {})
-        save_dir = recording_config.get('save_dir', './data/training_epochs')
         fps = recording_config.get('fps', 50)
         
-        if label_name is None:
-            training_config = self.config.get('training', {})
-            label_name = training_config.get('default_label', 'training_session')
+        # Get data save directory (supports both old and new config structure)
+        data_config = self.config.get('data', {})
+        base_save_dir = data_config.get('save_dir', 
+            recording_config.get('save_dir', './data/training_epochs'))
         
-        # Add epoch number to label
-        label_with_epoch = f"{label_name}_epoch{self.epoch_num}"
+        # Get task name (supports both old and new config structure)
+        task_config = self.config.get('task', {})
+        task_name = task_config.get('name',
+            self.config.get('training', {}).get('task_name', 'training_session'))
+        
+        # Use epoch-based directory structure: {base_dir}/{task_name}/epoch_{N}/raw/
+        # This matches the structure expected by integrated_training.sh
+        epoch_dir = os.path.join(base_save_dir, task_name, f"epoch_{self.epoch_num}", "raw")
         
         self.episode_writer = EpisodeWriterHDF5(
-            save_dir=save_dir,
-            label_name=label_with_epoch,
+            save_dir=epoch_dir,
+            label_name="",  # Episodes saved directly in epoch_dir
             fps=fps
         )
         self.episode_writer.start_recording()
         self.recording_active = True
         logger.info(f"Started recording: {self.episode_writer.filepath}")
+        logger.info(f"  Task: {task_name}, Epoch: {self.epoch_num}")
     
     def stop_recording(self):
-        """Stop and save the current recording"""
-        if self.episode_writer and self.recording_active:
-            filepath = self.episode_writer.filepath
-            length = self.episode_writer.get_current_length()
-            phase_counts = self.episode_writer.get_phase_counts()
+        """Stop and save the current recording (emergency/cleanup use)"""
+        if self.episode_writer:
+            # Check if we have data to save
+            if self.episode_writer.get_current_length() > 0:
+                filepath = self.episode_writer.filepath
+                length = self.episode_writer.get_current_length()
+                
+                # If no advantage label was set, default to False (interrupted episodes are "bad")
+                if self.episode_writer.get_advantage_label() is None:
+                    self.episode_writer.set_advantage_label(False)
+                    logger.warning("No advantage label set, defaulting to False (interrupted)")
+                
+                self.episode_writer.stop_recording()
+                
+                logger.info(f"Saved episode: {filepath}")
+                logger.info(f"  Total timesteps: {length}")
             
-            self.episode_writer.stop_recording()
             self.recording_active = False
-            
-            logger.info(f"Saved episode: {filepath}")
-            logger.info(f"  Total timesteps: {length}")
-            logger.info(f"  Policy frames: {phase_counts['policy']}, Human frames: {phase_counts['human']}")
     
     def get_observation(self) -> dict:
         """Get current observation from robot with real camera feeds"""
@@ -530,9 +545,13 @@ class H1TrainingClient:
         """Execute one policy inference step and return the action"""
         obs = self.get_observation()
         
-        # Add prompt
-        training_config = self.config.get('training', {})
-        obs["prompt"] = training_config.get('default_label', 'manipulation task')
+        # Get task description (supports both old and new config structure)
+        task_config = self.config.get('task', {})
+        task_description = task_config.get('description',
+            self.config.get('training', {}).get('default_label', 'manipulation task'))
+        
+        # Add prompt with Advantage=True to sample from good distribution
+        obs["prompt"] = f"{task_description}, Advantage=True"
         
         # Get action from policy
         response = self.policy_client.infer(obs)
@@ -687,24 +706,47 @@ class H1TrainingClient:
                 time.sleep(sleep_time)
     
     def run_labeling_state(self):
-        """LABELING state: Transition to damping mode for human corrections"""
+        """LABELING state: Stop recording and prompt for advantage label"""
         print("\n" + "=" * 60)
         print("[LABELING] Policy execution complete")
-        print("  Transitioning to damping mode for corrections...")
+        print("  Was this execution successful?")
+        print("    'g' - GOOD (Advantage=True) - Task completed successfully")
+        print("    'b' - BAD (Advantage=False) - Needs improvement")
         print("=" * 60)
+        
+        # Stop recording immediately - we only record during policy execution
+        if self.recording_active and self.episode_writer:
+            # Don't save yet - just stop adding frames
+            self.recording_active = False
+            logger.info(f"Stopped recording: {self.episode_writer.get_current_length()} frames captured")
+        
+        with self.keyboard:
+            key = self.keyboard.wait_for_key({'g', 'b'}, "Label this episode (g/b): ")
+            
+            if key == 'g':
+                self.current_advantage_label = True
+                logger.info("Episode labeled as GOOD (Advantage=True)")
+            else:
+                self.current_advantage_label = False
+                logger.info("Episode labeled as BAD (Advantage=False)")
+            
+            # Set the advantage label on the episode writer
+            if self.episode_writer:
+                self.episode_writer.set_advantage_label(self.current_advantage_label)
         
         self.state = TrainingState.DAMPING
     
     def run_damping_state(self):
-        """DAMPING state: Robot in damping mode, operator adjusts"""
+        """DAMPING state: Robot in damping mode for safe adjustment (NO recording)"""
+        advantage_str = "GOOD" if self.current_advantage_label else "BAD"
         print("\n" + "=" * 60)
-        print("[DAMPING] Robot in damping mode - adjust pose freely")
-        print("  Press 'e' to end epoch and save")
+        print(f"[DAMPING] Robot in damping mode (Episode labeled: {advantage_str})")
+        print("  Adjust robot pose freely - NO data is being recorded")
+        print("  Press 'e' to save episode and continue")
         print("=" * 60)
         
         # Enter damping mode
         self.robot.enter_damping_mode()
-        self.current_phase = "human"
         
         control_rate = 50  # Hz
         control_period = 1.0 / control_rate
@@ -720,21 +762,8 @@ class H1TrainingClient:
                     self.state = TrainingState.SAVING
                     break
                 
-                # Record current state (human corrections)
+                # NO recording in damping mode - just maintain gravity compensation
                 current_q = self.robot.get_current_dual_arm_q()
-                obs = self.get_observation()
-                
-                # In damping mode, action is zeros (no policy output)
-                zero_action = np.zeros(14, dtype=np.float32)
-                
-                self.episode_writer.add_timestep(
-                    qpos=current_q,
-                    action=zero_action,
-                    images=obs.get('images'),
-                    phase="human"
-                )
-                
-                # Still send gravity compensation to keep robot supported
                 gravity_torques = self.compute_gravity_compensation(current_q)
                 self.robot.ctrl_dual_arm(
                     q_target=current_q,  # Target = current (no movement)
@@ -750,12 +779,26 @@ class H1TrainingClient:
         self.robot.exit_damping_mode()
     
     def run_saving_state(self):
-        """SAVING state: Save the episode"""
+        """SAVING state: Save the episode with advantage label"""
+        advantage_str = "GOOD (Advantage=True)" if self.current_advantage_label else "BAD (Advantage=False)"
         print("\n" + "=" * 60)
-        print("[SAVING] Saving episode data...")
+        print(f"[SAVING] Saving episode data (Label: {advantage_str})...")
         print("=" * 60)
         
-        self.stop_recording()
+        # The advantage label was already set in LABELING state
+        # Now we just save the episode
+        if self.episode_writer:
+            filepath = self.episode_writer.filepath
+            length = self.episode_writer.get_current_length()
+            
+            self.episode_writer.stop_recording()
+            
+            logger.info(f"Saved episode: {filepath}")
+            logger.info(f"  Total timesteps: {length}")
+            logger.info(f"  Advantage: {advantage_str}")
+        
+        # Reset for next episode
+        self.current_advantage_label = None
         self.state = TrainingState.DECIDING
     
     def run_deciding_state(self):
@@ -822,8 +865,10 @@ class H1TrainingClient:
         print("\n" + "=" * 70)
         print("  Training pipeline ready!")
         print("  Controls:")
-        print("    's' - Stop execution, enter damping mode")
-        print("    'e' - End epoch, save data")
+        print("    's' - Stop policy execution")
+        print("    'g' - Label episode as GOOD (Advantage=True)")
+        print("    'b' - Label episode as BAD (Advantage=False)")
+        print("    'e' - End damping mode, save episode")
         print("    'y' - Yes/confirm")
         print("    'n' - No/decline")
         print("    Ctrl+C - Emergency exit")

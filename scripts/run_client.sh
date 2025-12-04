@@ -4,10 +4,10 @@
 set -e
 
 # Default values
-HDF5_PATH="${HDF5_PATH:-h1_data_processed/press_a_big_button/episode_7.hdf5}"
+HDF5_PATH="${HDF5_PATH:-h1_data_processed/press_a_big_button/episode_16.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-press the red button}" # check if this is right in case of overfitting
+PROMPT="${PROMPT:-press the big button}" # check if this is right in case of overfitting
 
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
 POLICY_DIR="${POLICY_DIR:-examples/h1_control_client/checkpoints/pi05_h1_auto/pi05_h1_press_button/999}"

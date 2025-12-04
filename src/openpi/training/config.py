@@ -1106,7 +1106,7 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
-        num_train_steps=1000,
+        num_train_steps=400,
         batch_size=32,
         save_interval=200,
         keep_period=200,

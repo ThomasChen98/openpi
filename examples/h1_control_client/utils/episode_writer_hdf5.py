@@ -12,6 +12,12 @@ File structure:
         cam_right_wrist: [T,] - JPEG compressed images
 /action: [T, 14] - predicted joint positions from policy
 /phase: [T,] - string labels ("policy" or "human") for training pipeline
+
+Metadata attributes:
+    advantage: bool - True if episode was labeled as good, False if bad
+    episode_length: int - number of timesteps
+    fps: int - recording frequency
+    timestamp: str - ISO format timestamp
 """
 
 import h5py
@@ -40,8 +46,11 @@ class EpisodeWriterHDF5:
         self.label_name = label_name
         self.fps = fps
         
-        # Create subdirectory for this label
-        self.save_dir = os.path.join(save_dir, label_name)
+        # Create subdirectory for this label (or use save_dir directly if label_name is empty)
+        if label_name:
+            self.save_dir = os.path.join(save_dir, label_name)
+        else:
+            self.save_dir = save_dir
         os.makedirs(self.save_dir, exist_ok=True)
         
         # Find next episode number by scanning the directory
@@ -57,6 +66,9 @@ class EpisodeWriterHDF5:
         self.image_buffers = {}  # {camera_name: [frames]}
         self.phase_buffer = []  # Phase labels ("policy" or "human")
         
+        # Advantage labeling (per-episode)
+        self.advantage_label = None  # True = good, False = bad, None = unlabeled
+        
         self.recording = False
         
         logger.info(f"EpisodeWriterHDF5 initialized for label '{label_name}': {self.filepath}")
@@ -68,7 +80,19 @@ class EpisodeWriterHDF5:
         self.action_buffer = []
         self.image_buffers = {}
         self.phase_buffer = []
+        self.advantage_label = None  # Reset advantage label for new episode
         logger.info(f"Started recording episode {self.episode_idx}")
+    
+    def set_advantage_label(self, is_good: bool):
+        """
+        Set the advantage label for the current episode.
+        
+        Args:
+            is_good: True if episode was successful/good, False if it needs correction
+        """
+        self.advantage_label = is_good
+        label_str = "GOOD (Advantage=True)" if is_good else "BAD (Advantage=False)"
+        logger.info(f"Episode {self.episode_idx} labeled as: {label_str}")
     
     def add_timestep(self, qpos, action, images=None, phase="policy"):
         """
@@ -168,14 +192,24 @@ class EpisodeWriterHDF5:
                 f.attrs['fps'] = self.fps
                 f.attrs['timestamp'] = datetime.now().isoformat()
                 
+                # Save advantage label (per-episode)
+                if self.advantage_label is not None:
+                    f.attrs['advantage'] = self.advantage_label
+                else:
+                    # Default to False if not labeled (unlabeled episodes are treated as needing improvement)
+                    f.attrs['advantage'] = False
+                    logger.warning(f"Episode {self.episode_idx} has no advantage label, defaulting to False")
+                
                 # Count phase statistics
                 policy_frames = sum(1 for p in self.phase_buffer if p == "policy")
                 human_frames = sum(1 for p in self.phase_buffer if p == "human")
                 f.attrs['policy_frames'] = policy_frames
                 f.attrs['human_frames'] = human_frames
             
+            advantage_str = "True (good)" if self.advantage_label else "False (needs improvement)"
             logger.info(f"Episode saved successfully: {self.filepath}")
             logger.info(f"  Label: {self.label_name}")
+            logger.info(f"  Advantage: {advantage_str}")
             logger.info(f"  qpos: {qpos_data.shape}, action: {action_data.shape}")
             logger.info(f"  Phase breakdown: {policy_frames} policy, {human_frames} human")
             
@@ -201,4 +235,8 @@ class EpisodeWriterHDF5:
         policy_count = sum(1 for p in self.phase_buffer if p == "policy")
         human_count = sum(1 for p in self.phase_buffer if p == "human")
         return {"policy": policy_count, "human": human_count}
+    
+    def get_advantage_label(self):
+        """Get the current advantage label (True/False/None)"""
+        return self.advantage_label
 

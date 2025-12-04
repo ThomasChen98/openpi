@@ -1,14 +1,22 @@
 """
 Script for converting H1 HDF5 dataset to LeRobot format.
 
+Supports advantage labeling for training with advantage-augmented prompts:
+  - human_labeling: Read advantage label from HDF5 metadata (set during data collection)
+  - reward_labeling: Use a reward function to determine advantage (not implemented)
+  - none: No advantage labeling (original behavior)
+
+The prompt format with advantage labeling is:
+  "task_description, Advantage=True" or "task_description, Advantage=False"
+
 Usage:
-uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --task_description "pick up the cube" --num_repeats 10
 
 For a directory with multiple HDF5 files:
-uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir examples/h1_control_client/h1_data_processed/box_action/good/ --repo_id ThomasChen98/h1_box_action_with_lang --num_repeats 4
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir examples/h1_control_client/h1_data_processed/box_action/good/ --task_description "move the lid" --num_repeats 4
 
-If you want to push your dataset to the Hugging Face Hub:
-uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir training_data/h1/circular.hdf5 --repo_id your_hf_username/h1_circular --num_repeats 10 --push_to_hub
+With advantage labeling:
+uv run examples/h1_control_client/convert_h1_data_to_lerobot.py --data_dir ./data/ --task_description "press button" --labeling_mode human_labeling
 
 Note: Install h5py if needed: `uv pip install h5py`
 Note: Install opencv-python for image resizing: `uv pip install opencv-python`
@@ -18,6 +26,7 @@ The resulting dataset will be saved to the $HF_LEROBOT_HOME directory.
 
 import shutil
 from pathlib import Path
+from typing import Literal
 
 import os
 import cv2
@@ -26,17 +35,21 @@ import numpy as np
 import tyro
 from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME, LeRobotDataset
 
+# Supported labeling modes
+LabelingMode = Literal["none", "human_labeling", "reward_labeling"]
+
 
 def resize_image(image: np.ndarray, target_height: int = 224, target_width: int = 224) -> np.ndarray:
     """Resize image to target dimensions."""
     return cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
 
-def load_episode_from_hdf5(hdf5_path: str) -> dict:
+def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict:
     """Load a single episode from an HDF5 file.
     
     Args:
         hdf5_path: Path to the HDF5 file
+        read_advantage: Whether to read the advantage label from metadata
         
     Returns:
         Dictionary containing episode data with keys:
@@ -45,6 +58,7 @@ def load_episode_from_hdf5(hdf5_path: str) -> dict:
         - ego_cam: (num_steps, height, width, 3) array
         - cam_left_wrist: (num_steps, height, width, 3) array or None
         - cam_right_wrist: (num_steps, height, width, 3) array or None
+        - advantage: bool or None (if read_advantage is True)
     """
     with h5py.File(hdf5_path, "r") as f:
         # Extract data from HDF5
@@ -68,12 +82,23 @@ def load_episode_from_hdf5(hdf5_path: str) -> dict:
         actions = actions[:, :14]
         qpos = qpos[:, :14]
         
+        # Read advantage label from metadata if requested
+        advantage = None
+        if read_advantage:
+            if "advantage" in f.attrs:
+                advantage = bool(f.attrs["advantage"])
+            else:
+                # Default to False if no advantage label (older data or unlabeled)
+                print(f"  Warning: No advantage label in {hdf5_path}, defaulting to False")
+                advantage = False
+        
         return {
             "actions": actions,
             "qpos": qpos,
             "ego_cam": ego_cam,
             "cam_left_wrist": cam_left_wrist,
             "cam_right_wrist": cam_right_wrist,
+            "advantage": advantage,
         }
 
 
@@ -85,6 +110,7 @@ def main(
     num_repeats: int = 256,
     push_to_hub: bool = False,
     save_dir: str = None,
+    labeling_mode: LabelingMode = "none",
 ):
     """Convert H1 HDF5 data to LeRobot format.
     
@@ -94,7 +120,19 @@ def main(
         num_repeats: Number of times to repeat the episode sequence (to create more training data)
         push_to_hub: Whether to push the dataset to Hugging Face Hub
         save_dir: Name of the directory to save the dataset
+        labeling_mode: How to handle advantage labeling:
+            - "none": No advantage labeling (task description only)
+            - "human_labeling": Read advantage from HDF5 metadata
+            - "reward_labeling": Use reward function (not implemented)
     """
+    # Validate labeling mode
+    if labeling_mode == "reward_labeling":
+        raise NotImplementedError("reward_labeling mode is not yet implemented")
+    
+    use_advantage = labeling_mode == "human_labeling"
+    if use_advantage:
+        print(f"Using advantage labeling mode: {labeling_mode}")
+        print("  Prompts will be formatted as: '{task_description}, Advantage=True/False'")
     # Determine if data_dir is a file or directory
     data_path = Path(data_dir)
     
@@ -166,9 +204,18 @@ def main(
     # Load all episodes from HDF5 files
     print("\nLoading episodes from HDF5 files...")
     episodes_data = []
+    advantage_stats = {"true": 0, "false": 0}
+    
     for hdf5_file in hdf5_files:
         print(f"Loading {hdf5_file.name}...")
-        episode_data = load_episode_from_hdf5(str(hdf5_file))
+        episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=use_advantage)
+        
+        # Track advantage statistics
+        if use_advantage:
+            if episode_data["advantage"]:
+                advantage_stats["true"] += 1
+            else:
+                advantage_stats["false"] += 1
         episodes_data.append(episode_data)
         
         print(f"  Data shapes:")
@@ -177,6 +224,14 @@ def main(
         print(f"    ego_cam: {episode_data['ego_cam'].shape}")
         print(f"    cam_left_wrist: {episode_data['cam_left_wrist'].shape if episode_data['cam_left_wrist'] is not None else 'None (will use zero padding)'}")
         print(f"    cam_right_wrist: {episode_data['cam_right_wrist'].shape if episode_data['cam_right_wrist'] is not None else 'None (will use zero padding)'}")
+        if use_advantage:
+            advantage_str = "True (good)" if episode_data["advantage"] else "False (needs improvement)"
+            print(f"    advantage: {advantage_str}")
+    
+    if use_advantage:
+        print(f"\nAdvantage label statistics:")
+        print(f"  Good episodes (Advantage=True): {advantage_stats['true']}")
+        print(f"  Bad episodes (Advantage=False): {advantage_stats['false']}")
 
     # Create zero-padded images for missing cameras
     zero_image = np.zeros((224, 224, 3), dtype=np.uint8)
@@ -197,6 +252,14 @@ def main(
             cam_left_wrist = episode_data["cam_left_wrist"]
             cam_right_wrist = episode_data["cam_right_wrist"]
             
+            # Format task description with advantage label if using advantage labeling
+            if use_advantage:
+                advantage = episode_data["advantage"]
+                advantage_str = "True" if advantage else "False"
+                episode_task = f"{task_description}, Advantage={advantage_str}"
+            else:
+                episode_task = task_description
+            
             # Iterate through each timestep in the episode
             for step_idx in range(len(actions)):
                 # Resize ego camera
@@ -213,7 +276,7 @@ def main(
                 else:
                     cam_right_wrist_resized = zero_image.copy()
 
-                # Add frame to dataset
+                # Add frame to dataset (all frames in episode get same task/advantage)
                 dataset.add_frame(
                     {
                         "ego_cam": ego_cam_resized,
@@ -221,13 +284,14 @@ def main(
                         "cam_right_wrist": cam_right_wrist_resized,
                         "qpos": qpos[step_idx].astype(np.float32),
                         "action": actions[step_idx].astype(np.float32),
-                        "task": task_description,
+                        "task": episode_task,
                     }
                 )
             
             # Save the episode
             dataset.save_episode()
-            print(f"  Saved episode {episode_counter} with {len(actions)} frames")
+            advantage_info = f" (Advantage={'True' if episode_data.get('advantage') else 'False'})" if use_advantage else ""
+            print(f"  Saved episode {episode_counter} with {len(actions)} frames{advantage_info}")
 
     print(f"\nDataset created successfully!")
     print(f"Total episodes: {total_episodes}")

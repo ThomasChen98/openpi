@@ -1,0 +1,10 @@
+{
+  "task_name": "lift_lid",
+  "task_description": "Lift the lid off the bowl",
+  "config_name": "pi05_h1_auto",
+  "epoch": 0,
+  "last_checkpoint": "",
+  "base_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999",
+  "status": "interrupted",
+  "updated_at": "2025-12-03T21:45:37-08:00"
+}

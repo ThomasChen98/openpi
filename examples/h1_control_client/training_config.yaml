@@ -1,60 +1,82 @@
-# H1 Training Pipeline Configuration
-# =====================================
-# This file configures the training client for the human-in-the-loop training pipeline.
+# =============================================================================
+# H1 Integrated Training Pipeline Configuration
+# =============================================================================
+# This is the SINGLE SOURCE OF TRUTH for all training pipeline settings.
+# Edit this file to configure your training run.
 #
-# SETUP INSTRUCTIONS:
-# 1. Copy this file and modify for your environment
-# 2. Set policy_server.host to your GPU server IP (where policy is running)
-# 3. Set rsync.target to your training data destination on P6000
-# 4. Adjust robot IPs if your network differs from defaults
+# Usage:
+#   1. Edit this file with your task and environment settings
+#   2. Run: ./scripts/integrated_training.sh
+#   3. On robot: python h1_training_client.py --config training_config.yaml
+# =============================================================================
 
-# Policy Server Configuration
-# ---------------------------
-# The client polls this server to check when new weights are ready.
-# The server must have the /training_status endpoint (added by our modifications).
-policy_server:
-  host: "localhost"           # Policy server hostname/IP (e.g., "192.168.1.100" or "msc-server")
-  port: 8000                  # Policy server port (default OpenPi port)
-  poll_interval_sec: 5        # How often to poll for training status (seconds)
-
-# Robot Configuration
-# -------------------
-# Network and device settings for H1-2 robot.
-# These should match your robot's network configuration.
-robot:
-  network_interface: "eno1"   # Network interface for DDS communication (check with `ip addr`)
+# =============================================================================
+# TASK CONFIGURATION - What task are we training?
+# =============================================================================
+task:
+  name: "lift_lid"                              # Short name for directories/checkpoints
+  description: "Lift the lid off the bowl"     # Full description used as prompt
   
-  # Inspire hand IP addresses (on robot's internal network 192.168.123.x)
-  left_hand_ip: "192.168.123.211"
-  right_hand_ip: "192.168.123.210"
-  
-  # Head camera server (image_server.py running on robot)
-  # The robot streams head camera frames over ZMQ to this address
-  head_camera_server_ip: "192.168.123.163"   # Robot's IP address
-  head_camera_server_port: 5555              # Default image_server port
+# =============================================================================
+# POLICY CONFIGURATION - Model and checkpoints
+# =============================================================================
+policy:
+  config_name: "pi05_h1_auto"                   # Policy config (pi05_h1_auto, pi05_h1_finetune, etc.)
+  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999"
+  # ^ Pretrained checkpoint for epoch 0. Leave empty to train from scratch.
 
-# Recording Configuration
-# -----------------------
-# Where and how to save episode data.
-recording:
-  save_dir: "./data/training_epochs"  # Base directory for saved episodes
-  fps: 50                              # Recording frequency in Hz (matches control rate)
-  image_quality: 85                    # JPEG compression quality (1-100)
-
-# Rsync Configuration for Data Upload
-# ------------------------------------
-# After each training session, data is synced to the remote server.
-# Make sure SSH keys are set up for passwordless auth.
-rsync:
-  enabled: true                                          # Set to false to skip sync
-  target: "yuxin@p6000.local:/data/h1_training/"         # Remote path (user@host:path)
-  options: "-avz --progress"                             # rsync options
-  ssh_key: "~/.ssh/id_rsa"                               # SSH key (optional, leave empty to use default)
-
-# Training Session Settings
-# -------------------------
+# =============================================================================
+# TRAINING CONFIGURATION - How to train
+# =============================================================================
 training:
-  default_label: "training_session"  # Default label for episodes (can include task name)
-  auto_sync: true                    # Automatically sync after session ends
-  confirm_end: true                  # Require confirmation before ending session
+  max_epochs: 100                               # Maximum training epochs
+  num_repeats: 1                                # Times to repeat data during training
+  labeling_mode: "human_labeling"               # none, human_labeling, reward_labeling
+  gpu_id: 0                                     # Which GPU to use
 
+# =============================================================================
+# SERVER CONFIGURATION - Policy server settings
+# =============================================================================
+policy_server:
+  host: "localhost"                             # Server host (use IP if robot connects remotely)
+  port: 8000                                    # Server port
+  poll_interval_sec: 5                          # How often robot polls for status
+
+# =============================================================================
+# ROBOT CONFIGURATION - H1-2 robot settings
+# =============================================================================
+robot:
+  network_interface: "eno1"                     # Network interface for DDS
+  left_hand_ip: "192.168.123.211"               # Left Inspire hand IP
+  right_hand_ip: "192.168.123.210"              # Right Inspire hand IP
+  head_camera_server_ip: "192.168.123.163"      # Robot head camera IP
+  head_camera_server_port: 5555                 # Robot head camera port
+
+# =============================================================================
+# DATA CONFIGURATION - Where to save/load data
+# =============================================================================
+data:
+  # Local paths (on robot)
+  save_dir: "./data/training_epochs"            # Where robot saves episodes
+  
+  # Remote sync settings (robot -> P6000)
+  rsync:
+    enabled: true
+    target: "yuxin@p6000.local:/home/yuxin/Projects/openpi/data/training_epochs"
+    options: "-avz --progress"
+    ssh_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# RECORDING CONFIGURATION - Episode recording settings
+# =============================================================================
+recording:
+  fps: 50                                       # Recording frequency (Hz)
+  image_quality: 85                             # JPEG compression quality (1-100)
+
+# =============================================================================
+# PIPELINE CONFIGURATION - Integrated training settings
+# =============================================================================
+pipeline:
+  start_phase: "data_collection"                # data_collection or training
+  start_epoch: 0                                # Starting epoch number
+  auto_sync: true                               # Auto-sync after session ends
