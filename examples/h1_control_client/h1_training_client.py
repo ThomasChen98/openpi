@@ -468,18 +468,18 @@ class H1TrainingClient:
         if self.episode_writer:
             # Check if we have data to save
             if self.episode_writer.get_current_length() > 0:
-            filepath = self.episode_writer.filepath
-            length = self.episode_writer.get_current_length()
+                filepath = self.episode_writer.filepath
+                length = self.episode_writer.get_current_length()
                 
                 # If no advantage label was set, default to False (interrupted episodes are "bad")
                 if self.episode_writer.get_advantage_label() is None:
                     self.episode_writer.set_advantage_label(False)
                     logger.warning("No advantage label set, defaulting to False (interrupted)")
-            
-            self.episode_writer.stop_recording()
-            
-            logger.info(f"Saved episode: {filepath}")
-            logger.info(f"  Total timesteps: {length}")
+                
+                self.episode_writer.stop_recording()
+                
+                logger.info(f"Saved episode: {filepath}")
+                logger.info(f"  Total timesteps: {length}")
             
             self.recording_active = False
     
@@ -554,14 +554,14 @@ class H1TrainingClient:
             task_config = self.config.get('task', {})
             task_description = task_config.get('description',
                 self.config.get('training', {}).get('default_label', 'manipulation task'))
-        
-        return {
+            
+            return {
                 "images": {
                     "cam_head": head_image,
                     "cam_left_wrist": left_image,
                     "cam_right_wrist": right_image,
                 },
-            "state": current_q,
+                "state": current_q,
                 "prompt": f"{task_description}, Advantage=True",
             }
         else:
@@ -573,7 +573,7 @@ class H1TrainingClient:
                     "cam_left_wrist": left_image,
                     "cam_right_wrist": right_image,
                 },
-        }
+            }
     
     def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
         """Compute gravity compensation torques"""
@@ -1022,7 +1022,7 @@ class H1TrainingClient:
                 logger.info("Returning to WAITING for next epoch...")
                 self.state = TrainingState.WAITING
             else:
-        self.state = TrainingState.FINISHED
+                self.state = TrainingState.FINISHED
     
     def run(self, start_immediately: bool = False):
         """
