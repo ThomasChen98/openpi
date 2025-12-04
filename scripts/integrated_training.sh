@@ -214,11 +214,12 @@ start_server() {
     export CUDA_VISIBLE_DEVICES=$GPU_ID
     
     log_info "Starting server..."
-    nohup uv run scripts/serve_policy.py policy:checkpoint \
+    nohup uv run scripts/serve_policy.py \
+        --training-epoch "$EPOCH" \
+        policy:checkpoint \
         --policy.config="$CONFIG_NAME" \
         --policy.dir="$checkpoint_dir" \
         --policy.data-dir="$lerobot_data_dir" \
-        --training-epoch "$EPOCH" \
         > "$PROJECT_ROOT/logs/server_epoch${EPOCH}.log" 2>&1 &
     SERVER_PID=$!
     

@@ -3,8 +3,8 @@
   "task_description": "Lift the lid off the bowl",
   "config_name": "pi05_h1_auto",
   "epoch": 1,
-  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/",
+  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_0/399",
   "base_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999",
-  "status": "interrupted",
-  "updated_at": "2025-12-04T15:15:41-08:00"
+  "status": "collecting_data",
+  "updated_at": "2025-12-04T15:34:45-08:00"
 }
