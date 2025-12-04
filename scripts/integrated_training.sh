@@ -232,13 +232,17 @@ start_server() {
             echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "${GREEN}║  POLICY SERVER RUNNING                                         ║${NC}"
             echo -e "${GREEN}║                                                                ║${NC}"
-            echo -e "${GREEN}║  URL: http://${SERVER_HOST}:${SERVER_PORT}                              ║${NC}"
+            echo -e "${GREEN}║  WebSocket: ws://${SERVER_HOST}:${SERVER_PORT}                          ║${NC}"
             echo -e "${GREEN}║  Task: ${TASK_NAME}                                            ║${NC}"
             echo -e "${GREEN}║  Prompt: ${TASK_DESCRIPTION}, Advantage=True                   ║${NC}"
             echo -e "${GREEN}║                                                                ║${NC}"
             echo -e "${GREEN}║  Robot can now connect and collect data                        ║${NC}"
             echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
             echo ""
+            
+            # Start visualizer after server is ready
+            start_visualizer
+            
             return 0
         fi
         
@@ -258,6 +262,9 @@ start_server() {
 }
 
 stop_server() {
+    # Stop visualizer first
+    stop_visualizer
+    
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         log_info "Stopping server (PID $SERVER_PID)..."
         kill "$SERVER_PID" 2>/dev/null || true
@@ -268,6 +275,78 @@ stop_server() {
     # Also kill any orphaned servers
     pkill -f "serve_policy.py" 2>/dev/null || true
     sleep 1
+}
+
+# =============================================================================
+# Visualizer Management
+# =============================================================================
+
+start_visualizer() {
+    log_info "Starting visualizer on port 8080..."
+    
+    # Find sample HDF5 data to use for visualization
+    local hdf5_file=""
+    
+    # Try to find any HDF5 file
+    if [ -f "$PROJECT_ROOT/training_data/h1/circular.hdf5" ]; then
+        hdf5_file="$PROJECT_ROOT/training_data/h1/circular.hdf5"
+    else
+        # Search for any HDF5 file in training_data
+        hdf5_file=$(find "$PROJECT_ROOT/training_data" -name "*.hdf5" -type f 2>/dev/null | head -1)
+    fi
+    
+    if [ -z "$hdf5_file" ]; then
+        log_warn "No HDF5 file found for visualization. Visualizer not started."
+        log_warn "You can still test the policy manually by running:"
+        log_warn "  uv run python examples/h1_control_client/h1_policy_viz_client.py --hdf5-path <path>"
+        return 1
+    fi
+    
+    log_info "Using HDF5 data: $hdf5_file"
+    
+    # Start visualizer in background
+    nohup uv run python "$PROJECT_ROOT/examples/h1_control_client/h1_policy_viz_client.py" \
+        --hdf5-path "$hdf5_file" \
+        --host "localhost" \
+        --port "$SERVER_PORT" \
+        --prompt "$TASK_DESCRIPTION, Advantage=True" \
+        > "$PROJECT_ROOT/logs/visualizer_epoch${EPOCH}.log" 2>&1 &
+    VIZ_PID=$!
+    
+    # Wait for visualizer to start
+    sleep 5
+    
+    if kill -0 "$VIZ_PID" 2>/dev/null; then
+        log_info "Visualizer started with PID $VIZ_PID"
+        echo ""
+        echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${BLUE}║  VISUALIZER RUNNING                                            ║${NC}"
+        echo -e "${BLUE}║                                                                ║${NC}"
+        echo -e "${BLUE}║  Open in browser: http://localhost:8080                        ║${NC}"
+        echo -e "${BLUE}║                                                                ║${NC}"
+        echo -e "${BLUE}║  - Use 'Infer' button to test policy                           ║${NC}"
+        echo -e "${BLUE}║  - Step through frames with slider                             ║${NC}"
+        echo -e "${BLUE}║  - View camera feeds and predicted actions                     ║${NC}"
+        echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        return 0
+    else
+        log_warn "Visualizer failed to start. Check: $PROJECT_ROOT/logs/visualizer_epoch${EPOCH}.log"
+        VIZ_PID=""
+        return 1
+    fi
+}
+
+stop_visualizer() {
+    if [ -n "$VIZ_PID" ] && kill -0 "$VIZ_PID" 2>/dev/null; then
+        log_info "Stopping visualizer (PID $VIZ_PID)..."
+        kill "$VIZ_PID" 2>/dev/null || true
+        wait "$VIZ_PID" 2>/dev/null || true
+        VIZ_PID=""
+    fi
+    
+    # Kill any orphaned visualizers
+    pkill -f "h1_policy_viz_client.py" 2>/dev/null || true
 }
 
 # =============================================================================
