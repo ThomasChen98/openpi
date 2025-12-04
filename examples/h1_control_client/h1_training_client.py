@@ -689,7 +689,9 @@ class H1TrainingClient:
         Returns:
             True if sync succeeded, False otherwise
         """
-        rsync_config = self.config.get('rsync', {})
+        # Support both config structures: data.rsync (new) and rsync (old)
+        data_config = self.config.get('data', {})
+        rsync_config = data_config.get('rsync', self.config.get('rsync', {}))
         
         if not rsync_config.get('enabled', False):
             logger.info("Rsync disabled in config, skipping...")
@@ -703,8 +705,9 @@ class H1TrainingClient:
             logger.warning("No rsync target configured")
             return False
         
-        recording_config = self.config.get('recording', {})
-        source_dir = recording_config.get('save_dir', './data/training_epochs')
+        # Get save directory from data config
+        source_dir = data_config.get('save_dir', 
+            self.config.get('recording', {}).get('save_dir', './data/training_epochs'))
         
         # Build rsync command
         cmd = ['rsync'] + options.split()
@@ -994,7 +997,9 @@ class H1TrainingClient:
         print("  Uploading data to remote server...")
         print("=" * 60)
         
-        rsync_config = self.config.get('rsync', {})
+        # Support both config structures: data.rsync (new) and rsync (old)
+        data_config = self.config.get('data', {})
+        rsync_config = data_config.get('rsync', self.config.get('rsync', {}))
         if rsync_config.get('enabled', False):
             success = self.rsync_to_remote()
             if success:
