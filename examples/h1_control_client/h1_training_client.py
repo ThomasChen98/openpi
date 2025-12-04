@@ -468,18 +468,18 @@ class H1TrainingClient:
         if self.episode_writer:
             # Check if we have data to save
             if self.episode_writer.get_current_length() > 0:
-                filepath = self.episode_writer.filepath
-                length = self.episode_writer.get_current_length()
+            filepath = self.episode_writer.filepath
+            length = self.episode_writer.get_current_length()
                 
                 # If no advantage label was set, default to False (interrupted episodes are "bad")
                 if self.episode_writer.get_advantage_label() is None:
                     self.episode_writer.set_advantage_label(False)
                     logger.warning("No advantage label set, defaulting to False (interrupted)")
-                
-                self.episode_writer.stop_recording()
-                
-                logger.info(f"Saved episode: {filepath}")
-                logger.info(f"  Total timesteps: {length}")
+            
+            self.episode_writer.stop_recording()
+            
+            logger.info(f"Saved episode: {filepath}")
+            logger.info(f"  Total timesteps: {length}")
             
             self.recording_active = False
     
@@ -554,14 +554,14 @@ class H1TrainingClient:
             task_config = self.config.get('task', {})
             task_description = task_config.get('description',
                 self.config.get('training', {}).get('default_label', 'manipulation task'))
-            
-            return {
+        
+        return {
                 "images": {
                     "cam_head": head_image,
                     "cam_left_wrist": left_image,
                     "cam_right_wrist": right_image,
                 },
-                "state": current_q,
+            "state": current_q,
                 "prompt": f"{task_description}, Advantage=True",
             }
         else:
@@ -573,7 +573,7 @@ class H1TrainingClient:
                     "cam_left_wrist": left_image,
                     "cam_right_wrist": right_image,
                 },
-            }
+        }
     
     def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
         """Compute gravity compensation torques"""
@@ -753,8 +753,9 @@ class H1TrainingClient:
                 if current_epoch > self.last_policy_epoch:
                     self.last_policy_epoch = current_epoch
                     
-                    # NEW EPOCH - increment epoch_num and reset episode counter
-                    self.epoch_num += 1
+                    # SET epoch_num to match the server's epoch (not increment)
+                    # This ensures data is saved to the correct epoch directory
+                    self.epoch_num = current_epoch
                     self.episode_num = 0  # Reset episode count for new epoch
                     
                     logger.info(f"🆕 New weights available! Starting EPOCH {self.epoch_num}")
@@ -821,7 +822,7 @@ class H1TrainingClient:
                 try:
                     # Query policy for action chunk (50 actions)
                     chunk_count += 1
-                    logger.info(f" Querying policy for chunk {chunk_count}...")
+                    logger.info(f"🔄 Querying policy for chunk {chunk_count}...")
                     action_chunk = self.query_policy()
                 
                     # Execute the full action chunk at 50Hz
@@ -833,8 +834,11 @@ class H1TrainingClient:
                     if actions_executed < len(action_chunk):
                         stopped_by_user = True
                         logger.info(f"User stopped execution after {total_actions} total actions")
-                    self.state = TrainingState.LABELING
-                    break
+                        self.state = TrainingState.LABELING
+                        break
+                    
+                    # Otherwise, continue to next chunk (continuous execution)
+                    # Loop will query for next action chunk
                     
                 except Exception as e:
                     logger.error(f"Policy execution error: {e}")
@@ -1018,7 +1022,7 @@ class H1TrainingClient:
                 logger.info("Returning to WAITING for next epoch...")
                 self.state = TrainingState.WAITING
             else:
-                self.state = TrainingState.FINISHED
+        self.state = TrainingState.FINISHED
     
     def run(self, start_immediately: bool = False):
         """
@@ -1060,7 +1064,8 @@ class H1TrainingClient:
         # If start_immediately, skip WAITING and go to READY
         if start_immediately:
             logger.info("--start-immediately: Skipping WAITING state")
-            self.epoch_num = 1  # Start at epoch 1
+            self.epoch_num = 0  # Start at epoch 0 (matching integrated script)
+            self.last_policy_epoch = 0  # Mark epoch 0 as seen
             self.state = TrainingState.READY
         
         # State machine loop

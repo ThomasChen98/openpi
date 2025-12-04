@@ -1109,7 +1109,7 @@ _CONFIGS = [
         num_train_steps=400,
         batch_size=32,
         save_interval=200,
-        keep_period=200,
+        keep_period=100,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.
