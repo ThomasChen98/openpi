@@ -7,14 +7,14 @@
 # Usage:
 #   1. Edit this file with your task and environment settings
 #   2. Run: ./scripts/integrated_training.sh
-#   3. On robot: python h1_training_client.py --config training_config.yaml
+#   3. On robot: python h1_execution_client.py --config training_config.yaml
 # =============================================================================
 
 # =============================================================================
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "lift_lid"                              # Short name for directories/checkpoints
+  name: "e2e_lift_lid"                              # Short name for directories/checkpoints
   description: "Lift the lid off the bowl"     # Full description used as prompt
   
 # =============================================================================
@@ -59,12 +59,12 @@ robot:
 # =============================================================================
 data:
   # Local paths (on robot)
-  save_dir: "./data/training_epochs"            # Where robot saves episodes
+  save_dir: "./examples/h1_control_client/h1_data_auto"            # Where robot saves episodes
   
   # Remote sync settings (robot -> P6000)
   rsync:
     enabled: true
-    target: "P6000:/home/yuxin/Projects/openpi/data/training_epochs"
+    target: "P6000:/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_auto"
     options: "-avz --progress"
     ssh_key: "~/.ssh/id_rsa"
 

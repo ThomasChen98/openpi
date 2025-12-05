@@ -16,7 +16,7 @@ Key concepts:
     - EPISODE: A single rollout/trajectory recorded during EXECUTING state.
 
 Usage:
-    python h1_training_client.py --config training_config.yaml
+    python h1_execution_client.py --config training_config.yaml
 """
 
 import argparse
@@ -441,7 +441,7 @@ class H1TrainingClient:
         # Get data save directory (supports both old and new config structure)
         data_config = self.config.get('data', {})
         base_save_dir = data_config.get('save_dir', 
-            recording_config.get('save_dir', './data/training_epochs'))
+            recording_config.get('save_dir', './examples/h1_control_client/h1_data_auto'))
         
         # Get task name (supports both old and new config structure)
         task_config = self.config.get('task', {})
@@ -702,7 +702,7 @@ class H1TrainingClient:
         
         # Get save directory from data config
         source_dir = data_config.get('save_dir', 
-            self.config.get('recording', {}).get('save_dir', './data/training_epochs'))
+            self.config.get('recording', {}).get('save_dir', './examples/h1_control_client/h1_data_auto'))
         
         # Build rsync command
         cmd = ['rsync'] + options.split()

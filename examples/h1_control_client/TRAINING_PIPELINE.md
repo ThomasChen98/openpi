@@ -52,7 +52,7 @@ This allows the training loop to detect when the policy server has finished a tr
 Data is saved to HDF5 files in the configured `save_dir`:
 
 ```
-./data/training_epochs/
+./examples/h1_control_client/h1_data_auto
 └── training_session_epoch1/
     ├── episode_0.hdf5
     ├── episode_1.hdf5
@@ -125,7 +125,7 @@ rsync:
 
 ```bash
 cd examples/h1_control_client
-python h1_training_client.py --config training_config.yaml
+python h1_execution_client.py --config training_config.yaml
 ```
 
 ### Controls
@@ -171,7 +171,7 @@ python h1_training_client.py --config training_config.yaml
 5. **Save**: Episode saved to HDF5
    ```
    [SAVING] Saving episode data...
-     Saved: ./data/training_epochs/training_session_epoch1/episode_0.hdf5
+     Saved: ./examples/h1_control_client/h1_data_auto/training_session_epoch1/episode_0.hdf5
      Total timesteps: 2847
      Policy frames: 1200, Human frames: 1647
    ```

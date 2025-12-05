@@ -96,7 +96,7 @@ START_PHASE=$(yq -r '.pipeline.start_phase // "data_collection"' "$CONFIG_FILE")
 START_EPOCH=$(yq -r '.pipeline.start_epoch // 0' "$CONFIG_FILE")
 
 # Paths
-DATA_DIR="$PROJECT_ROOT/data/training_epochs/$TASK_NAME"
+DATA_DIR="$PROJECT_ROOT/examples/h1_control_client/h1_data_auto/$TASK_NAME"
 STATE_FILE="$PROJECT_ROOT/training_state_${TASK_NAME}.json"
 LEROBOT_BASE_DIR="$PROJECT_ROOT/examples/h1_control_client/h1_data_lerobot"
 CHECKPOINT_BASE_DIR="$PROJECT_ROOT/checkpoints/$CONFIG_NAME/$TASK_NAME"
@@ -370,7 +370,7 @@ wait_for_data() {
     echo "Expected data location: $epoch_dir"
     echo ""
     echo "On the robot, run:"
-    echo -e "  ${CYAN}python h1_training_client.py --config training_config.yaml${NC}"
+    echo -e "  ${CYAN}python h1_execution_client.py --config training_config.yaml${NC}"
     echo ""
     echo "The robot will:"
     echo "  1. Connect to policy server at $SERVER_HOST:$SERVER_PORT"
