@@ -59,7 +59,7 @@ robot:
 # =============================================================================
 data:
   # Local paths (on robot)
-  save_dir: "./examples/h1_control_client/h1_data_auto"            # Where robot saves episodes
+  save_dir: "./h1_data_auto"            # Where robot saves episodes
   
   # Remote sync settings (robot -> P6000)
   rsync:
