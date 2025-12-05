@@ -602,6 +602,11 @@ def main(args: Args) -> None:
         show_gt_cb.value = True
         show_predicted_cb.value = False
         update_visualization()
+        
+        # Print robot state for selected frame
+        state = data['qpos'][current_frame][:14]
+        print(f"\n[Frame {current_frame}] Robot state (14 joints):")
+        print(f"  {state}")
     
     # Ground truth checkbox callback
     @show_gt_cb.on_update

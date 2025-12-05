@@ -29,9 +29,9 @@ policy:
 # TRAINING CONFIGURATION - How to train
 # =============================================================================
 training:
-  max_epochs: 400                               # Maximum training epochs
-  save_interval: 200                            # Save interval (in epochs)
-  keep_period: 100                              # Keep period (in epochs)
+  max_epochs: 300                               # Maximum training epochs
+  save_interval: 300                            # Save interval (in epochs)
+  keep_period: 300                              # Keep period (in epochs)
   num_repeats: 1                                # Times to repeat data during training
   labeling_mode: "human_labeling"               # none, human_labeling, reward_labeling
   gpu_id: 0                                     # Which GPU to use

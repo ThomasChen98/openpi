@@ -200,6 +200,13 @@ class H1TrainingClient:
         self.current_action_chunk = None  # Current action chunk from policy
         self.action_chunk_idx = 0  # Index into current action chunk
         
+        # Reset pose for robot (14 joints: left arm 7 + right arm 7)
+        # This pose is used at the start of execution and after labeling
+        self.reset_pose = np.array([
+            -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
+            -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
+        ])
+        
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
         
@@ -592,6 +599,43 @@ class H1TrainingClient:
         
         return gravity_torques
     
+    def reset_to_pose(self, duration: float = 2.0):
+        """
+        Smoothly reset the robot to the configured reset pose.
+        
+        Args:
+            duration: Time in seconds to complete the reset motion
+        """
+        logger.info(f"Resetting robot to configured pose (duration: {duration}s)...")
+        logger.info(f"  Target pose: {self.reset_pose}")
+        
+        # Get current position
+        current_q = self.robot.get_current_dual_arm_q()
+        
+        # Interpolate smoothly to reset pose
+        control_rate = 50  # Hz
+        num_steps = int(duration * control_rate)
+        
+        for i in range(num_steps):
+            t = (i + 1) / num_steps  # 0 to 1
+            # Smooth interpolation (ease in-out)
+            t_smooth = t * t * (3 - 2 * t)
+            
+            target_q = current_q + t_smooth * (self.reset_pose - current_q)
+            
+            # Compute gravity compensation
+            gravity_torques = self.compute_gravity_compensation(target_q)
+            
+            # Send command
+            self.robot.ctrl_dual_arm(
+                q_target=target_q,
+                tauff_target=gravity_torques
+            )
+            
+            time.sleep(1.0 / control_rate)
+        
+        logger.info("Reset complete")
+    
     def query_policy(self) -> np.ndarray:
         """
         Query the policy server for an action chunk.
@@ -798,9 +842,10 @@ class H1TrainingClient:
         EXECUTING state: Run policy inference with recording.
         
         This properly executes action chunks like h1_remote_client:
-        1. Query policy ONCE to get action chunk (50 actions)
-        2. Execute ALL 50 actions at 50Hz
-        3. Repeat until user presses 's' to stop
+        1. Reset robot to configured reset pose
+        2. Query policy ONCE to get action chunk (50 actions)
+        3. Execute ALL 50 actions at 50Hz
+        4. Repeat until user presses 's' to stop
         
         This ensures smooth robot motion and proper frame count.
         """
@@ -809,6 +854,10 @@ class H1TrainingClient:
         print("  Press 's' to stop execution and enter labeling mode")
         print("  Each policy query returns 50 actions executed at 50Hz (~1 second)")
         print("=" * 60)
+        
+        # Reset robot to starting pose before execution
+        print("  Resetting robot to starting pose...")
+        self.reset_to_pose(duration=2.0)
         
         self.current_phase = "policy"
         self.robot.speed_instant_max()
@@ -853,7 +902,7 @@ class H1TrainingClient:
             logger.info(f"Recorded {self.episode_writer.get_current_length()} frames")
     
     def run_labeling_state(self):
-        """LABELING state: Stop recording and prompt for advantage label"""
+        """LABELING state: Stop recording, prompt for advantage label, and reset robot"""
         frame_count = 0
         if self.recording_active and self.episode_writer:
             frame_count = self.episode_writer.get_current_length()
@@ -885,7 +934,13 @@ class H1TrainingClient:
             if self.episode_writer:
                 self.episode_writer.set_advantage_label(self.current_advantage_label)
         
-        self.state = TrainingState.DAMPING
+        # self.state = TrainingState.DAMPING
+        # Reset robot to starting pose (instead of damping mode)
+        print("  Resetting robot to starting pose...")
+        self.reset_to_pose(duration=2.0)
+        
+        # Skip DAMPING state, go directly to SAVING
+        self.state = TrainingState.SAVING
     
     def run_damping_state(self):
         """DAMPING state: Robot in damping mode for safe adjustment (NO recording)"""

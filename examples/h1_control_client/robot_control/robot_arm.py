@@ -400,9 +400,7 @@ class H1_2_ArmController:
                 break
             current_attempts += 1
             time.sleep(0.05)
-
-
-        
+   
 
     def speed_gradual_max(self, t = 5.0):
         '''Parameter t is the total time required for arms velocity to gradually increase to its maximum value, in seconds. The default is 5.0.'''
