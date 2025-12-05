@@ -1,107 +1,36 @@
-██████████████████████████████████                                                       | 200/400 [10:40<10:30,  3.15s/it]15:00:38.420 [I] [process=0][thread=MainThread][wait_until_finished] No Save Finalize thread to wait for. Returning. (188939:checkpoint_manager.py:1987)
-15:00:38.420 [I] [process=0] Saving checkpoint at step 200                                        (188939:checkpoint_manager.py:1408)
-15:00:38.421 [I] [process=0] Started async saving checkpoint to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200. (188939:async_checkpointer.py:439)
-15:00:38.421 [I] Using ThreadSafeKeyValueSignalingClient                                          (188939:signaling_client.py:332)
-15:00:38.427 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0 (188939:atomicity.py:144)
-15:00:38.429 [I] Wrote Metadata={'item_handlers': None, 'metrics': {}, 'performance_metrics': {}, 'init_timestamp_nsecs': 1764889238428341475, 'commit_timestamp_nsecs': None, 'custom_metadata': {}}, json={"item_handlers": null, "metrics": {}, "performance_metrics": {}, "init_timestamp_nsecs": 1764889238428341475, "commit_timestamp_nsecs": null, "custom_metadata": {}} to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/_CHECKPOINT_METADATA (188939:checkpoint.py:186)
-15:00:38.431 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/assets.orbax-checkpoint-tmp-1 (188939:atomicity.py:144)
-15:00:38.431 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/train_state.orbax-checkpoint-tmp-3 (188939:atomicity.py:144)
-15:00:38.431 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/params.orbax-checkpoint-tmp-2 (188939:atomicity.py:144)
-15:00:38.446 [I] Transferring arrays to host memory with options: use_replica_parallel=True, enable_pinned_host_transfer=False (188939:replica_slices.py:341)
-15:00:40.104 [I] Transferring arrays to host memory with options: use_replica_parallel=True, enable_pinned_host_transfer=False (188939:replica_slices.py:341)
-15:00:40.109 [I] Array name: 'params.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:00:40.109 [I] Array name: 'params.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:00:40.116 [I] [process=0][thread=array_type_handler] Wrote 51 array_metadata.ArrayMetadata to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/params.orbax-checkpoint-tmp-2/array_metadatas/process_0 (188939:array_metadata_store.py:198)
-15:04:06.438 [I] Array name: 'params.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:04:06.438 [I] [process=0] /jax/checkpoint/write/blocking_bytes_per_sec: 61.5 MiB/s (total bytes: 12.5 GiB) (time elapsed: 3 minutes) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:04:06.439 [I] Array name: 'params.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:04:06.440 [I] Array name: 'opt_state.1.0.mu.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:04:06.440 [I] Array name: 'opt_state.1.0.mu.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:04:06.441 [I] Array name: 'opt_state.1.0.nu.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:04:06.441 [I] Array name: 'opt_state.1.0.nu.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:04:06.442 [I] [process=0] /jax/checkpoint/write/blocking_bytes_per_sec: 184.5 MiB/s (total bytes: 37.5 GiB) (time elapsed: 3 minutes) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:04:06.460 [I] [process=0][thread=async_save] Background save thread started.                   (188939:async_checkpointer.py:77)
-15:04:06.461 [I] Finished blocking save in 208.04 seconds. Continuing to save asynchronously to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200. (188939:async_checkpointer.py:548)
-15:04:06.463 [I] [process=0][thread=MainThread][step=200] Starting CheckpointManager Save Finalize thread=save_finalize (188939:checkpoint_manager.py:1453)
-15:04:06.463 [I] [process=0][thread=save_finalize] Waiting for background save thread=async_save. (188939:async_checkpointer.py:258)
-15:04:06.464 [I] {'step': 200, 'event_type': 'save', 'directory': '/mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0', 'reached_preemption': False, 'preemption_received_at': None, 'synchronous': False, 'wait_for_prev_start_time': 1764889238.420127, 'wait_for_prev_duration_secs': 0.00025010108947753906, 'checkpointer_blocking_start_time': 1764889238.4207819, 'checkpointer_blocking_duration_secs': 208.0421543121338, 'get_old_steps_start_time': 1764889446.4629538, 'get_old_steps_duration_secs': 4.76837158203125e-06, 'checkpoint_manager_blocking_start_time': 1764889238.420013, 'checkpoint_manager_blocking_duration_secs': 208.04397296905518} (188939:standard_logger.py:34)
- 50%|██████████████████████████████████████████████████████▎                                                     | 201/400 [14:08<3:40:28, 66.48s/it]15:04:06.466 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 61.5 MiB/s (total bytes: 12.5 GiB) (time elapsed: 3 minutes) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:04:06.617 [I] [process=0][thread=array_type_handler] Wrote 156 array_metadata.ArrayMetadata to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/train_state.orbax-checkpoint-tmp-3/array_metadatas/process_0 (188939:array_metadata_store.py:198)
- 51%|████████████████████████████████████████████████████████▎                                                     | 205/400 [14:17<58:20, 17.95s/it]15:04:17.439 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 175.2 MiB/s (total bytes: 37.5 GiB) (time elapsed: 3 minutes) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:04:17.439 [I] [process=0][thread=async_save] 5 Handler Commit operations completed.            (188939:async_checkpointer.py:87)
-15:04:17.439 [I] Read Metadata={'item_handlers': None, 'metrics': {}, 'performance_metrics': {}, 'init_timestamp_nsecs': 1764889238428341475, 'commit_timestamp_nsecs': None, 'custom_metadata': {}} from /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/_CHECKPOINT_METADATA (188939:checkpoint.py:226)
-15:04:17.440 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/assets.orbax-checkpoint-tmp-1 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/assets (188939:atomicity.py:289)
-15:04:17.440 [I] Updated Metadata={'item_handlers': {'assets': 'openpi.training.checkpoints.CallbackHandler', 'params': 'orbax.checkpoint._src.handlers.pytree_checkpoint_handler.PyTreeCheckpointHandler', 'train_state': 'orbax.checkpoint._src.handlers.pytree_checkpoint_handler.PyTreeCheckpointHandler'}, 'metrics': {}, 'performance_metrics': {}, 'init_timestamp_nsecs': 1764889238428341475, 'commit_timestamp_nsecs': None, 'custom_metadata': {}} to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/_CHECKPOINT_METADATA (188939:checkpoint.py:245)
-15:04:17.441 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (188939:array_metadata_store.py:362)
-15:04:17.447 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/train_state.orbax-checkpoint-tmp-3 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/train_state (188939:atomicity.py:289)
-15:04:17.449 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (188939:array_metadata_store.py:362)
-15:04:17.452 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/params.orbax-checkpoint-tmp-2 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0/params (188939:atomicity.py:289)
-15:04:17.453 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200.orbax-checkpoint-tmp-0 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200 (188939:atomicity.py:289)
-15:04:17.453 [I] [process=0][thread=async_save] Finished saving checkpoint (finalized tmp dir) to `/mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200`. (188939:atomicity.py:573)
-15:04:17.454 [I] Finished asynchronous save (blocking + background) in 219.03 seconds to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/200 (188939:async_checkpointer.py:412)
-15:04:17.454 [I] [process=0][thread=async_save] Background save thread done.                      (188939:async_checkpointer.py:143)
-15:04:17.454 [I] [process=0][thread=save_finalize] Done with waiting for background save thread=async_save. (188939:async_checkpointer.py:266)
-15:04:17.454 [I] [process=0][thread=save_finalize] No errors found in background save thread=async_save. (188939:async_checkpointer.py:276)
-15:04:17.454 [I] [process=0][thread=save_finalize][step=200] CheckpointManager Save Finalize is syncing with other hosts... (188939:checkpoint_manager.py:2095)
-15:04:17.454 [I] [process=0][thread=save_finalize][step=200] CheckpointManager Save Finalize is done on all hosts. (188939:checkpoint_manager.py:2110)
-Step 300: grad_norm=0.1536, loss=0.0138, param_norm=1802.3864                                                                                        
-100%|█████████████████████████████████████████████████████████████████████████████████████████████████████████████▋| 399/400 [24:28<00:03,  3.15s/it]15:14:29.521 [I] [process=0][thread=MainThread][wait_until_finished] No Save Finalize thread to wait for. Returning. (188939:checkpoint_manager.py:1987)
-15:14:29.521 [I] [process=0] Saving checkpoint at step 399                                        (188939:checkpoint_manager.py:1408)
-15:14:29.522 [I] [process=0] Started async saving checkpoint to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399. (188939:async_checkpointer.py:439)
-15:14:29.527 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4 (188939:atomicity.py:144)
-15:14:29.534 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/assets.orbax-checkpoint-tmp-5 (188939:atomicity.py:144)
-15:14:29.534 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/params.orbax-checkpoint-tmp-6 (188939:atomicity.py:144)
-15:14:29.535 [I] Creating tmp directory /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/train_state.orbax-checkpoint-tmp-7 (188939:atomicity.py:144)
-15:14:29.557 [I] Transferring arrays to host memory with options: use_replica_parallel=True, enable_pinned_host_transfer=False (188939:replica_slices.py:341)
-15:14:34.058 [I] Transferring arrays to host memory with options: use_replica_parallel=True, enable_pinned_host_transfer=False (188939:replica_slices.py:341)
-15:14:34.059 [I] Array name: 'params.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:14:34.064 [I] Array name: 'params.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:14:34.072 [I] [process=0][thread=array_type_handler] Wrote 51 array_metadata.ArrayMetadata to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/params.orbax-checkpoint-tmp-6/array_metadatas/process_0 (188939:array_metadata_store.py:198)
-15:15:11.716 [I] Array name: 'params.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:15:11.716 [I] [process=0] /jax/checkpoint/write/blocking_bytes_per_sec: 303.2 MiB/s (total bytes: 12.5 GiB) (time elapsed: 42 seconds) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:15:11.717 [I] Array name: 'params.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:15:11.718 [I] Array name: 'opt_state.1.0.mu.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:15:11.719 [I] Array name: 'opt_state.1.0.mu.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:15:11.719 [I] Array name: 'opt_state.1.0.nu.PaliGemma.llm.layers.mlp.gating_einsum.value', global shape: (18, 2, 2048, 16384), write shape: (18, 2, 2048, 16384), chosen chunk shape: (18, 2, 2048, 4096) (188939:tensorstore_utils.py:408)
-15:15:11.719 [I] Array name: 'opt_state.1.0.nu.PaliGemma.llm.layers.mlp.linear.value', global shape: (18, 16384, 2048), write shape: (18, 16384, 2048), chosen chunk shape: (18, 8192, 2048) (188939:tensorstore_utils.py:408)
-15:15:11.728 [I] [process=0] /jax/checkpoint/write/blocking_bytes_per_sec: 909.4 MiB/s (total bytes: 37.5 GiB) (time elapsed: 42 seconds) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:15:11.741 [I] [process=0][thread=async_save] Background save thread started.                   (188939:async_checkpointer.py:77)
-15:15:11.742 [I] Finished blocking save in 42.22 seconds. Continuing to save asynchronously to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399. (188939:async_checkpointer.py:548)
-15:15:11.743 [I] Preserving Checkpoint[step=200 | time=2025-12-04 23:04:06.462943+00:00]: (Reason: on keep_period=100). (188939:checkpoint_manager.py:1949)
-15:15:11.743 [I] [process=0][thread=MainThread][step=399] Starting CheckpointManager Save Finalize thread=save_finalize (188939:checkpoint_manager.py:1453)
-15:15:11.744 [I] [process=0][thread=save_finalize] Waiting for background save thread=async_save. (188939:async_checkpointer.py:258)
-15:15:11.744 [I] {'step': 399, 'event_type': 'save', 'directory': '/mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0', 'reached_preemption': False, 'preemption_received_at': None, 'synchronous': False, 'wait_for_prev_start_time': 1764890069.5211914, 'wait_for_prev_duration_secs': 0.0002512931823730469, 'checkpointer_blocking_start_time': 1764890069.5217223, 'checkpointer_blocking_duration_secs': 42.22137236595154, 'get_old_steps_start_time': 1764890111.743111, 'get_old_steps_duration_secs': 0.00020003318786621094, 'checkpoint_manager_blocking_start_time': 1764890069.5210843, 'checkpoint_manager_blocking_duration_secs': 42.223132848739624} (188939:standard_logger.py:34)
-100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 400/400 [25:13<00:00,  3.78s/it]
-15:15:11.745 [I] Waiting for checkpoint manager to finish                                         (188939:train_auto.py:346)
-15:15:11.745 [I] [process=0][thread=MainThread][step=399][wait_until_finished] Waiting for Save Finalize thread (save_finalize) to complete. (188939:checkpoint_manager.py:1998)
-15:15:11.751 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 302.9 MiB/s (total bytes: 12.5 GiB) (time elapsed: 42 seconds) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:15:11.775 [I] [process=0][thread=array_type_handler] Wrote 156 array_metadata.ArrayMetadata to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/train_state.orbax-checkpoint-tmp-7/array_metadatas/process_0 (188939:array_metadata_store.py:198)
-15:15:22.767 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 720.8 MiB/s (total bytes: 37.5 GiB) (time elapsed: 53 seconds) (per-host) (188939:base_pytree_checkpoint_handler.py:114)
-15:15:22.767 [I] [process=0][thread=async_save] 5 Handler Commit operations completed.            (188939:async_checkpointer.py:87)
-15:15:22.767 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/assets.orbax-checkpoint-tmp-5 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/assets (188939:atomicity.py:289)
-15:15:22.770 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (188939:array_metadata_store.py:362)
-15:15:22.775 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/train_state.orbax-checkpoint-tmp-7 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/train_state (188939:atomicity.py:289)
-15:15:22.777 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (188939:array_metadata_store.py:362)
-15:15:22.780 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/params.orbax-checkpoint-tmp-6 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4/params (188939:atomicity.py:289)
-15:15:22.781 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399.orbax-checkpoint-tmp-4 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399 (188939:atomicity.py:289)
-15:15:22.781 [I] [process=0][thread=async_save] Finished saving checkpoint (finalized tmp dir) to `/mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399`. (188939:atomicity.py:573)
-15:15:22.781 [I] Finished asynchronous save (blocking + background) in 53.26 seconds to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/pi05_h1_auto_lift_lid_epoch0/399 (188939:async_checkpointer.py:412)
-15:15:22.782 [I] [process=0][thread=async_save] Background save thread done.                      (188939:async_checkpointer.py:143)
-15:15:22.782 [I] [process=0][thread=save_finalize] Done with waiting for background save thread=async_save. (188939:async_checkpointer.py:266)
-15:15:22.782 [I] [process=0][thread=save_finalize] No errors found in background save thread=async_save. (188939:async_checkpointer.py:276)
-15:15:22.782 [I] [process=0][thread=save_finalize][step=399] CheckpointManager Save Finalize is syncing with other hosts... (188939:checkpoint_manager.py:2095)
-15:15:22.782 [I] [process=0][thread=save_finalize][step=399] CheckpointManager Save Finalize is done on all hosts. (188939:checkpoint_manager.py:2110)
-15:15:22.782 [I] [process=0][thread=MainThread][step=399][wait_until_finished] Done waiting for Save Finalize thread (save_finalize) running at step=399. (188939:checkpoint_manager.py:2010)
+100%|██████████████████████████████████████████████████████████████████████████████████████████████████████████████| 300/300 [26:08<00:00,  5.23s/it]
+00:11:52.676 [I] Waiting for checkpoint manager to finish                                         (268286:train_auto.py:346)
+00:11:52.676 [I] [process=0][thread=MainThread][step=299][wait_until_finished] Waiting for Save Finalize thread (save_finalize) to complete. (268286:checkpoint_manager.py:1998)
+00:11:52.694 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 25.2 MiB/s (total bytes: 12.5 GiB) (time elapsed: 8 minutes) (per-host) (268286:base_pytree_checkpoint_handler.py:114)
+00:11:52.898 [I] [process=0][thread=array_type_handler] Wrote 156 array_metadata.ArrayMetadata to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/train_state.orbax-checkpoint-tmp-3/array_metadatas/process_0 (268286:array_metadata_store.py:198)
+00:12:07.547 [I] [process=0] /jax/checkpoint/write/bytes_per_sec: 73.6 MiB/s (total bytes: 37.5 GiB) (time elapsed: 8 minutes) (per-host) (268286:base_pytree_checkpoint_handler.py:114)
+00:12:07.554 [I] [process=0][thread=async_save] 5 Handler Commit operations completed.            (268286:async_checkpointer.py:87)
+00:12:07.558 [I] Read Metadata={'item_handlers': None, 'metrics': {}, 'performance_metrics': {}, 'init_timestamp_nsecs': 1764921805806846962, 'commit_timestamp_nsecs': None, 'custom_metadata': {}} from /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/_CHECKPOINT_METADATA (268286:checkpoint.py:226)
+00:12:07.563 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/assets.orbax-checkpoint-tmp-1 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/assets (268286:atomicity.py:289)
+00:12:07.565 [I] Updated Metadata={'item_handlers': {'assets': 'openpi.training.checkpoints.CallbackHandler', 'params': 'orbax.checkpoint._src.handlers.pytree_checkpoint_handler.PyTreeCheckpointHandler', 'train_state': 'orbax.checkpoint._src.handlers.pytree_checkpoint_handler.PyTreeCheckpointHandler'}, 'metrics': {}, 'performance_metrics': {}, 'init_timestamp_nsecs': 1764921805806846962, 'commit_timestamp_nsecs': None, 'custom_metadata': {}} to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/_CHECKPOINT_METADATA (268286:checkpoint.py:245)
+00:12:07.583 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (268286:array_metadata_store.py:362)
+00:12:07.597 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/train_state.orbax-checkpoint-tmp-3 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/train_state (268286:atomicity.py:289)
+00:12:07.600 [I] [process=0][thread=async_save] Skipped cross-host ArrayMetadata validation because only one process is found: process_index=0. (268286:array_metadata_store.py:362)
+00:12:07.604 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/params.orbax-checkpoint-tmp-2 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0/params (268286:atomicity.py:289)
+00:12:07.605 [I] Renaming /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299.orbax-checkpoint-tmp-0 to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299 (268286:atomicity.py:289)
+00:12:07.606 [I] [process=0][thread=async_save] Finished saving checkpoint (finalized tmp dir) to `/mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299`. (268286:atomicity.py:573)
+00:12:07.606 [I] Finished asynchronous save (blocking + background) in 521.81 seconds to /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/299 (268286:async_checkpointer.py:412)
+00:12:07.607 [I] [process=0][thread=async_save] Background save thread done.                      (268286:async_checkpointer.py:143)
+00:12:07.609 [I] [process=0][thread=save_finalize] Done with waiting for background save thread=async_save. (268286:async_checkpointer.py:266)
+00:12:07.609 [I] [process=0][thread=save_finalize] No errors found in background save thread=async_save. (268286:async_checkpointer.py:276)
+00:12:07.611 [I] [process=0][thread=save_finalize][step=299] CheckpointManager Save Finalize is syncing with other hosts... (268286:checkpoint_manager.py:2095)
+00:12:07.611 [I] [process=0][thread=save_finalize][step=299] CheckpointManager Save Finalize is done on all hosts. (268286:checkpoint_manager.py:2110)
+00:12:07.612 [I] [process=0][thread=MainThread][step=299][wait_until_finished] Done waiting for Save Finalize thread (save_finalize) running at step=299. (268286:checkpoint_manager.py:2010)
 wandb: 
-wandb: 🚀 View run pi05_h1_auto_lift_lid_epoch0 at: https://wandb.ai/yuxinchen/openpi/runs/4p2ifjql
-wandb: Find logs at: wandb/run-20251204_144928-4p2ifjql/logs
+wandb: 🚀 View run e2e_lift_lid/epoch_0 at: https://wandb.ai/yuxinchen/openpi/runs/6d17ntbl
+wandb: Find logs at: wandb/run-20251204_234521-6d17ntbl/logs
 
 ========================================================
   > Training complete!
 ========================================================
-Checkpoint saved to: checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/
+Checkpoint saved to: checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/train_state/
 ========================================================
-[INFO] Training complete. Checkpoint: /home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/
+[INFO] Training complete. Checkpoint: /home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/train_state/
 [INFO] State saved: epoch=0, status=epoch_complete
 
 ========================================================
@@ -112,11 +41,11 @@ Checkpoint saved to: checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/
 ========================================================
   Starting Policy Server
 ========================================================
-[INFO] Checkpoint: /home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/
-[INFO] Data dir: /home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/lift_lid/epoch_0
+[INFO] Checkpoint: /home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/train_state/
+[INFO] Data dir: /home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/e2e_lift_lid/epoch_0
 [INFO] Port: 8000
 [INFO] Starting server...
-[INFO] Server started with PID 196784
+[INFO] Server started with PID 273081
 [INFO] Log: /home/yuxin/Projects/openpi/logs/server_epoch1.log
 [INFO] Waiting for server to be ready...
   Waiting... 8/120s[ERROR] Server process died. Check logs: /home/yuxin/Projects/openpi/logs/server_epoch1.log
@@ -139,10 +68,9 @@ Checkpoint saved to: checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/
                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "/home/yuxin/Projects/openpi/.venv/lib/python3.11/site-packages/orbax/checkpoint/_src/handlers/base_pytree_checkpoint_handler.py", line 926, in _read_metadata_file
     raise FileNotFoundError(
-FileNotFoundError: Metadata file (named _METADATA) does not exist at /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_0/train_state/params.
+FileNotFoundError: Metadata file (named _METADATA) does not exist at /mnt/ssd1/yuxin/openpi/checkpoints/pi05_h1_auto/e2e_lift_lid/epoch_0/train_state/params.
 [ERROR] Failed to start server
 
 [INFO] Cleaning up...
 [INFO] State saved: epoch=1, status=interrupted
 [INFO] Cleanup complete.
-(openpi) (base) yuxin@msc-server-System-Product-Name:~/Projects/openpi$ 

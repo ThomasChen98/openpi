@@ -492,18 +492,38 @@ train_epoch() {
     
     ./scripts/train_h1_local.sh $train_args
     
-    # Find the latest checkpoint
+    # Find the latest checkpoint (only match numeric step directories like 299/, 599/, etc.)
     local checkpoint_epoch_dir="$CHECKPOINT_BASE_DIR/epoch_$EPOCH"
-    if [ -d "$checkpoint_epoch_dir" ]; then
-        LAST_CHECKPOINT=$(ls -d "$checkpoint_epoch_dir"/*/ 2>/dev/null | sort -V | tail -1)
-    fi
+    log_info "Looking for checkpoints in: $checkpoint_epoch_dir"
     
-    if [ -z "$LAST_CHECKPOINT" ] || [ ! -d "$LAST_CHECKPOINT" ]; then
-        log_error "No checkpoint found after training!"
+    if [ -d "$checkpoint_epoch_dir" ]; then
+        log_info "Directory contents:"
+        ls -la "$checkpoint_epoch_dir" 2>/dev/null || true
+        
+        # Find the highest numbered step directory
+        local found_checkpoint=$(ls -d "$checkpoint_epoch_dir"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
+        
+        if [ -n "$found_checkpoint" ] && [ -d "$found_checkpoint" ]; then
+            # Remove trailing slash for consistency
+            LAST_CHECKPOINT="${found_checkpoint%/}"
+            log_info "Found checkpoint: $LAST_CHECKPOINT"
+        else
+            log_error "No numeric checkpoint directories found!"
+            log_error "Looking for pattern: $checkpoint_epoch_dir/[0-9]*/"
+            return 1
+        fi
+    else
+        log_error "Checkpoint directory does not exist: $checkpoint_epoch_dir"
         return 1
     fi
     
-    log_info "Training complete. Checkpoint: $LAST_CHECKPOINT"
+    # Verify the checkpoint has required files
+    if [ ! -d "$LAST_CHECKPOINT/params" ]; then
+        log_error "Checkpoint missing params directory: $LAST_CHECKPOINT/params"
+        return 1
+    fi
+    
+    log_info "Training complete. Valid checkpoint: $LAST_CHECKPOINT"
 }
 
 # =============================================================================
@@ -547,18 +567,34 @@ determine_checkpoint() {
         local prev_epoch=$((EPOCH - 1))
         local prev_checkpoint_dir="$CHECKPOINT_BASE_DIR/epoch_$prev_epoch"
         if [ -d "$prev_checkpoint_dir" ]; then
-            checkpoint=$(ls -d "$prev_checkpoint_dir"/*/ 2>/dev/null | sort -V | tail -1)
+            # Only match numeric directories (step numbers like 299, 599, etc.)
+            local found=$(ls -d "$prev_checkpoint_dir"/[0-9]*/ 2>/dev/null | sort -V | tail -1)
+            if [ -n "$found" ]; then
+                # Remove trailing slash for consistency
+                checkpoint="${found%/}"
+            fi
         fi
     fi
     
-    # Fall back to LAST_CHECKPOINT from state
-    if [ -z "$checkpoint" ] && [ -n "$LAST_CHECKPOINT" ] && [ -d "$LAST_CHECKPOINT" ]; then
-        checkpoint="$LAST_CHECKPOINT"
+    # Fall back to LAST_CHECKPOINT from state (remove trailing slash if present)
+    if [ -z "$checkpoint" ] && [ -n "$LAST_CHECKPOINT" ]; then
+        local cleaned="${LAST_CHECKPOINT%/}"
+        if [ -d "$cleaned" ]; then
+            checkpoint="$cleaned"
+        fi
     fi
     
     # Fall back to BASE_CHECKPOINT
-    if [ -z "$checkpoint" ] && [ -n "$BASE_CHECKPOINT" ] && [ "$BASE_CHECKPOINT" != "null" ] && [ -d "$BASE_CHECKPOINT" ]; then
-        checkpoint="$BASE_CHECKPOINT"
+    if [ -z "$checkpoint" ] && [ -n "$BASE_CHECKPOINT" ] && [ "$BASE_CHECKPOINT" != "null" ]; then
+        local cleaned="${BASE_CHECKPOINT%/}"
+        if [ -d "$cleaned" ]; then
+            checkpoint="$cleaned"
+        fi
+    fi
+    
+    # Final validation - check for params directory
+    if [ -n "$checkpoint" ] && [ ! -d "$checkpoint/params" ]; then
+        log_warn "Checkpoint $checkpoint missing params directory, may be invalid"
     fi
     
     echo "$checkpoint"
@@ -634,7 +670,16 @@ run_training_phase() {
     save_state "training"
     train_epoch "$checkpoint"
     
+    # Verify LAST_CHECKPOINT was set correctly
+    log_info "After training, LAST_CHECKPOINT = $LAST_CHECKPOINT"
+    
+    if [ -z "$LAST_CHECKPOINT" ] || [ ! -d "$LAST_CHECKPOINT" ]; then
+        log_error "LAST_CHECKPOINT not set correctly after training!"
+        return 1
+    fi
+    
     save_state "epoch_complete"
+    log_info "Saved state with checkpoint: $LAST_CHECKPOINT"
 }
 
 cleanup() {
