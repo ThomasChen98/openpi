@@ -1,50 +1,79 @@
-# H1 Control Client Setup
+# H1-2 Control Client
 
-## Quick Start
+Control and training clients for the Unitree H1-2 humanoid robot with OpenPi policies.
 
-### 1. Start Robot Client (on client computer)
+## Documentation
 
-In one terminal, establish SSH tunnel to P6000 server:
+Full documentation is in the `docs/` folder:
 
+| Guide | Description |
+|-------|-------------|
+| [Teleoperation Pipeline](../../docs/TELEOPERATION_PIPELINE.md) | VR data collection & policy inference with `h1_remote_client.py` |
+| [Auto-Training Pipeline](../../docs/AUTO_TRAINING_PIPELINE.md) | Human-in-the-loop training with `h1_execution_client.py` |
+| [Pre-Training & Validation](../../docs/PRETRAINING_VALIDATION_PIPELINE.md) | Offline training & visualization with `h1_policy_viz_client.py` |
+
+## Quick Reference
+
+### Key Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `h1_remote_client.py` | Policy inference client (connects to server, executes on robot) |
+| `h1_execution_client.py` | Auto-training client (state machine for iterative learning) |
+| `h1_policy_viz_client.py` | Web-based visualizer for policy validation |
+| `training_config.yaml` | Configuration for auto-training pipeline |
+
+### Directory Structure
+
+```
+h1_control_client/
+├── h1_remote_client.py       # Policy execution
+├── h1_execution_client.py    # Auto-training
+├── h1_policy_viz_client.py   # Visualization
+├── training_config.yaml      # Configuration
+├── robot_control/            # IK solver & robot controller
+├── utils/                    # Episode writer, data tools
+├── assets/                   # URDF files & meshes
+└── libraries/                # Unitree SDK
+```
+
+### Common Commands
+
+**Policy Inference:**
 ```bash
-ssh -R 5007:localhost:5007 -L 8080:localhost:8080 P6000
+python h1_remote_client.py --server-host localhost --server-port 8000
 ```
 
-In another terminal on the client computer, navigate to `openpi/examples/h1_control_client`:
-
+**Auto-Training (robot side):**
 ```bash
-conda activate h1_client
-python3 h1_remote_client.py --listen-mode
+python h1_execution_client.py --config training_config.yaml
 ```
 
-### 2. Start image service
-
-In another terminal on the P6000 server, 
-```bah
-python3 image_server image_server.py
-```
-
-### 3. Start Policy Visualization (on P6000 server)
-
-In a new terminal, navigate to `openpi`:
-
+**Visualization:**
 ```bash
-source .venv/bin/activate
-./run_policy_viz.sh --robot-execution
+python h1_policy_viz_client.py --hdf5-path data.hdf5 --host localhost --port 8000
 ```
 
-### 4. Start Policy Server (on P6000 server)
+## Network Setup
 
-In another terminal:
+| Device | IP Address |
+|--------|------------|
+| Robot (Unitree) | 192.168.123.163 |
+| Left Hand | 192.168.123.211 |
+| Right Hand | 192.168.123.210 |
 
+**SSH Tunnel (to GPU server):**
 ```bash
-uv run scripts/serve_policy.py policy:checkpoint \
-  --policy.config=pi05_h1_finetune \
-  --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_box_activate_h50_with_lan/999
+ssh -L 8000:localhost:8000 -L 8080:localhost:8080 P6000
 ```
 
-## Notes
+## Configuration
 
-- The client computer and P6000 server must be connected via SSH tunnel
-- Start the robot client first, then the policy viz, then the policy server
-- Access the visualization at http://localhost:8081
+Edit `training_config.yaml` for:
+- Task name and description
+- Policy checkpoint paths
+- Training parameters
+- Server host/port
+- Data paths and rsync settings
+
+See [Auto-Training Pipeline](../../docs/AUTO_TRAINING_PIPELINE.md) for full configuration options.
