@@ -200,6 +200,9 @@ class H1TrainingClient:
         self.current_action_chunk = None  # Current action chunk from policy
         self.action_chunk_idx = 0  # Index into current action chunk
         
+        # Position hold state (for labeling phase)
+        self._hold_position_background = False
+        
         # Reset pose for robot (14 joints: left arm 7 + right arm 7)
         # This pose is used at the start of execution and after labeling
         self.reset_pose = np.array([
@@ -902,7 +905,7 @@ class H1TrainingClient:
             logger.info(f"Recorded {self.episode_writer.get_current_length()} frames")
     
     def run_labeling_state(self):
-        """LABELING state: Stop recording, prompt for advantage label, and reset robot"""
+        """LABELING state: Stop recording, prompt for advantage label, then choose reset or damping"""
         frame_count = 0
         if self.recording_active and self.episode_writer:
             frame_count = self.episode_writer.get_current_length()
@@ -918,29 +921,70 @@ class H1TrainingClient:
         # Stop adding frames but don't save yet
         if self.recording_active:
             self.recording_active = False
-            logger.info(f" Stopped recording: {frame_count} frames captured")
+            logger.info(f"Stopped recording: {frame_count} frames captured")
+        
+        # Hold current position with gravity compensation while waiting for input
+        self._hold_position_background = True
+        hold_thread = threading.Thread(target=self._hold_current_position, daemon=True)
+        hold_thread.start()
         
         with self.keyboard:
             key = self.keyboard.wait_for_key({'g', 'b'}, "Label this episode (g/b): ")
             
             if key == 'g':
                 self.current_advantage_label = True
-                logger.info(" Episode labeled as GOOD (Advantage=True)")
+                logger.info("Episode labeled as GOOD (Advantage=True)")
             else:
                 self.current_advantage_label = False
-                logger.info(" Episode labeled as BAD (Advantage=False)")
+                logger.info("Episode labeled as BAD (Advantage=False)")
             
             # Set the advantage label on the episode writer
             if self.episode_writer:
                 self.episode_writer.set_advantage_label(self.current_advantage_label)
+            
+            # Now choose what to do with the robot
+            print("\n" + "-" * 60)
+            print("  Robot is holding position. Choose next action:")
+            print("    'r' - Reset to starting pose")
+            print("    'd' - Enter damping mode (manual adjustment)")
+            print("-" * 60)
+            
+            action_key = self.keyboard.wait_for_key({'r', 'd'}, "Your choice (r/d): ")
         
-        # self.state = TrainingState.DAMPING
-        # Reset robot to starting pose (instead of damping mode)
-        print("  Resetting robot to starting pose...")
-        self.reset_to_pose(duration=2.0)
+        # Stop holding position
+        self._hold_position_background = False
+        hold_thread.join(timeout=0.5)
         
-        # Skip DAMPING state, go directly to SAVING
-        self.state = TrainingState.SAVING
+        if action_key == 'r':
+            print("  Resetting robot to starting pose...")
+            self.reset_to_pose(duration=2.0)
+            self.state = TrainingState.SAVING
+        else:
+            print("  Entering damping mode...")
+            self.state = TrainingState.DAMPING
+    
+    def _hold_current_position(self):
+        """Background thread to hold robot at current position with gravity compensation"""
+        control_rate = 50  # Hz
+        control_period = 1.0 / control_rate
+        
+        while self._hold_position_background and self.running:
+            try:
+                loop_start = time.time()
+                
+                current_q = self.robot.get_current_dual_arm_q()
+                gravity_torques = self.compute_gravity_compensation(current_q)
+                self.robot.ctrl_dual_arm(
+                    q_target=current_q,
+                    tauff_target=gravity_torques
+                )
+                
+                elapsed = time.time() - loop_start
+                sleep_time = max(0, control_period - elapsed)
+                time.sleep(sleep_time)
+            except Exception as e:
+                logger.warning(f"Hold position error: {e}")
+                break
     
     def run_damping_state(self):
         """DAMPING state: Robot in damping mode for safe adjustment (NO recording)"""
@@ -1110,6 +1154,8 @@ class H1TrainingClient:
         print("    's' - Stop policy execution")
         print("    'g' - Label episode as GOOD (Advantage=True)")
         print("    'b' - Label episode as BAD (Advantage=False)")
+        print("    'r' - Reset robot to starting pose (after labeling)")
+        print("    'd' - Enter damping mode for manual adjustment")
         print("    'e' - End damping mode, save episode")
         print("    'y' - Yes/confirm")
         print("    'n' - No/decline")
