@@ -14,8 +14,8 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "e2e_lift_lid"                              # Short name for directories/checkpoints
-  description: "Lift the lid off the bowl"     # Full description used as prompt
+  name: "lift_lid"                              # Short name for directories/checkpoints
+  description: "Lift the lid off the bowl and place it on the table"     # Full description used as prompt
   
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
@@ -34,7 +34,7 @@ training:
   keep_period: 300                              # Keep period (in epochs)
   num_repeats: 1                                # Times to repeat data during training
   labeling_mode: "human_labeling"               # none, human_labeling, reward_labeling
-  gpu_id: 1                                     # Which GPU to use
+  gpu_id: 0                                     # Which GPU to use
 
 # =============================================================================
 # SERVER CONFIGURATION - Policy server settings
