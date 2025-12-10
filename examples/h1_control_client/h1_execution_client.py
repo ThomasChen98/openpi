@@ -572,7 +572,7 @@ class H1TrainingClient:
                     "cam_right_wrist": right_image,
                 },
                 "state": current_q,
-                "prompt": f"{task_description}, Advantage=True",
+                "prompt": f"{task_description}, Advantage=True", # Always prompt Advantage=True for policy
             }
         else:
             # Format for recording (HDF5) - simpler structure

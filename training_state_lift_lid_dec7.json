@@ -1,10 +1,10 @@
 {
-  "task_name": "lift_lid",
+  "task_name": "lift_lid_dec7",
   "task_description": "Lift the lid off the bowl and place it on the table",
   "config_name": "pi05_h1_auto",
-  "epoch": 2,
-  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid/epoch_1/299",
+  "epoch": 5,
+  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid_dec7/epoch_4/999",
   "base_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999",
   "status": "collecting_data",
-  "updated_at": "2025-12-06T02:43:24-08:00"
+  "updated_at": "2025-12-09T19:08:32-08:00"
 }
