@@ -37,9 +37,13 @@ def process_hdf5_to_mp4(
     
     with h5py.File(hdf5_path, 'r') as f:
         # Check if ego_cam exists
-        ego_cam_path = '/observations/images/ego_cam'
-        if ego_cam_path not in f:
-            print(f"  Warning: ego_cam not found in {hdf5_path.name}")
+        ego_cam_path = '/observations/images/'
+        if 'cam_head' in f['/observations/images']:
+            ego_cam_path = '/observations/images/cam_head'
+        elif 'ego_cam' in f['/observations/images']:
+            ego_cam_path = '/observations/images/ego_cam'
+        else:
+            print(f"  Warning: cam_head or ego_cam not found in {hdf5_path.name}")
             return
         
         dataset = f[ego_cam_path]
@@ -150,7 +154,18 @@ def process_directory(
     
     # Process each file
     for hdf5_file in hdf5_files:
-        mp4_file = output_path / f"{hdf5_file.stem}.mp4"
+        # Check if 'advantage' exists in the HDF5 file attributes and get its value
+        with h5py.File(hdf5_file, 'r') as f:
+            has_advantage = 'advantage' in f.attrs
+            if has_advantage:
+                advantage_value = bool(f.attrs['advantage'])
+        
+        # Append '_advantage_true' or '_advantage_false' to filename if advantage exists
+        stem = hdf5_file.stem
+        if has_advantage:
+            stem = f"{stem}_advantage_{str(advantage_value).lower()}"
+        
+        mp4_file = output_path / f"{stem}.mp4"
         process_hdf5_to_mp4(hdf5_file, mp4_file, fps, apply_transforms)
     
     print(f"\n✓ Completed! Processed {len(hdf5_files)} files")
@@ -171,10 +186,10 @@ def main(
     
     Examples:
         # Process single directory
-        python hdf5_to_mp4.py ../h1_data_processed/box_action/bad
+        python hdf5_to_mp4.py --input_dirs ../h1_data_processed/box_action/bad
         
         # Process multiple directories
-        python hdf5_to_mp4.py ../h1_data_processed/box_action/bad ../h1_data_processed/box_action/good
+        python hdf5_to_mp4.py --input_dirs ../h1_data_processed/box_action/bad ../h1_data_processed/box_action/good
     """
     for input_dir in input_dirs:
         process_directory(input_dir, fps=fps, apply_transforms=apply_transforms)
