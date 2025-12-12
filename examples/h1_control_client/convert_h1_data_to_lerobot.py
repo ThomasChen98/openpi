@@ -159,6 +159,10 @@ def main(
     push_to_hub: bool = False,
     save_dir: str = None,
     labeling_mode: LabelingMode = "none",
+    reward_task_instruction: str = None,
+    reward_max_frames: int = 30,
+    reward_image_rotation: int = 0,
+    reward_advantage_threshold: float = 0.3,
 ):
     """Convert H1 HDF5 data to LeRobot format.
     
@@ -171,16 +175,61 @@ def main(
         labeling_mode: How to handle advantage labeling:
             - "none": No advantage labeling (task description only)
             - "human_labeling": Read advantage from HDF5 metadata
-            - "reward_labeling": Use reward function (not implemented)
+            - "reward_labeling": Use embodied reward model to label advantage
+        reward_task_instruction: Detailed task instruction for reward model (required for reward_labeling)
+        reward_max_frames: Maximum frames to sample for reward labeling
+        reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
+        reward_advantage_threshold: Percentile threshold for advantage labeling (0.0-1.0)
+                                   e.g., 0.3 means top 30% episodes get Advantage=True
     """
     # Validate labeling mode
     if labeling_mode == "reward_labeling":
-        raise NotImplementedError("reward_labeling mode is not yet implemented")
+        if not reward_task_instruction:
+            print("Warning: reward_task_instruction not provided, using task_description")
+            reward_task_instruction = task_description
     
-    use_advantage = labeling_mode == "human_labeling"
+    use_advantage = labeling_mode in ["human_labeling", "reward_labeling"]
     if use_advantage:
         print(f"Using advantage labeling mode: {labeling_mode}")
         print("  Prompts will be formatted as: '{task_description}, Advantage=True/False'")
+        
+    # Run reward labeling if needed
+    reward_labels = {}
+    if labeling_mode == "reward_labeling":
+        print("\nRunning reward labeling...")
+        print(f"  Task instruction: {reward_task_instruction}")
+        print(f"  Max frames: {reward_max_frames}")
+        print(f"  Image rotation: {reward_image_rotation}")
+        print(f"  Advantage threshold: {reward_advantage_threshold:.1%} (top {reward_advantage_threshold:.1%} episodes)")
+        
+        # Import reward labeling
+        try:
+            from embodied_reward_labeling import label_episodes
+        except ImportError:
+            print("Error: Could not import embodied_reward_labeling module")
+            print("Make sure embodied_reward_labeling.py is in the same directory")
+            raise
+        
+        # Determine the directory to label
+        data_path = Path(data_dir)
+        if data_path.is_file():
+            label_dir = data_path.parent
+        else:
+            label_dir = data_path
+        
+        # Run labeling
+        reward_labels = label_episodes(
+            data_dir=str(label_dir),
+            task_instruction=reward_task_instruction,
+            max_frames=reward_max_frames,
+            image_rotation=reward_image_rotation,
+            advantage_threshold=reward_advantage_threshold,
+            use_reflection=True,
+            max_workers=64
+        )
+        
+        print(f"\nReward labeling complete. Labeled {len(reward_labels)} episodes.")
+    
     # Determine if data_dir is a file or directory
     data_path = Path(data_dir)
     
@@ -256,7 +305,21 @@ def main(
     
     for hdf5_file in hdf5_files:
         print(f"Loading {hdf5_file.name}...")
-        episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=use_advantage)
+        
+        # For reward labeling, override advantage with reward label
+        if labeling_mode == "reward_labeling":
+            episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=False)
+            
+            # Get advantage from reward labels
+            if hdf5_file.name in reward_labels:
+                episode_data["advantage"] = reward_labels[hdf5_file.name].get("advantage", False)
+                print(f"  Reward label: Advantage={episode_data['advantage']} "
+                      f"(score={reward_labels[hdf5_file.name].get('corrected_total_reward', 0):.1f})")
+            else:
+                print(f"  Warning: No reward label found, defaulting to False")
+                episode_data["advantage"] = False
+        else:
+            episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=use_advantage)
         
         # Track advantage statistics
         if use_advantage:

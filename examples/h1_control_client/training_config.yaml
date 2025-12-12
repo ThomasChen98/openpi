@@ -14,7 +14,7 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "lift_lid_dec7"                              # Short name for directories/checkpoints
+  name: "lift_lid_reward_dec11"                              # Short name for directories/checkpoints
   description: "Lift the lid off the bowl and place it on the table"     # Full description used as prompt
   
 # =============================================================================
@@ -22,7 +22,7 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"                   # Policy config (pi05_h1_auto, pi05_h1_finetune, etc.)
-  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/lift_lid_dec7/epoch_2/600"
+  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999"
   # ^ Pretrained checkpoint for epoch 0. Leave empty to train from scratch.
 
 # =============================================================================
@@ -33,8 +33,26 @@ training:
   save_interval: 1000                            # Save interval (in epochs)
   keep_period: 1000                              # Keep period (in epochs)
   num_repeats: 2                                # Times to repeat data during training
-  labeling_mode: "human_labeling"               # none, human_labeling, reward_labeling
-  gpu_id: 1                                     # Which GPU to use
+  labeling_mode: "reward_labeling"               # none, human_labeling, reward_labeling
+  gpu_id: 0                                     # Which GPU to use
+
+# =============================================================================
+# REWARD LABELING CONFIGURATION - For reward_labeling mode
+# =============================================================================
+reward:
+  # Detailed task instruction for the VLM reward model
+  # Should include success criteria and failure conditions
+  task_instruction: |
+    Lift the lid on top of the bowl with both hands, move it steadily away from the bowl, and place it flat on the table.
+    The robot must use its two hands to do carefully put the lid on the table.
+    Very important: The task fails if the lid slips, flipped, drops, or is knocked off during lifting or placement.
+    The task fails if the lid is not placed flat on the table (e.g., still connected to the bowl).
+    The task fails if the hands of the robot are colliding with the bowl or the table.
+    If the task fails, all the frames after the failure should be scored 0.
+  
+  max_frames: 30                                # Maximum frames to sample for VLM
+  image_rotation: 0                             # Image rotation (0, 90, 180, 270)
+  advantage_threshold: 0.3                      # Percentile threshold (0.0-1.0): top 30% = Advantage=True
 
 # =============================================================================
 # SERVER CONFIGURATION - Policy server settings
@@ -80,7 +98,7 @@ recording:
 # =============================================================================
 pipeline:
   start_phase: "data_collection"                # data_collection or training
-  start_epoch: 5                                # Starting epoch number
+  start_epoch: 0                                # Starting epoch number
   auto_sync: true                               # Auto-sync after session ends
 
 

@@ -42,6 +42,22 @@ while [[ $# -gt 0 ]]; do
             CONFIG_NAME="$2"
             shift 2
             ;;
+        --reward-task-instruction)
+            REWARD_TASK_INSTRUCTION="$2"
+            shift 2
+            ;;
+        --reward-max-frames)
+            REWARD_MAX_FRAMES="$2"
+            shift 2
+            ;;
+        --reward-image-rotation)
+            REWARD_IMAGE_ROTATION="$2"
+            shift 2
+            ;;
+        --reward-advantage-threshold)
+            REWARD_ADVANTAGE_THRESHOLD="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -56,6 +72,12 @@ EPOCH_NUM="${EPOCH_NUM:-}"  # Empty means no epoch suffix
 LABELING_MODE="${LABELING_MODE:-none}"  # Options: none, human_labeling, reward_labeling
 NUM_REPEATS="${NUM_REPEATS:-1}"
 CONFIG_NAME="${CONFIG_NAME:-pi05_h1_auto}"
+
+# Reward labeling parameters (only used when LABELING_MODE=reward_labeling)
+REWARD_TASK_INSTRUCTION="${REWARD_TASK_INSTRUCTION:-}"
+REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
+REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
+REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
 
 # Base directories
 BASE_DATA_DIR="${BASE_DATA_DIR:-examples/h1_control_client/h1_data_processed}"
@@ -113,6 +135,16 @@ CONVERT_CMD="uv run examples/h1_control_client/convert_h1_data_to_lerobot.py \
 
 if [ "$LABELING_MODE" != "none" ]; then
     CONVERT_CMD="$CONVERT_CMD --labeling_mode $LABELING_MODE"
+    
+    # Add reward labeling parameters if in reward_labeling mode
+    if [ "$LABELING_MODE" = "reward_labeling" ]; then
+        if [ -n "$REWARD_TASK_INSTRUCTION" ]; then
+            CONVERT_CMD="$CONVERT_CMD --reward_task_instruction \"$REWARD_TASK_INSTRUCTION\""
+        fi
+        CONVERT_CMD="$CONVERT_CMD --reward_max_frames $REWARD_MAX_FRAMES"
+        CONVERT_CMD="$CONVERT_CMD --reward_image_rotation $REWARD_IMAGE_ROTATION"
+        CONVERT_CMD="$CONVERT_CMD --reward_advantage_threshold $REWARD_ADVANTAGE_THRESHOLD"
+    fi
 fi
 
 echo ""

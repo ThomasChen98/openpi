@@ -19,6 +19,9 @@ set -e
 # =============================================================================
 CONFIG_FILE="examples/h1_control_client/training_config.yaml"
 
+# Check if OPENAI_API_KEY is set when using reward_labeling
+# (will be checked later when needed)
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --config)
@@ -86,6 +89,12 @@ KEEP_PERIOD=$(yq -r '.training.keep_period // 100' "$CONFIG_FILE")
 NUM_REPEATS=$(yq -r '.training.num_repeats // 1' "$CONFIG_FILE")
 LABELING_MODE=$(yq -r '.training.labeling_mode // "human_labeling"' "$CONFIG_FILE")
 GPU_ID=$(yq -r '.training.gpu_id // 0' "$CONFIG_FILE")
+
+# Reward labeling (only used if labeling_mode is "reward_labeling")
+REWARD_TASK_INSTRUCTION=$(yq -r '.reward.task_instruction // ""' "$CONFIG_FILE")
+REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
+REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
+REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
 
 # Server
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
@@ -467,15 +476,42 @@ convert_epoch_data() {
     fi
     
     log_info "Converting $count episodes..."
+    log_info "Labeling mode: $LABELING_MODE"
     
-    ./scripts/convert_data.sh \
-        --task-name "$TASK_NAME" \
-        --task-description "$TASK_DESCRIPTION" \
-        --epoch "$EPOCH" \
-        --labeling-mode "$LABELING_MODE" \
-        --num-repeats "$NUM_REPEATS" \
-        --config-name "$CONFIG_NAME" \
-        --data-dir "$raw_dir"
+    # Build convert command
+    local convert_cmd="./scripts/convert_data.sh \
+        --task-name \"$TASK_NAME\" \
+        --task-description \"$TASK_DESCRIPTION\" \
+        --epoch \"$EPOCH\" \
+        --labeling-mode \"$LABELING_MODE\" \
+        --num-repeats \"$NUM_REPEATS\" \
+        --config-name \"$CONFIG_NAME\" \
+        --data-dir \"$raw_dir\""
+    
+    # Add reward labeling parameters if in reward_labeling mode
+    if [ "$LABELING_MODE" = "reward_labeling" ]; then
+        # Check if OPENAI_API_KEY is set
+        if [ -z "$OPENAI_API_KEY" ]; then
+            log_error "OPENAI_API_KEY environment variable not set!"
+            log_error "Reward labeling requires OpenAI API key."
+            log_error "Set it with: export OPENAI_API_KEY='your-key-here'"
+            return 1
+        fi
+        
+        log_info "Using reward labeling with:"
+        log_info "  Max frames: $REWARD_MAX_FRAMES"
+        log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
+        log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
+        
+        convert_cmd="$convert_cmd \
+            --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \
+            --reward-max-frames \"$REWARD_MAX_FRAMES\" \
+            --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \
+            --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\""
+    fi
+    
+    # Execute conversion
+    eval "$convert_cmd"
 }
 
 train_epoch() {
