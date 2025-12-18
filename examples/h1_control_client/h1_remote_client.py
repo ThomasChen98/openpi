@@ -703,7 +703,7 @@ class H1RemoteClient:
         
         return observation
     
-    def scale_hand_values(self, hand_values: np.ndarray) -> np.ndarray:
+    def scale_hand_values(self, hand_values: np.ndarray, hand_name: str = "hand") -> np.ndarray:
         """
         Scale hand values from 0-1 range to 0-1000 range for Inspire hands.
         
@@ -719,14 +719,22 @@ class H1RemoteClient:
         
         Args:
             hand_values: (6,) array of hand joint values
+            hand_name: name for debug logging
             
         Returns:
             (6,) array scaled to 0-1000 range
         """
+        raw_min, raw_max = np.min(hand_values), np.max(hand_values)
+        
         # If max value is <= 1.5, assume it's normalized 0-1 and scale to 0-1000
         # Otherwise assume it's already in 0-1000 range
-        if np.max(hand_values) <= 1.5:
-            return hand_values * 1000.0
+        if raw_max <= 1.5:
+            scaled = hand_values * 1000.0
+            # Debug: log first time we see this
+            if not hasattr(self, '_hand_scale_logged'):
+                self._hand_scale_logged = True
+                logger.info(f"Hand scaling: {hand_name} raw=[{raw_min:.3f}, {raw_max:.3f}] -> scaled=[{np.min(scaled):.0f}, {np.max(scaled):.0f}]")
+            return scaled
         return hand_values
     
     def policy_actions_to_ee_poses(self, policy_actions: np.ndarray):
@@ -752,8 +760,8 @@ class H1RemoteClient:
                 # 26 DOF: [arm(14), hand(12)] = [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
                 arm_joints = action[:14]
                 # Scale hand values from 0-1 to 0-1000 if needed
-                left_hand = self.scale_hand_values(action[14:20])
-                right_hand = self.scale_hand_values(action[20:26])
+                left_hand = self.scale_hand_values(action[14:20], "left")
+                right_hand = self.scale_hand_values(action[20:26], "right")
             else:
                 # 14 DOF: arm joints only, hands default to open
                 arm_joints = action[:14]
@@ -827,8 +835,11 @@ class H1RemoteClient:
         logger.info(f"   Executing {len(action_sequence)} actions...")
         logger.info(f"   First arm joints: {action_sequence[0]['arm_joints'][:4]}...")
         if action_dim == 26:
-            logger.info(f"   First left hand: {action_sequence[0]['left_hand']}")
-            logger.info(f"   First right hand: {action_sequence[0]['right_hand']}")
+            left_h = action_sequence[0]['left_hand']
+            right_h = action_sequence[0]['right_hand']
+            logger.info(f"   First LEFT hand (scaled 0-1000): [{left_h[0]:.0f}, {left_h[1]:.0f}, {left_h[2]:.0f}, {left_h[3]:.0f}, {left_h[4]:.0f}, {left_h[5]:.0f}]")
+            logger.info(f"   First RIGHT hand (scaled 0-1000): [{right_h[0]:.0f}, {right_h[1]:.0f}, {right_h[2]:.0f}, {right_h[3]:.0f}, {right_h[4]:.0f}, {right_h[5]:.0f}]")
+            logger.info(f"   Note: 0=closed, 1000=open for Inspire hands")
         logger.info(f"   Computing gravity compensation for precise tracking...")
         
         # Execute at 50Hz (matches policy recording rate)
@@ -1001,6 +1012,13 @@ class H1RemoteClient:
                             # Set velocity limit to max for better tracking
                             self.robot.speed_instant_max()
                             
+                            # Log first frame raw values for debugging
+                            if action_dim >= 26:
+                                raw_left = actions[0, 14:20]
+                                raw_right = actions[0, 20:26]
+                                logger.info(f"   RAW first left hand (indices 14-19): {raw_left}")
+                                logger.info(f"   RAW first right hand (indices 20-25): {raw_right}")
+                            
                             # Execute actions directly at 50Hz (recorded rate)
                             for i, action in enumerate(actions):
                                 # Extract arm joints (first 14)
@@ -1008,8 +1026,8 @@ class H1RemoteClient:
                                 
                                 # Extract hand joints if 26 DOF, scale from 0-1 to 0-1000 if needed
                                 if action_dim >= 26:
-                                    left_hand = self.scale_hand_values(action[14:20])
-                                    right_hand = self.scale_hand_values(action[20:26])
+                                    left_hand = self.scale_hand_values(action[14:20], "left")
+                                    right_hand = self.scale_hand_values(action[20:26], "right")
                                 else:
                                     left_hand = np.full(6, 1000.0)   # Default open
                                     right_hand = np.full(6, 1000.0)  # Default open
@@ -1023,8 +1041,9 @@ class H1RemoteClient:
                                     if i == 0:
                                         logger.info(f"   Gravity torques (first frame): L_shoulder={gravity_torques[0]:.2f}Nm, R_shoulder={gravity_torques[7]:.2f}Nm")
                                         if action_dim >= 26:
-                                            logger.info(f"   First left hand (scaled 0-1000): {left_hand}")
-                                            logger.info(f"   First right hand (scaled 0-1000): {right_hand}")
+                                            logger.info(f"   SCALED left hand -> Inspire: [{left_hand[0]:.0f}, {left_hand[1]:.0f}, {left_hand[2]:.0f}, {left_hand[3]:.0f}, {left_hand[4]:.0f}, {left_hand[5]:.0f}]")
+                                            logger.info(f"   SCALED right hand -> Inspire: [{right_hand[0]:.0f}, {right_hand[1]:.0f}, {right_hand[2]:.0f}, {right_hand[3]:.0f}, {right_hand[4]:.0f}, {right_hand[5]:.0f}]")
+                                            logger.info(f"   (0=closed, 1000=open for Inspire hands)")
                                 
                                 # Send joint commands WITH gravity compensation AND hand gestures
                                 self.robot.ctrl_dual_arm(
@@ -1051,13 +1070,25 @@ class H1RemoteClient:
                             # Handle 14 DOF (arms only) or 26 DOF (arms + hands)
                             if len(target) >= 26:
                                 arm_target = target[:14]
+                                
+                                # Log raw hand values before scaling
+                                raw_left = target[14:20]
+                                raw_right = target[20:26]
+                                logger.info(f"   RAW target LEFT hand: {raw_left}")
+                                logger.info(f"   RAW target RIGHT hand: {raw_right}")
+                                
                                 # Scale hand values from 0-1 to 0-1000 if needed
-                                left_hand = self.scale_hand_values(target[14:20])
-                                right_hand = self.scale_hand_values(target[20:26])
+                                left_hand = self.scale_hand_values(raw_left, "reset_left")
+                                right_hand = self.scale_hand_values(raw_right, "reset_right")
+                                
+                                logger.info(f"   SCALED LEFT hand -> Inspire: [{left_hand[0]:.0f}, {left_hand[1]:.0f}, {left_hand[2]:.0f}, {left_hand[3]:.0f}, {left_hand[4]:.0f}, {left_hand[5]:.0f}]")
+                                logger.info(f"   SCALED RIGHT hand -> Inspire: [{right_hand[0]:.0f}, {right_hand[1]:.0f}, {right_hand[2]:.0f}, {right_hand[3]:.0f}, {right_hand[4]:.0f}, {right_hand[5]:.0f}]")
+                                logger.info(f"   (Note: 0=closed, 1000=open for Inspire hands)")
                             else:
                                 arm_target = target[:14]
                                 left_hand = np.full(6, 1000.0)  # Default open
                                 right_hand = np.full(6, 1000.0)
+                                logger.info(f"   14 DOF mode: hands set to default open (1000)")
                             
                             # Smooth interpolation for arms
                             current = self.robot.get_current_dual_arm_q()
