@@ -703,6 +703,32 @@ class H1RemoteClient:
         
         return observation
     
+    def scale_hand_values(self, hand_values: np.ndarray) -> np.ndarray:
+        """
+        Scale hand values from 0-1 range to 0-1000 range for Inspire hands.
+        
+        The LeRobot/humanoid_everyday data stores hand values in 0-1 normalized range:
+          - 0.0 = fully closed
+          - 1.0 = fully open
+        
+        But the Inspire hand controller expects 0-1000 range:
+          - 0 = fully closed
+          - 1000 = fully open
+        
+        This function auto-detects if values are in 0-1 range and scales accordingly.
+        
+        Args:
+            hand_values: (6,) array of hand joint values
+            
+        Returns:
+            (6,) array scaled to 0-1000 range
+        """
+        # If max value is <= 1.5, assume it's normalized 0-1 and scale to 0-1000
+        # Otherwise assume it's already in 0-1000 range
+        if np.max(hand_values) <= 1.5:
+            return hand_values * 1000.0
+        return hand_values
+    
     def policy_actions_to_ee_poses(self, policy_actions: np.ndarray):
         """
         Convert policy action chunk to robot commands
@@ -725,8 +751,9 @@ class H1RemoteClient:
             if action_dim == 26:
                 # 26 DOF: [arm(14), hand(12)] = [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
                 arm_joints = action[:14]
-                left_hand = action[14:20]    # Hand indices 14-19
-                right_hand = action[20:26]   # Hand indices 20-25
+                # Scale hand values from 0-1 to 0-1000 if needed
+                left_hand = self.scale_hand_values(action[14:20])
+                right_hand = self.scale_hand_values(action[20:26])
             else:
                 # 14 DOF: arm joints only, hands default to open
                 arm_joints = action[:14]
@@ -911,10 +938,10 @@ class H1RemoteClient:
                                     for i, action in enumerate(actions):
                                         arm_joints = action[:14]
                                         
-                                        # Extract hand joints if 26 DOF
+                                        # Extract hand joints if 26 DOF, scale from 0-1 to 0-1000 if needed
                                         if action_dim >= 26:
-                                            left_hand = action[14:20]
-                                            right_hand = action[20:26]
+                                            left_hand = self.scale_hand_values(action[14:20])
+                                            right_hand = self.scale_hand_values(action[20:26])
                                         else:
                                             left_hand = np.full(6, 1000.0)
                                             right_hand = np.full(6, 1000.0)
@@ -979,10 +1006,10 @@ class H1RemoteClient:
                                 # Extract arm joints (first 14)
                                 arm_joints = action[:14]
                                 
-                                # Extract hand joints if 26 DOF
+                                # Extract hand joints if 26 DOF, scale from 0-1 to 0-1000 if needed
                                 if action_dim >= 26:
-                                    left_hand = action[14:20]   # Indices 14-19
-                                    right_hand = action[20:26]  # Indices 20-25
+                                    left_hand = self.scale_hand_values(action[14:20])
+                                    right_hand = self.scale_hand_values(action[20:26])
                                 else:
                                     left_hand = np.full(6, 1000.0)   # Default open
                                     right_hand = np.full(6, 1000.0)  # Default open
@@ -990,14 +1017,14 @@ class H1RemoteClient:
                                 # Compute gravity compensation torques for this pose
                                 gravity_torques = self.compute_gravity_compensation(arm_joints)
                                 
-                                # Log progress every 10 frames
-                                if i % 10 == 0:
+                                # Log progress every 50 frames (once per second)
+                                if i % 50 == 0:
                                     logger.info(f"   Frame {i}/{len(actions)}")
                                     if i == 0:
                                         logger.info(f"   Gravity torques (first frame): L_shoulder={gravity_torques[0]:.2f}Nm, R_shoulder={gravity_torques[7]:.2f}Nm")
                                         if action_dim >= 26:
-                                            logger.info(f"   First left hand: {left_hand}")
-                                            logger.info(f"   First right hand: {right_hand}")
+                                            logger.info(f"   First left hand (scaled 0-1000): {left_hand}")
+                                            logger.info(f"   First right hand (scaled 0-1000): {right_hand}")
                                 
                                 # Send joint commands WITH gravity compensation AND hand gestures
                                 self.robot.ctrl_dual_arm(
@@ -1024,8 +1051,9 @@ class H1RemoteClient:
                             # Handle 14 DOF (arms only) or 26 DOF (arms + hands)
                             if len(target) >= 26:
                                 arm_target = target[:14]
-                                left_hand = target[14:20]
-                                right_hand = target[20:26]
+                                # Scale hand values from 0-1 to 0-1000 if needed
+                                left_hand = self.scale_hand_values(target[14:20])
+                                right_hand = self.scale_hand_values(target[20:26])
                             else:
                                 arm_target = target[:14]
                                 left_hand = np.full(6, 1000.0)  # Default open
