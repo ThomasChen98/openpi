@@ -4,7 +4,7 @@ Loads observations from H1 dataset and sends them to the policy server for infer
 then visualizes the predicted action chunks using viser.
 
 Features:
-* Load observations (images + state) from HDF5 dataset
+* Load observations (images + state) from HDF5 or LeRobot datasets
 * Send observations to policy server
 * Receive and visualize predicted action chunks
 * Interactive frame selection and playback controls
@@ -15,8 +15,11 @@ Usage:
 1. Start policy server:
    uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_h1_finetune --policy.dir=checkpoints/pi05_h1_finetune/pi05_h1_H50/1999
    
-2. Run this client:
-   python h1_policy_viz_client.py --hdf5-path processed_data/circular.hdf5
+2. Run this client with HDF5:
+   python h1_policy_viz_client.py --data-path processed_data/circular.hdf5
+
+3. Run this client with LeRobot dataset:
+   python h1_policy_viz_client.py --data-path h1_data_lerobot/place_kettle_on_base --episode-idx 0
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import cv2
 import einops
 import h5py
 import numpy as np
+import pandas as pd
 import tyro
 from openpi_client import websocket_client_policy as _websocket_client_policy
 from PIL import Image
@@ -57,8 +61,13 @@ BIRDVIEW_ROLL = 0.0      # Birdview camera roll angle (degrees)
 class Args:
     """Command line arguments."""
     
-    # Data paths
-    hdf5_path: str = "processed_data/circular.hdf5"
+    # Data paths - supports HDF5 (.hdf5/.h5) or LeRobot directory
+    data_path: str = "processed_data/circular.hdf5"
+    """Path to HDF5 file or LeRobot dataset directory"""
+    
+    episode_idx: int = 0
+    """Episode index for LeRobot datasets"""
+    
     urdf_path: str = "assets/h1_2/h1_2.urdf"
     
     # Policy server connection
@@ -147,6 +156,83 @@ def load_hdf5_data(hdf5_path: str) -> dict:
     }
 
 
+def load_lerobot_data(dataset_path: str, episode_idx: int = 0) -> dict:
+    """Load data from LeRobot dataset (parquet with embedded images).
+    
+    Args:
+        dataset_path: Path to LeRobot dataset directory
+        episode_idx: Episode index to load
+        
+    Returns:
+        Dictionary containing observations, actions, and metadata
+    """
+    dataset_path = Path(dataset_path)
+    
+    # Find the parquet file
+    parquet_path = dataset_path / "data" / "chunk-000" / f"episode_{episode_idx:06d}.parquet"
+    if not parquet_path.exists():
+        raise FileNotFoundError(f"Episode parquet not found: {parquet_path}")
+    
+    print(f"Loading LeRobot episode {episode_idx} from {parquet_path}")
+    df = pd.read_parquet(parquet_path)
+    
+    # Extract actions and qpos
+    actions = np.stack(df['action'].values)
+    qpos = np.stack(df['qpos'].values)
+    
+    num_frames = len(actions)
+    print(f"Loaded {num_frames} frames with {actions.shape[1]} DOF")
+    
+    # Camera name mapping: dataset name -> policy expected name
+    camera_mapping = {
+        'ego_cam': 'cam_head',           # Map ego_cam to cam_head for policy
+        'cam_left_wrist': 'cam_left_wrist',
+        'cam_right_wrist': 'cam_right_wrist',
+    }
+    
+    # Discover camera columns in parquet (images are embedded as {'bytes': ...})
+    potential_cameras = ['ego_cam', 'cam_head', 'cam_left_wrist', 'cam_right_wrist']
+    camera_columns = [col for col in df.columns if col in potential_cameras]
+    
+    print(f"Found camera columns in parquet: {camera_columns}")
+    
+    # Load images from parquet
+    camera_data = {}
+    image_formats = {}
+    camera_topics = []
+    
+    for col in camera_columns:
+        # Map to policy expected name
+        topic = camera_mapping.get(col, col)
+        camera_topics.append(topic)
+        
+        images = []
+        for i in tqdm(range(num_frames), desc=f"Loading {col} -> {topic}", unit="frames"):
+            img_dict = df[col].iloc[i]
+            if isinstance(img_dict, dict) and 'bytes' in img_dict:
+                # Decode PNG bytes
+                img_bytes = img_dict['bytes']
+                img = np.array(Image.open(io.BytesIO(img_bytes)))
+                images.append(img)
+            else:
+                # Fallback: black image
+                images.append(np.zeros((224, 224, 3), dtype=np.uint8))
+        
+        camera_data[topic] = np.stack(images)
+        image_formats[topic] = "array"
+        print(f"Loaded {topic}: {camera_data[topic].shape}")
+    
+    return {
+        'actions': actions,
+        'qpos': qpos,
+        'camera_data': camera_data,
+        'image_formats': image_formats,
+        'camera_topics': camera_topics,
+        'num_frames': num_frames,
+        'num_joints': actions.shape[1]
+    }
+
+
 def decode_jpeg_image(img_data: bytes) -> np.ndarray:
     """Decode JPEG image data to numpy array.
     
@@ -197,7 +283,7 @@ def get_observation_at_frame(data: dict, frame_idx: int, prompt: str, target_siz
     """Get observation at specific frame in the format expected by the policy.
     
     Args:
-        data: Loaded HDF5 data
+        data: Loaded data (HDF5 or LeRobot)
         frame_idx: Frame index to get observation from
         prompt: Task prompt/instruction
         target_size: Target image size (height, width)
@@ -208,21 +294,33 @@ def get_observation_at_frame(data: dict, frame_idx: int, prompt: str, target_siz
     # Get state (first 14 dimensions of qpos)
     state = data['qpos'][frame_idx][:14].astype(np.float32)
     
-    # Map camera names from dataset to policy expected names
-    camera_mapping = {
+    # Policy expected camera names
+    policy_cameras = ['cam_head', 'cam_left_wrist', 'cam_right_wrist']
+    
+    # Also check for original dataset names that may not have been mapped
+    camera_aliases = {
         'ego_cam': 'cam_head',
-        'cam_left_wrist': 'cam_left_wrist',
-        'cam_right_wrist': 'cam_right_wrist',
     }
     
     images = {}
-    for dataset_name, policy_name in camera_mapping.items():
-        if dataset_name in data['camera_data']:
+    for policy_name in policy_cameras:
+        # Check if camera exists under policy name or original name
+        source_name = None
+        if policy_name in data['camera_data']:
+            source_name = policy_name
+        else:
+            # Check aliases
+            for orig, mapped in camera_aliases.items():
+                if mapped == policy_name and orig in data['camera_data']:
+                    source_name = orig
+                    break
+        
+        if source_name is not None:
             # Get image
-            if data['image_formats'][dataset_name] == 'array':
-                img = data['camera_data'][dataset_name][frame_idx]
+            if data['image_formats'][source_name] == 'array':
+                img = data['camera_data'][source_name][frame_idx]
             else:  # JPEG format
-                img = decode_jpeg_image(data['camera_data'][dataset_name][frame_idx])
+                img = decode_jpeg_image(data['camera_data'][source_name][frame_idx])
             
             # Resize to target size
             img = cv2.resize(img, target_size, interpolation=cv2.INTER_AREA)
@@ -315,28 +413,62 @@ async def get_live_observation_from_robot(host: str, port: int, prompt: str) -> 
 
 
 def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
-    """Convert 14-dim actions to URDF format (27 robot joints + 12 hand joints).
+    """Convert 14 or 26-dim actions to URDF format (27 robot joints + 12 hand joints).
     
-    For visualization, we pad with zeros since we only have upper body control.
+    For visualization, we pad leg joints with zeros since we only have upper body control.
     
     Args:
-        joint_positions: 14-dim joint positions
+        joint_positions: 14-dim (arm only) or 26-dim (arm + hand) joint positions
         
     Returns:
         39-dim joint positions for URDF (27 robot + 12 hand)
     """
+    leg_joints_zeros = np.zeros(13)
+    
     if len(joint_positions) == 14:
-        # Pad upper body with leg joints (13 zeros) to make 27 total
-        leg_joints_zeros = np.zeros(13)
         robot_joints = np.concatenate([leg_joints_zeros, joint_positions])
-        # Add hand joints (12 zeros for neutral hand pose)
-        hand_joints_zeros = np.zeros(12)
-        all_joints = np.concatenate([robot_joints, hand_joints_zeros])
-        return all_joints
+        hand_joints = np.zeros(12)
+    elif len(joint_positions) == 26:
+        arm_joints = joint_positions[:14]
+        hand_raw = joint_positions[14:26]
+        robot_joints = np.concatenate([leg_joints_zeros, arm_joints])
+        
+        # Data format (per hand): [pinky, ring, middle, index, thumb-bend, thumb-rotation]
+        # Data: indices 0-5 = left hand, indices 6-11 = right hand
+        # Data values: 0.0 = open, 1.0 = closed (SWAPPED)
+        #
+        # URDF format (per hand): [thumb_yaw, thumb_pitch, index, middle, ring, pinky]
+        # URDF: indices 0-5 = left hand, indices 6-11 = right hand (SWAPPED from data)
+        # URDF values: 0 = closed, higher = open
+        #   - thumb_yaw: -0.1 to 1.3 rad
+        #   - thumb_pitch: 0 to 0.5 rad  
+        #   - fingers: 0 to 1.7 rad
+        
+        left_data = hand_raw[0:6]   # [pinky, ring, middle, index, thumb-bend, thumb-rotation]
+        right_data = hand_raw[6:12]
+        
+        hand_joints = np.zeros(12)
+        
+        # SWAPPED: Left URDF (indices 0-5) <- from RIGHT data
+        # Direction inverted: (1 - data) so 0=open->max, 1=closed->0
+        hand_joints[0] = -0.1 + (1 - right_data[5]) * 1.4    # thumb_yaw from thumb-rotation
+        hand_joints[1] = (1 - right_data[4]) * 0.5           # thumb_pitch from thumb-bend
+        hand_joints[2] = (1 - right_data[3]) * 1.7           # index
+        hand_joints[3] = (1 - right_data[2]) * 1.7           # middle
+        hand_joints[4] = (1 - right_data[1]) * 1.7           # ring
+        hand_joints[5] = (1 - right_data[0]) * 1.7           # pinky
+        
+        # SWAPPED: Right URDF (indices 6-11) <- from LEFT data
+        hand_joints[6] = -0.1 + (1 - left_data[5]) * 1.4     # thumb_yaw from thumb-rotation
+        hand_joints[7] = (1 - left_data[4]) * 0.5            # thumb_pitch from thumb-bend
+        hand_joints[8] = (1 - left_data[3]) * 1.7            # index
+        hand_joints[9] = (1 - left_data[2]) * 1.7            # middle
+        hand_joints[10] = (1 - left_data[1]) * 1.7           # ring
+        hand_joints[11] = (1 - left_data[0]) * 1.7           # pinky
     else:
-        # If actions are already in a different format, handle accordingly
-        # This is a fallback for compatibility
         return joint_positions
+    
+    return np.concatenate([robot_joints, hand_joints])
 
 
 def main(args: Args) -> None:
@@ -358,18 +490,26 @@ def main(args: Args) -> None:
     
     # Convert relative paths to absolute
     script_dir = Path(__file__).parent
-    if not os.path.isabs(args.hdf5_path):
-        hdf5_path = str(script_dir / args.hdf5_path)
+    if not os.path.isabs(args.data_path):
+        data_path = str(script_dir / args.data_path)
     else:
-        hdf5_path = args.hdf5_path
+        data_path = args.data_path
         
     if not os.path.isabs(args.urdf_path):
         urdf_path = str(script_dir / args.urdf_path)
     else:
         urdf_path = args.urdf_path
     
-    # Load HDF5 data
-    data = load_hdf5_data(hdf5_path)
+    # Auto-detect format and load data
+    data_path_obj = Path(data_path)
+    if data_path_obj.suffix in ['.hdf5', '.h5']:
+        # HDF5 format
+        data = load_hdf5_data(data_path)
+    elif data_path_obj.is_dir() and (data_path_obj / "data").exists():
+        # LeRobot format (directory with data/ subfolder)
+        data = load_lerobot_data(data_path, args.episode_idx)
+    else:
+        raise ValueError(f"Unknown data format: {data_path}. Expected .hdf5/.h5 file or LeRobot directory.")
     
     # Connect to policy server
     print(f"\nConnecting to policy server at {args.host}:{args.port}")
@@ -602,11 +742,6 @@ def main(args: Args) -> None:
         show_gt_cb.value = True
         show_predicted_cb.value = False
         update_visualization()
-        
-        # Print robot state for selected frame
-        state = data['qpos'][current_frame][:14]
-        print(f"\n[Frame {current_frame}] Robot state (14 joints):")
-        print(f"  {state}")
     
     # Ground truth checkbox callback
     @show_gt_cb.on_update
@@ -709,7 +844,7 @@ def main(args: Args) -> None:
         @reset_robot_button.on_click
         def _(event):
             current_frame = int(frame_slider.value)
-            target_joints = data['qpos'][current_frame][:14]
+            target_joints = data['qpos'][current_frame]  # Full DOF (14 or 26)
             
             # Create confirmation modal
             with server.gui.add_modal(" Confirm Reset") as modal:
@@ -1254,8 +1389,8 @@ def main(args: Args) -> None:
     def update_visualization():
         """Update robot visualization based on current state."""
         if show_ground_truth:
-            # Show ground truth qpos
-            joints = data['qpos'][current_frame][:14]
+            # Show ground truth qpos (use all DOF - either 14 or 26)
+            joints = data['qpos'][current_frame]
         elif predicted_actions is not None and show_predicted_cb.value:
             # Show predicted action at selected index
             action_idx = int(action_index_slider.value)
@@ -1263,7 +1398,7 @@ def main(args: Args) -> None:
         else:
             return
         
-        # Convert to URDF format and update
+        # Convert to URDF format and update (handles 14 or 26 DOF)
         joints_urdf = extract_hand_joints_for_urdf(joints)
         viser_urdf.update_cfg(joints_urdf[:viser_urdf._urdf.num_actuated_joints])
         

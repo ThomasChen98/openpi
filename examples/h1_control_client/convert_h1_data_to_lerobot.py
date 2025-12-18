@@ -77,8 +77,8 @@ def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict
         
     Returns:
         Dictionary containing episode data with keys:
-        - actions: (num_steps, 14) array
-        - qpos: (num_steps, 14) array
+        - actions: (num_steps, D) array where D=14 (arms) or D=26 (arms+hands)
+        - qpos: (num_steps, D) array where D=14 (arms) or D=26 (arms+hands)
         - ego_cam: (num_steps, height, width, 3) array
         - cam_left_wrist: (num_steps, height, width, 3) array or None
         - cam_right_wrist: (num_steps, height, width, 3) array or None
@@ -124,11 +124,8 @@ def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict
             else:
                 cam_right_wrist = right_data
         
-        # Use only first 14 dimensions for state and actions (as per h1_policy.py)
-        if actions.shape[1] > 14:
-            actions = actions[:, :14]
-        if qpos.shape[1] > 14:
-            qpos = qpos[:, :14]
+        # Support both 14 DoF (arms only) and 26 DoF (arms + hands)
+        # No truncation - use whatever dimensions the HDF5 file has
         
         # Read advantage label from metadata if requested
         advantage = None
@@ -248,6 +245,19 @@ def main(
     for hdf5_file in hdf5_files:
         print(f"  - {hdf5_file}")
     
+    # Auto-detect dimensions from first HDF5 file
+    first_file = hdf5_files[0]
+    with h5py.File(first_file, "r") as f:
+        action_dim = int(f["action"].shape[1])  # Get DoF (14 or 26), convert to Python int
+        state_dim = int(f["observations"]["qpos"].shape[1])  # Convert to Python int
+        fps = int(f.attrs.get("fps", 50))  # Default to 50 if not specified, convert to Python int
+    
+    dof_mode = "arms + hands" if action_dim == 26 else "arms only"
+    print(f"\nDetected data dimensions:")
+    print(f"  DoF: {action_dim} ({dof_mode})")
+    print(f"  Format: [left_arm(7), right_arm(7)" + (", left_hand(6), right_hand(6)]" if action_dim == 26 else "]"))
+    print(f"  FPS: {fps}")
+    
     # Clean up any existing dataset in the output directory
     output_path = HF_LEROBOT_HOME / repo_id
     if save_dir is not None:
@@ -261,12 +271,12 @@ def main(
 
     # Create LeRobot dataset, define features to store
     # OpenPi assumes that proprio is stored in `state` and actions in `action`
-    # Based on h1_policy.py, we use 14-dim state and 14-dim actions
+    # Dimensions are auto-detected: 14 DoF (arms) or 26 DoF (arms + hands)
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=output_path,
         robot_type="h1",
-        fps=50,  # Adjust based on your data collection frequency
+        fps=fps,
         features={
             "ego_cam": {
                 "dtype": "image",
@@ -285,12 +295,12 @@ def main(
             },
             "qpos": {
                 "dtype": "float32",
-                "shape": (14,),
+                "shape": (state_dim,),
                 "names": ["qpos"],
             },
             "action": {
                 "dtype": "float32",
-                "shape": (14,),
+                "shape": (action_dim,),
                 "names": ["action"],
             },
         },
