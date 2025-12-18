@@ -72,9 +72,17 @@ def main(
         print(f"\n📏 Data Dimensions:")
         print(f"  Arm state: {np.array(first_step['states']['arm_state']).shape} (14 DoF)")
         print(f"  Leg state: {np.array(first_step['states']['leg_state']).shape}")
-        print(f"  Hand state: {np.array(first_step['states']['hand_state']).shape}")
+        hand_state = np.array(first_step['states']['hand_state'])
+        print(f"  Hand state: {hand_state.shape} ({hand_state.shape[0]} DoF - {hand_state.shape[0]//2} per hand)")
         print(f"  Left arm action: {np.array(first_step['actions']['left_angles']).shape} (7 DoF)")
         print(f"  Right arm action: {np.array(first_step['actions']['right_angles']).shape} (7 DoF)")
+        
+        # Check for hand actions
+        if "left_hand_angles" in first_step['actions']:
+            print(f"  Left hand action: {np.array(first_step['actions']['left_hand_angles']).shape}")
+        if "right_hand_angles" in first_step['actions']:
+            print(f"  Right hand action: {np.array(first_step['actions']['right_hand_angles']).shape}")
+        
         print(f"  RGB image: {first_step['image'].shape}")
         print(f"  Depth map: {first_step['depth'].shape}")
         print(f"  LiDAR points: {first_step['lidar'].shape}")
@@ -111,6 +119,19 @@ def main(
             right_action = np.array(sample_step['actions']['right_angles'])
             print(f"    {right_action}")
             
+            print(f"\n  Hand State ({hand_state.shape[0]} DoF):")
+            hand_state_sample = np.array(sample_step['states']['hand_state'])
+            print(f"    Left hand (0-5):  {hand_state_sample[:6]}")
+            print(f"    Right hand (6-11): {hand_state_sample[6:]}")
+            print(f"    Range: [{hand_state_sample.min():.3f}, {hand_state_sample.max():.3f}]")
+            
+            if "left_hand_angles" in sample_step['actions']:
+                print(f"\n  Hand Actions:")
+                print(f"    Left: {np.array(sample_step['actions']['left_hand_angles'])}")
+                print(f"    Right: {np.array(sample_step['actions']['right_hand_angles'])}")
+            else:
+                print(f"\n  Hand Actions: Not available (will use hand_state as action)")
+            
             print(f"\n  IMU Orientation (quaternion [w,x,y,z]):")
             quat = np.array(sample_step['states']['imu']['quaternion'])
             print(f"    {quat}")
@@ -130,11 +151,18 @@ def main(
         print(f"       --output_dir ./h1_data_processed/humanoid_everyday/test/")
         print(f"\n     python utils/data_replay.py \\")
         print(f"       --hdf5-path ./h1_data_processed/humanoid_everyday/test/episode_0.hdf5")
-        print(f"\n  2. Convert directly to LeRobot for training:")
+        print(f"\n  2. Convert to LeRobot (arms only, 14 DOF):")
         print(f"     python convert_humanoid_everyday_to_lerobot.py \\")
         print(f"       --data_path {data_path} \\")
         print(f"       --repo_id username/task_name \\")
         print(f"       --task_name \"describe the task\" \\")
+        print(f"       --num_repeats 10")
+        print(f"\n  3. Convert to LeRobot (arms + hands, 26 DOF):")
+        print(f"     python convert_humanoid_everyday_to_lerobot.py \\")
+        print(f"       --data_path {data_path} \\")
+        print(f"       --repo_id username/task_name \\")
+        print(f"       --task_name \"describe the task\" \\")
+        print(f"       --include_hands \\")
         print(f"       --num_repeats 10")
         
         print(f"\n✓ Validation complete!")
