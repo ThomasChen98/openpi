@@ -859,11 +859,12 @@ class H1RemoteClient:
                     logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
             
             # Send arm + hand commands to robot with gravity compensation
+            # SWAP left/right hands to match physical robot
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
                 tauff_target=gravity_torques,
-                left_hand_gesture=left_hand,
-                right_hand_gesture=right_hand
+                left_hand_gesture=right_hand,   # SWAPPED
+                right_hand_gesture=left_hand    # SWAPPED
             )
             
             # Control at 50Hz (matches policy recording rate)
@@ -964,11 +965,12 @@ class H1RemoteClient:
                                         gravity_torques = self.compute_gravity_compensation(arm_joints)
                                         
                                         # Execute action with hand gestures
+                                        # SWAP left/right hands to match physical robot
                                         self.robot.ctrl_dual_arm(
                                             q_target=arm_joints,
                                             tauff_target=gravity_torques,
-                                            left_hand_gesture=left_hand,
-                                            right_hand_gesture=right_hand
+                                            left_hand_gesture=right_hand,   # SWAPPED
+                                            right_hand_gesture=left_hand    # SWAPPED
                                         )
                                         
                                         # Get current executed state
@@ -1046,11 +1048,12 @@ class H1RemoteClient:
                                             logger.info(f"   (0=closed, 1000=open for Inspire hands)")
                                 
                                 # Send joint commands WITH gravity compensation AND hand gestures
+                                # SWAP left/right hands to match physical robot
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
                                     tauff_target=gravity_torques,
-                                    left_hand_gesture=left_hand,
-                                    right_hand_gesture=right_hand
+                                    left_hand_gesture=right_hand,   # SWAPPED
+                                    right_hand_gesture=left_hand    # SWAPPED
                                 )
                                 
                                 # Execute at 50Hz (matching recording rate)
@@ -1081,9 +1084,9 @@ class H1RemoteClient:
                                 left_hand = self.scale_hand_values(raw_left, "reset_left")
                                 right_hand = self.scale_hand_values(raw_right, "reset_right")
                                 
-                                logger.info(f"   SCALED LEFT hand -> Inspire: [{left_hand[0]:.0f}, {left_hand[1]:.0f}, {left_hand[2]:.0f}, {left_hand[3]:.0f}, {left_hand[4]:.0f}, {left_hand[5]:.0f}]")
-                                logger.info(f"   SCALED RIGHT hand -> Inspire: [{right_hand[0]:.0f}, {right_hand[1]:.0f}, {right_hand[2]:.0f}, {right_hand[3]:.0f}, {right_hand[4]:.0f}, {right_hand[5]:.0f}]")
-                                logger.info(f"   (Note: 0=closed, 1000=open for Inspire hands)")
+                                logger.info(f"   SCALED data 'left' -> physical RIGHT hand: [{left_hand[0]:.0f}, {left_hand[1]:.0f}, {left_hand[2]:.0f}, {left_hand[3]:.0f}, {left_hand[4]:.0f}, {left_hand[5]:.0f}]")
+                                logger.info(f"   SCALED data 'right' -> physical LEFT hand: [{right_hand[0]:.0f}, {right_hand[1]:.0f}, {right_hand[2]:.0f}, {right_hand[3]:.0f}, {right_hand[4]:.0f}, {right_hand[5]:.0f}]")
+                                logger.info(f"   (Note: 0=closed, 1000=open for Inspire hands, left/right SWAPPED to match robot)")
                             else:
                                 arm_target = target[:14]
                                 left_hand = np.full(6, 1000.0)  # Default open
@@ -1101,11 +1104,14 @@ class H1RemoteClient:
                                 # Compute gravity compensation for interpolated position
                                 gravity_torques = self.compute_gravity_compensation(interp)
                                 
+                                # SWAP left/right hands to match physical robot
+                                # Data convention: left_hand = robot's actual RIGHT hand
+                                # Data convention: right_hand = robot's actual LEFT hand
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
                                     tauff_target=gravity_torques,
-                                    left_hand_gesture=left_hand,
-                                    right_hand_gesture=right_hand
+                                    left_hand_gesture=right_hand,   # SWAPPED
+                                    right_hand_gesture=left_hand    # SWAPPED
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             
