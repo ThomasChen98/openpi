@@ -707,23 +707,31 @@ class H1RemoteClient:
         """
         Convert policy action chunk to robot commands
         
-        The policy outputs 14-dimensional actions (arm joints only, no hands).
+        Supports two action formats:
+        - 14 DOF: arm joints only, hands default to open
+        - 26 DOF: arm joints (14) + hand joints (12)
+          Format: [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
         
         Args:
-            policy_actions: (action_horizon, 14) array - arm joints only
+            policy_actions: (action_horizon, 14) or (action_horizon, 26) array
             
         Returns:
-            List of command dicts with arm_joints and default open hands
+            List of command dicts with arm_joints, left_hand, right_hand
         """
+        action_dim = policy_actions.shape[1]
         action_sequence = []
+        
         for action in policy_actions:
-            # Policy outputs 14-dim actions (arm joints only)
-            # All 14 dimensions are arm joints directly
-            arm_joints = action  # No slicing needed!
-            
-            # Default to open hands (policy doesn't control hands)
-            left_hand = np.full(6, 1000.0)  # Fully open
-            right_hand = np.full(6, 1000.0)  # Fully open
+            if action_dim == 26:
+                # 26 DOF: [arm(14), hand(12)] = [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+                arm_joints = action[:14]
+                left_hand = action[14:20]    # Hand indices 14-19
+                right_hand = action[20:26]   # Hand indices 20-25
+            else:
+                # 14 DOF: arm joints only, hands default to open
+                arm_joints = action[:14]
+                left_hand = np.full(6, 1000.0)   # Fully open
+                right_hand = np.full(6, 1000.0)  # Fully open
             
             action_sequence.append({
                 'arm_joints': arm_joints,
@@ -766,14 +774,22 @@ class H1RemoteClient:
         Execute a chunk of policy actions on the robot
         
         Args:
-            policy_actions: (50, 14) array of arm joint actions
+            policy_actions: (50, 14) or (50, 26) array of joint actions
+                - 14 DOF: arm joints only
+                - 26 DOF: arm joints (14) + hand joints (12)
         """
+        action_dim = policy_actions.shape[1]
         logger.info(f"📊 Action chunk shape: {policy_actions.shape}")
-        logger.info(f"   Expected: (50, 14) - arm joints only")
-        logger.info(f"   Range: [{policy_actions.min():.3f}, {policy_actions.max():.3f}]")
         
-        if policy_actions.shape[1] != 14:
-            logger.error(f"Invalid action dimension: {policy_actions.shape[1]}, expected 14")
+        if action_dim == 26:
+            logger.info(f"   Mode: Arms + Hands (26 DOF)")
+            logger.info(f"   Arm range: [{policy_actions[:, :14].min():.3f}, {policy_actions[:, :14].max():.3f}]")
+            logger.info(f"   Hand range: [{policy_actions[:, 14:].min():.3f}, {policy_actions[:, 14:].max():.3f}]")
+        elif action_dim == 14:
+            logger.info(f"   Mode: Arms only (14 DOF)")
+            logger.info(f"   Range: [{policy_actions.min():.3f}, {policy_actions.max():.3f}]")
+        else:
+            logger.error(f"Invalid action dimension: {action_dim}, expected 14 or 26")
             return
         
         # Increase velocity limit for policy execution (30 rad/s for faster shoulder movement)
@@ -782,7 +798,10 @@ class H1RemoteClient:
         action_sequence = self.policy_actions_to_ee_poses(policy_actions)
         
         logger.info(f"   Executing {len(action_sequence)} actions...")
-        logger.info(f"   First action: {action_sequence[0]['arm_joints']}")
+        logger.info(f"   First arm joints: {action_sequence[0]['arm_joints'][:4]}...")
+        if action_dim == 26:
+            logger.info(f"   First left hand: {action_sequence[0]['left_hand']}")
+            logger.info(f"   First right hand: {action_sequence[0]['right_hand']}")
         logger.info(f"   Computing gravity compensation for precise tracking...")
         
         # Execute at 50Hz (matches policy recording rate)
@@ -796,7 +815,10 @@ class H1RemoteClient:
             
             # Log every 10th action
             if i % 10 == 0:
-                logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
+                if action_dim == 26:
+                    logger.info(f"   Step {i}/{len(action_sequence)}: arm={arm_joints[:3]}..., left_hand={left_hand[:2]}...")
+                else:
+                    logger.info(f"   Step {i}/{len(action_sequence)}: arm joints = {arm_joints[:3]}...")
             
             # Send arm + hand commands to robot with gravity compensation
             self.robot.ctrl_dual_arm(
@@ -927,9 +949,13 @@ class H1RemoteClient:
                         
                         elif cmd == "replay_teleop":
                             # Replay raw teleop joint commands (bypass policy/IK)
+                            # Supports 14 DOF (arms only) or 26 DOF (arms + hands)
                             actions = np.array(data["actions"], dtype=np.float32)
+                            action_dim = actions.shape[1] if len(actions.shape) > 1 else len(actions[0])
+                            
                             logger.info(f"Replaying {len(actions)} teleop frames...")
                             logger.info(f"   Action shape: {actions.shape}")
+                            logger.info(f"   Mode: {'Arms + Hands (26 DOF)' if action_dim >= 26 else 'Arms only (14 DOF)'}")
                             logger.info(f"   Duration: ~{len(actions)/50:.1f}s at 50Hz")
                             logger.info(f"   Computing gravity compensation for all frames...")
                             
@@ -937,10 +963,17 @@ class H1RemoteClient:
                             self.robot.speed_instant_max()
                             
                             # Execute actions directly at 50Hz (recorded rate)
-                            for i, arm_joints in enumerate(actions):
-                                # Only use first 14 joints (dual arm)
-                                if len(arm_joints) > 14:
-                                    arm_joints = arm_joints[:14]
+                            for i, action in enumerate(actions):
+                                # Extract arm joints (first 14)
+                                arm_joints = action[:14]
+                                
+                                # Extract hand joints if 26 DOF
+                                if action_dim >= 26:
+                                    left_hand = action[14:20]   # Indices 14-19
+                                    right_hand = action[20:26]  # Indices 20-25
+                                else:
+                                    left_hand = np.full(6, 1000.0)   # Default open
+                                    right_hand = np.full(6, 1000.0)  # Default open
                                 
                                 # Compute gravity compensation torques for this pose
                                 gravity_torques = self.compute_gravity_compensation(arm_joints)
@@ -950,11 +983,16 @@ class H1RemoteClient:
                                     logger.info(f"   Frame {i}/{len(actions)}")
                                     if i == 0:
                                         logger.info(f"   Gravity torques (first frame): L_shoulder={gravity_torques[0]:.2f}Nm, R_shoulder={gravity_torques[7]:.2f}Nm")
+                                        if action_dim >= 26:
+                                            logger.info(f"   First left hand: {left_hand}")
+                                            logger.info(f"   First right hand: {right_hand}")
                                 
-                                # Send joint commands WITH gravity compensation
+                                # Send joint commands WITH gravity compensation AND hand gestures
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
-                                    tauff_target=gravity_torques
+                                    tauff_target=gravity_torques,
+                                    left_hand_gesture=left_hand,
+                                    right_hand_gesture=right_hand
                                 )
                                 
                                 # Execute at 50Hz (matching recording rate)
