@@ -114,11 +114,16 @@ class H1Outputs(transforms.DataTransformFn):
     used for inference only.
 
     For your own dataset, you can copy this class and modify the action dimension based on the comments below.
+    
+    Args:
+        action_dim: Number of action dimensions to return. 
+            - 14: Arms only (default, backwards compatible)
+            - 26: Arms + hands (14 arm + 12 hand)
     """
+    
+    action_dim: int = 14  # Default to 14 for backwards compatibility
 
     def __call__(self, data: dict) -> dict:
         # Only return the first N actions -- since we padded actions above to fit the model action
         # dimension, we need to now parse out the correct number of actions in the return dict.
-        # For Libero, we only return the first 7 actions (since the rest is padding).
-        # For your own dataset, replace `7` with the action dimension of your dataset.
-        return {"actions": np.asarray(data["actions"][:, :14])}
+        return {"actions": np.asarray(data["actions"][:, :self.action_dim])}
