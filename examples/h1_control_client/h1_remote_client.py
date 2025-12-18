@@ -895,8 +895,10 @@ class H1RemoteClient:
                         
                         elif cmd == "execute":
                             # Execute action chunk and record if recording is active
+                            # Supports 14 DOF (arms only) or 26 DOF (arms + hands)
                             actions = np.array(data["actions"], dtype=np.float32)
-                            logger.info(f" Executing {len(actions)} actions...")
+                            action_dim = actions.shape[1] if len(actions.shape) > 1 else len(actions[0])
+                            logger.info(f" Executing {len(actions)} actions ({action_dim} DOF)...")
                             logger.info(f" Recording state: is_recording={self.is_recording}, episode_writer={self.episode_writer is not None}")
                             
                             # If recording, save data during execution with parallel image capture
@@ -907,7 +909,15 @@ class H1RemoteClient:
                                     self.robot.speed_instant_max()
                                     
                                     for i, action in enumerate(actions):
-                                        arm_joints = action[:14] if len(action) > 14 else action
+                                        arm_joints = action[:14]
+                                        
+                                        # Extract hand joints if 26 DOF
+                                        if action_dim >= 26:
+                                            left_hand = action[14:20]
+                                            right_hand = action[20:26]
+                                        else:
+                                            left_hand = np.full(6, 1000.0)
+                                            right_hand = np.full(6, 1000.0)
                                         
                                         # Record timestamp BEFORE execution for temporal alignment
                                         exec_timestamp = time.time()
@@ -915,10 +925,12 @@ class H1RemoteClient:
                                         # Compute gravity compensation
                                         gravity_torques = self.compute_gravity_compensation(arm_joints)
                                         
-                                        # Execute action
+                                        # Execute action with hand gestures
                                         self.robot.ctrl_dual_arm(
                                             q_target=arm_joints,
-                                            tauff_target=gravity_torques
+                                            tauff_target=gravity_torques,
+                                            left_hand_gesture=left_hand,
+                                            right_hand_gesture=right_hand
                                         )
                                         
                                         # Get current executed state
@@ -1003,25 +1015,38 @@ class H1RemoteClient:
                         
                         elif cmd == "reset":
                             # Reset to joint positions with gravity compensation
+                            # Supports 14 DOF (arms only) or 26 DOF (arms + hands)
                             target = np.array(data["joints"], dtype=np.float32)
                             duration = data.get("duration", 2.0)
                             
-                            logger.info(f"Resetting to joints over {duration}s...")
+                            logger.info(f"Resetting to joints over {duration}s... (target dim: {len(target)})")
                             
-                            # Smooth interpolation
+                            # Handle 14 DOF (arms only) or 26 DOF (arms + hands)
+                            if len(target) >= 26:
+                                arm_target = target[:14]
+                                left_hand = target[14:20]
+                                right_hand = target[20:26]
+                            else:
+                                arm_target = target[:14]
+                                left_hand = np.full(6, 1000.0)  # Default open
+                                right_hand = np.full(6, 1000.0)
+                            
+                            # Smooth interpolation for arms
                             current = self.robot.get_current_dual_arm_q()
                             steps = int(duration * 250)
                             
                             for i in range(steps):
                                 alpha = (i + 1) / steps
-                                interp = current * (1 - alpha) + target * alpha
+                                interp = current * (1 - alpha) + arm_target * alpha
                                 
                                 # Compute gravity compensation for interpolated position
                                 gravity_torques = self.compute_gravity_compensation(interp)
                                 
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
-                                    tauff_target=gravity_torques
+                                    tauff_target=gravity_torques,
+                                    left_hand_gesture=left_hand,
+                                    right_hand_gesture=right_hand
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             
