@@ -30,6 +30,8 @@ class Checkpoint:
     dir: str
     # Optional: Override data_dir for configs that use LeRobotH1LocalDataConfig
     data_dir: str | None = None
+    # Optional: Override action_dim (14 for arms only, 26 for arms + hands)
+    action_dim: int | None = None
 
 
 @dataclasses.dataclass
