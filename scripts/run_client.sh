@@ -6,13 +6,13 @@ set -e
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
 # Default values
-HDF5_PATH="${HDF5_PATH:-h1_data_processed/box_action/good/episode_7.hdf5}"
+DATA_PATH="${DATA_PATH:-h1_data_processed/place_kettle_on_base_26dof/episode_0.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-Lift the lid off the bowl}" # check if this is right in case of overfitting
+PROMPT="${PROMPT:-Pick up the kettle with right hand and place it onto the charger}"
 
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
-POLICY_DIR="${POLICY_DIR:-examples/h1_control_client/checkpoints/pi05_h1_auto/pi05_h1_press_button/999}"
+POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/place_kettle_on_base_26dof/3000}"
 
 # Color codes for output
 GREEN='\033[0;32m'
@@ -25,7 +25,7 @@ echo -e "${BLUE}H1 Policy Inference Visualization Client${NC}"
 echo -e "${BLUE}================================================${NC}"
 echo ""
 echo -e "${GREEN}Configuration:${NC}"
-echo -e "  HDF5 Dataset: ${HDF5_PATH}"
+echo -e "  Data Path: ${DATA_PATH}"
 echo -e "  Policy Server: ${HOST}:${PORT}"
 echo -e "  Task Prompt: ${PROMPT}"
 echo ""
@@ -40,7 +40,7 @@ echo ""
 
 # Run the client
 python examples/h1_control_client/h1_policy_viz_client.py \
-    --hdf5-path "$HDF5_PATH" \
+    --data-path "$DATA_PATH" \
     --host "$HOST" \
     --port "$PORT" \
     --prompt "$PROMPT" \

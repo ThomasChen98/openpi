@@ -707,33 +707,36 @@ class H1RemoteClient:
         """
         Scale hand values from 0-1 range to 0-1000 range for Inspire hands.
         
-        The LeRobot/humanoid_everyday data stores hand values in 0-1 normalized range:
-          - 0.0 = fully closed
-          - 1.0 = fully open
+        Data convention (LeRobot/humanoid_everyday):
+          - 0.0 = fully closed (grasping)
+          - 1.0 = fully open (released)
         
-        But the Inspire hand controller expects 0-1000 range:
-          - 0 = fully closed
-          - 1000 = fully open
+        Inspire hardware convention:
+          - 0 = fully OPEN
+          - 1000 = fully CLOSED
         
-        This function auto-detects if values are in 0-1 range and scales accordingly.
+        These are INVERTED! So we need: (1 - data) * 1000
+          - data 0 (closed) → (1-0)*1000 = 1000 → Inspire closed ✓
+          - data 1 (open) → (1-1)*1000 = 0 → Inspire open ✓
         
         Args:
             hand_values: (6,) array of hand joint values
             hand_name: name for debug logging
             
         Returns:
-            (6,) array scaled to 0-1000 range
+            (6,) array scaled to 0-1000 range (inverted)
         """
         raw_min, raw_max = np.min(hand_values), np.max(hand_values)
         
-        # If max value is <= 1.5, assume it's normalized 0-1 and scale to 0-1000
+        # If max value is <= 1.5, assume it's normalized 0-1 and scale to 0-1000 with INVERSION
         # Otherwise assume it's already in 0-1000 range
         if raw_max <= 1.5:
-            scaled = hand_values * 1000.0
+            # INVERT: data_closed(0) → inspire_closed(1000), data_open(1) → inspire_open(0)
+            scaled = (1.0 - hand_values) * 1000.0
             # Debug: log first time we see this
             if not hasattr(self, '_hand_scale_logged'):
                 self._hand_scale_logged = True
-                logger.info(f"Hand scaling: {hand_name} raw=[{raw_min:.3f}, {raw_max:.3f}] -> scaled=[{np.min(scaled):.0f}, {np.max(scaled):.0f}]")
+                logger.info(f"Hand scaling (INVERTED): {hand_name} raw=[{raw_min:.3f}, {raw_max:.3f}] -> scaled=[{np.min(scaled):.0f}, {np.max(scaled):.0f}]")
             return scaled
         return hand_values
     
