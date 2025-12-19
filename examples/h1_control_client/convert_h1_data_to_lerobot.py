@@ -160,6 +160,7 @@ def main(
     reward_max_frames: int = 30,
     reward_image_rotation: int = 0,
     reward_advantage_threshold: float = 0.3,
+    action_dim: int = None,
 ):
     """Convert H1 HDF5 data to LeRobot format.
     
@@ -178,6 +179,8 @@ def main(
         reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
         reward_advantage_threshold: Percentile threshold for advantage labeling (0.0-1.0)
                                    e.g., 0.3 means top 30% episodes get Advantage=True
+        action_dim: Expected action dimension (14=arms, 26=arms+hands). If provided, validates against HDF5 data.
+                   If not provided, auto-detects from HDF5 files.
     """
     # Validate labeling mode
     if labeling_mode == "reward_labeling":
@@ -248,15 +251,27 @@ def main(
     # Auto-detect dimensions from first HDF5 file
     first_file = hdf5_files[0]
     with h5py.File(first_file, "r") as f:
-        action_dim = int(f["action"].shape[1])  # Get DoF (14 or 26), convert to Python int
+        detected_action_dim = int(f["action"].shape[1])  # Get DoF (14 or 26), convert to Python int
         state_dim = int(f["observations"]["qpos"].shape[1])  # Convert to Python int
         fps = int(f.attrs.get("fps", 50))  # Default to 50 if not specified, convert to Python int
     
-    dof_mode = "arms + hands" if action_dim == 26 else "arms only"
-    print(f"\nDetected data dimensions:")
-    print(f"  DoF: {action_dim} ({dof_mode})")
-    print(f"  Format: [left_arm(7), right_arm(7)" + (", left_hand(6), right_hand(6)]" if action_dim == 26 else "]"))
+    # Use provided action_dim or fall back to detected
+    if action_dim is not None:
+        if action_dim != detected_action_dim:
+            print(f"Warning: Specified action_dim ({action_dim}) differs from detected ({detected_action_dim})")
+            print(f"  Using specified action_dim: {action_dim}")
+        final_action_dim = action_dim
+    else:
+        final_action_dim = detected_action_dim
+    
+    dof_mode = "arms + hands" if final_action_dim == 26 else "arms only"
+    print(f"\nData dimensions:")
+    print(f"  DoF: {final_action_dim} ({dof_mode})")
+    print(f"  Format: [left_arm(7), right_arm(7)" + (", left_hand(6), right_hand(6)]" if final_action_dim == 26 else "]"))
     print(f"  FPS: {fps}")
+    
+    # Use the final action dim for the dataset
+    action_dim = final_action_dim
     
     # Clean up any existing dataset in the output directory
     output_path = HF_LEROBOT_HOME / repo_id

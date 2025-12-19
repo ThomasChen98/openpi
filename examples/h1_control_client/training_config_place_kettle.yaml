@@ -1,31 +1,27 @@
 # =============================================================================
-# H1 Integrated Training Pipeline Configuration - DEFAULT/TEMPLATE
+# H1 Integrated Training Pipeline Configuration - PLACE KETTLE TASK
 # =============================================================================
-# 
-# RECOMMENDED: Use task-specific configs instead:
-#   - training_config_place_kettle.yaml  (with hands, 26 DOF)
-#   - training_config_lift_lid.yaml      (no hands, 14 DOF)
-#
+# Task: Pick up kettle and place on charger (WITH HANDS - 26 DOF)
+#   
 # Usage:
-#   ./scripts/integrated_training.sh --config-file training_config_place_kettle.yaml
-#   ./scripts/integrated_training.sh --config-file training_config_lift_lid.yaml
-#
-# This file serves as a template. Copy and modify for new tasks.
+#   1. Run: ./scripts/integrated_training.sh --config-file training_config_place_kettle.yaml
+#   2. On robot: python h1_execution_client.py --config training_config_place_kettle.yaml
 # =============================================================================
 
 # =============================================================================
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "my_task"                                    # Short name for directories/checkpoints
-  description: "Description of what the robot should do"
+  name: "place_kettle_on_base"                       # Short name for directories/checkpoints
+  description: "Pick up the kettle with right hand and place it onto the charger"
 
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  base_checkpoint: ""                                # Leave empty to train from scratch
+  # Base checkpoint: pretrained on humanoid_everyday kettle data (3000 steps)
+  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/place_kettle_on_base_26dof/3000"
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
@@ -35,7 +31,7 @@ training:
   save_interval: 1000
   keep_period: 1000
   num_repeats: 2
-  labeling_mode: "reward_labeling"                   # none, human_labeling, reward_labeling
+  labeling_mode: "reward_labeling"
   gpu_id: 0
 
 # =============================================================================
@@ -43,9 +39,13 @@ training:
 # =============================================================================
 reward:
   task_instruction: |
-    Detailed task description for the VLM reward model.
-    Include success criteria and failure conditions.
-    If the task fails, all frames after failure should be scored 0.
+    Pick up the kettle with the right hand and place it onto the charger base.
+    The robot should grasp the kettle handle firmly with the right hand.
+    The left hand should remain open and not interfere.
+    The task succeeds when the kettle is placed upright on the charger base.
+    The task fails if the kettle is dropped, knocked over, or not placed on the base.
+    The task fails if the robot collides with objects on the table.
+    If the task fails, all frames after the failure should be scored 0.
   
   max_frames: 30
   image_rotation: 0
@@ -63,8 +63,8 @@ policy_server:
 # ROBOT CONFIGURATION - H1-2 robot settings
 # =============================================================================
 robot:
-  # Hand control: true for 26 DOF (14 arm + 12 hand), false for 14 DOF (arms only)
-  include_hands: false
+  # Hand control ENABLED for kettle task (26 DOF = 14 arm + 12 hand)
+  include_hands: true
   
   network_interface: "eno1"
   left_hand_ip: "192.168.123.211"
@@ -98,3 +98,4 @@ pipeline:
   start_phase: "data_collection"
   start_epoch: 0
   auto_sync: true
+

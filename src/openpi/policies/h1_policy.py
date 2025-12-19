@@ -11,7 +11,7 @@ from openpi.models import model as _model
 def make_h1_example() -> dict:
     """Creates a random input example for the H1 policy."""
     return {
-        "state": np.random.rand(14),
+        "state": np.random.rand(26),
         "images": {
             "cam_head": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
             "cam_left_wrist": np.random.randint(256, size=(3, 224, 224), dtype=np.uint8),
@@ -121,7 +121,7 @@ class H1Outputs(transforms.DataTransformFn):
             - 26: Arms + hands (14 arm + 12 hand)
     """
     
-    action_dim: int = 14  # Default to 14 for backwards compatibility
+    action_dim: int = 26  # Default to 14 for backwards compatibility
 
     def __call__(self, data: dict) -> dict:
         # Only return the first N actions -- since we padded actions above to fit the model action

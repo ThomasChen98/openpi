@@ -46,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             KEEP_PERIOD="$2"
             shift 2
             ;;
+        --action-dim)
+            ACTION_DIM="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -61,6 +65,7 @@ GPU_ID="${GPU_ID:-0}"
 MAX_EPOCHS="${MAX_EPOCHS:-}"  # Empty means use config default
 SAVE_INTERVAL="${SAVE_INTERVAL:-}"  # Empty means use config default
 KEEP_PERIOD="${KEEP_PERIOD:-}"  # Empty means use config default
+ACTION_DIM="${ACTION_DIM:-}"  # Empty means use config default (14=arms, 26=arms+hands)
 
 # Base directories
 BASE_LEROBOT_DIR="${BASE_LEROBOT_DIR:-examples/h1_control_client/h1_data_lerobot}"
@@ -112,6 +117,9 @@ if [ -n "$SAVE_INTERVAL" ]; then
 fi
 if [ -n "$KEEP_PERIOD" ]; then
     echo "Keep period: $KEEP_PERIOD"
+fi
+if [ -n "$ACTION_DIM" ]; then
+    echo "Action dim: $ACTION_DIM (14=arms, 26=arms+hands)"
 fi
 echo "========================================================"
 
@@ -173,6 +181,9 @@ if [ -n "$SAVE_INTERVAL" ]; then
 fi
 if [ -n "$KEEP_PERIOD" ]; then
     TRAIN_CMD="$TRAIN_CMD --keep-period $KEEP_PERIOD"
+fi
+if [ -n "$ACTION_DIM" ]; then
+    TRAIN_CMD="$TRAIN_CMD --action-dim $ACTION_DIM"
 fi
 
 echo ""

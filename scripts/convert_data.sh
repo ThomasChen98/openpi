@@ -58,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             REWARD_ADVANTAGE_THRESHOLD="$2"
             shift 2
             ;;
+        --action-dim)
+            ACTION_DIM="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -78,6 +82,9 @@ REWARD_TASK_INSTRUCTION="${REWARD_TASK_INSTRUCTION:-}"
 REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
 REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
 REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
+
+# Action dimension (empty = auto-detect from HDF5, 14=arms, 26=arms+hands)
+ACTION_DIM="${ACTION_DIM:-}"
 
 # Base directories
 BASE_DATA_DIR="${BASE_DATA_DIR:-examples/h1_control_client/h1_data_processed}"
@@ -109,6 +116,11 @@ echo "Labeling mode: $LABELING_MODE"
 echo "Config name: $CONFIG_NAME"
 if [ -n "$EPOCH_NUM" ]; then
     echo "Epoch: $EPOCH_NUM"
+fi
+if [ -n "$ACTION_DIM" ]; then
+    echo "Action dim: $ACTION_DIM (14=arms, 26=arms+hands)"
+else
+    echo "Action dim: auto-detect from HDF5"
 fi
 echo "========================================================"
 
@@ -145,6 +157,11 @@ if [ "$LABELING_MODE" != "none" ]; then
         CONVERT_CMD="$CONVERT_CMD --reward_image_rotation $REWARD_IMAGE_ROTATION"
         CONVERT_CMD="$CONVERT_CMD --reward_advantage_threshold $REWARD_ADVANTAGE_THRESHOLD"
     fi
+fi
+
+# Add action dimension if specified (otherwise convert script auto-detects from HDF5)
+if [ -n "$ACTION_DIM" ]; then
+    CONVERT_CMD="$CONVERT_CMD --action_dim $ACTION_DIM"
 fi
 
 echo ""

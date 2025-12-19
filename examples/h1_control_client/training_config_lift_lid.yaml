@@ -1,31 +1,27 @@
 # =============================================================================
-# H1 Integrated Training Pipeline Configuration - DEFAULT/TEMPLATE
+# H1 Integrated Training Pipeline Configuration - LIFT LID TASK
 # =============================================================================
-# 
-# RECOMMENDED: Use task-specific configs instead:
-#   - training_config_place_kettle.yaml  (with hands, 26 DOF)
-#   - training_config_lift_lid.yaml      (no hands, 14 DOF)
-#
+# Task: Lift lid off bowl and place on table (NO HANDS - 14 DOF)
+#   
 # Usage:
-#   ./scripts/integrated_training.sh --config-file training_config_place_kettle.yaml
-#   ./scripts/integrated_training.sh --config-file training_config_lift_lid.yaml
-#
-# This file serves as a template. Copy and modify for new tasks.
+#   1. Run: ./scripts/integrated_training.sh --config-file training_config_lift_lid.yaml
+#   2. On robot: python h1_execution_client.py --config training_config_lift_lid.yaml
 # =============================================================================
 
 # =============================================================================
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "my_task"                                    # Short name for directories/checkpoints
-  description: "Description of what the robot should do"
+  name: "lift_lid"                                   # Short name for directories/checkpoints
+  description: "Lift the lid on top of the bowl with both hands, move it steadily away from the bowl, and place it flat on the table"
 
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  base_checkpoint: ""                                # Leave empty to train from scratch
+  # Base checkpoint: pretrained on move_lid task
+  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999"
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
@@ -35,7 +31,7 @@ training:
   save_interval: 1000
   keep_period: 1000
   num_repeats: 2
-  labeling_mode: "reward_labeling"                   # none, human_labeling, reward_labeling
+  labeling_mode: "reward_labeling"
   gpu_id: 0
 
 # =============================================================================
@@ -43,9 +39,12 @@ training:
 # =============================================================================
 reward:
   task_instruction: |
-    Detailed task description for the VLM reward model.
-    Include success criteria and failure conditions.
-    If the task fails, all frames after failure should be scored 0.
+    Lift the lid on top of the bowl with both hands, move it steadily away from the bowl, and place it flat on the table.
+    The robot must use its two hands to carefully put the lid on the table.
+    Very important: The task fails if the lid slips, is flipped, drops, or is knocked off during lifting or placement.
+    The task fails if the lid is not placed flat on the table (e.g., still connected to the bowl).
+    The task fails if the hands of the robot collide with the bowl or the table.
+    If the task fails, all the frames after the failure should be scored 0.
   
   max_frames: 30
   image_rotation: 0
@@ -63,7 +62,7 @@ policy_server:
 # ROBOT CONFIGURATION - H1-2 robot settings
 # =============================================================================
 robot:
-  # Hand control: true for 26 DOF (14 arm + 12 hand), false for 14 DOF (arms only)
+  # Hand control DISABLED for lift lid task (14 DOF arms only)
   include_hands: false
   
   network_interface: "eno1"
@@ -98,3 +97,4 @@ pipeline:
   start_phase: "data_collection"
   start_epoch: 0
   auto_sync: true
+

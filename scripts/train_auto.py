@@ -232,14 +232,18 @@ def main(
     # Load the config by name
     config = _config.get_config(config_name)
     
-    # If data_dir is provided, override the data_dir in the config
+    # If data_dir is provided, override in the config
     if data_dir is not None:
         if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+            data_updates = {}
+            if data_dir is not None:
+                data_updates['data_dir'] = data_dir
+                logging.info(f"Overriding data_dir to: {data_dir}")
+            
             config = dataclasses.replace(
                 config,
-                data=dataclasses.replace(config.data, data_dir=data_dir)
+                data=dataclasses.replace(config.data, **data_updates)
             )
-            logging.info(f"Overriding data_dir to: {data_dir}")
     
     # Override training parameters if provided
     if max_epochs is not None:

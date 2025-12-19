@@ -97,14 +97,18 @@ def create_policy(args: Args) -> _policy.Policy:
         case Checkpoint():
             config = _config.get_config(args.policy.config)
             
-            # If data_dir is provided, override the data_dir in the config
-            if args.policy.data_dir is not None:
+            # If data_dir or action_dim is provided, override in the config
+            if args.policy.data_dir is not None or args.policy.action_dim is not None:
                 if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+                    data_updates = {}
+                    if args.policy.data_dir is not None:
+                        data_updates['data_dir'] = args.policy.data_dir
+                        logging.info(f"Overriding data_dir to: {args.policy.data_dir}")
+                    
                     config = dataclasses.replace(
                         config,
-                        data=dataclasses.replace(config.data, data_dir=args.policy.data_dir)
+                        data=dataclasses.replace(config.data, **data_updates)
                     )
-                    logging.info(f"Overriding data_dir to: {args.policy.data_dir}")
             
             return _policy_config.create_trained_policy(
                 config, args.policy.dir, default_prompt=args.default_prompt

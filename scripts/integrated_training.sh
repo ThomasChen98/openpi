@@ -100,6 +100,15 @@ REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
 SERVER_PORT=$(yq -r '.policy_server.port // 8000' "$CONFIG_FILE")
 
+# Robot
+INCLUDE_HANDS=$(yq -r '.robot.include_hands // false' "$CONFIG_FILE")
+# Convert include_hands to action_dim: true=26, false=14
+if [ "$INCLUDE_HANDS" = "true" ]; then
+    ACTION_DIM=26
+else
+    ACTION_DIM=14
+fi
+
 # Pipeline
 START_PHASE=$(yq -r '.pipeline.start_phase // "data_collection"' "$CONFIG_FILE")
 START_EPOCH=$(yq -r '.pipeline.start_epoch // 0' "$CONFIG_FILE")
@@ -223,12 +232,14 @@ start_server() {
     export CUDA_VISIBLE_DEVICES=$GPU_ID
     
     log_info "Starting server..."
+    log_info "Action dim: $ACTION_DIM (include_hands=$INCLUDE_HANDS)"
     nohup uv run scripts/serve_policy.py \
         --training-epoch "$EPOCH" \
         policy:checkpoint \
         --policy.config="$CONFIG_NAME" \
         --policy.dir="$checkpoint_dir" \
         --policy.data-dir="$lerobot_data_dir" \
+        --policy.action-dim="$ACTION_DIM" \
         > "$PROJECT_ROOT/logs/server_epoch${EPOCH}.log" 2>&1 &
     SERVER_PID=$!
     
@@ -477,6 +488,7 @@ convert_epoch_data() {
     
     log_info "Converting $count episodes..."
     log_info "Labeling mode: $LABELING_MODE"
+    log_info "Action dim: $ACTION_DIM (include_hands=$INCLUDE_HANDS)"
     
     # Build convert command
     local convert_cmd="./scripts/convert_data.sh \
@@ -486,7 +498,8 @@ convert_epoch_data() {
         --labeling-mode \"$LABELING_MODE\" \
         --num-repeats \"$NUM_REPEATS\" \
         --config-name \"$CONFIG_NAME\" \
-        --data-dir \"$raw_dir\""
+        --data-dir \"$raw_dir\" \
+        --action-dim \"$ACTION_DIM\""
     
     # Add reward labeling parameters if in reward_labeling mode
     if [ "$LABELING_MODE" = "reward_labeling" ]; then
@@ -521,6 +534,7 @@ train_epoch() {
     
     local train_args="--task-name $TASK_NAME --epoch $EPOCH --config-name $CONFIG_NAME --gpu $GPU_ID"
     train_args="$train_args --max-epochs $MAX_EPOCHS --save-interval $SAVE_INTERVAL --keep-period $KEEP_PERIOD"
+    train_args="$train_args --action-dim $ACTION_DIM"
     
     if [ -n "$base_checkpoint" ]; then
         train_args="$train_args --base-checkpoint $base_checkpoint"
@@ -576,6 +590,7 @@ show_config() {
     echo -e "  Task Description: ${GREEN}$TASK_DESCRIPTION${NC}"
     echo -e "  Policy Config:    $CONFIG_NAME"
     echo -e "  Base Checkpoint:  ${BASE_CHECKPOINT:-none}"
+    echo -e "  Include Hands:    $INCLUDE_HANDS (action_dim=$ACTION_DIM)"
     echo -e "  Max Epochs:       $MAX_EPOCHS"
     echo -e "  Save Interval:    $SAVE_INTERVAL"
     echo -e "  Keep Period:      $KEEP_PERIOD"

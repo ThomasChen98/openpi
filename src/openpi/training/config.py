@@ -395,7 +395,8 @@ class LeRobotH1LocalDataConfig(DataConfigFactory):
         )
 
         if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(14)
+            # Only apply delta transform to the arm joints (first 14), not hands
+            delta_action_mask = _transforms.make_bool_mask(26)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -484,7 +485,7 @@ class LeRobotH1DataConfig(DataConfigFactory):
         # LIBERO already represents actions as deltas, but we have some old Pi0 checkpoints that are trained with this
         # extra delta transform.
         if self.extra_delta_transform:
-            delta_action_mask = _transforms.make_bool_mask(14)
+            delta_action_mask = _transforms.make_bool_mask(26)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1106,10 +1107,16 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
-        num_train_steps=400,
+        num_train_steps=5_000,
         batch_size=32,
-        save_interval=200,
-        keep_period=100,
+        save_interval=1_000,
+        keep_period=1_000,
+        # lr_schedule=_optimizer.CosineDecaySchedule(
+        #     warmup_steps=1_000,
+        #     peak_lr=2.5e-6,
+        #     decay_steps=30_000,
+        #     decay_lr=2.5e-7,
+        # ),
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.

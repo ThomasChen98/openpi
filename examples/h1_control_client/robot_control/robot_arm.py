@@ -160,7 +160,12 @@ class H1_2_ArmController:
         self.publish_thread.daemon = True
         self.publish_thread.start()
 
-        logger_mp.info("Initialize H1_2_ArmController OK!\n")
+        logger_mp.info("Initialize H1_2_ArmController OK!")
+        logger_mp.info(f"  Hand control enabled: {self.hand_control}")
+        if self.hand_control:
+            logger_mp.info(f"  Left hand pub: {self.left_hand_pub is not None}")
+            logger_mp.info(f"  Right hand pub: {self.right_hand_pub is not None}")
+            logger_mp.info(f"  Default hand gesture: {INSPIRE_HAND_OPEN} (open)")
     
     def init_hand_control(self):
         """Initialize hand DDS communication and bridges"""
@@ -326,11 +331,6 @@ class H1_2_ArmController:
     def ctrl_dual_arm(self, q_target, tauff_target, left_hand_gesture=None, right_hand_gesture=None):
         '''Set control target values q & tau of the left and right arm motors, and hand gestures.'''
         
-        # Debug: Log what we're receiving (throttled to every 0.5s)
-        if not hasattr(self, '_last_log_time'):
-            self._last_log_time = 0
-        current_time = time.time()
-        
         with self.ctrl_lock:
             self.q_target = q_target
             self.tauff_target = tauff_target
@@ -338,15 +338,34 @@ class H1_2_ArmController:
                 self.left_hand_gesture = np.clip(left_hand_gesture, INSPIRE_HAND_CLOSED, INSPIRE_HAND_OPEN)
             if right_hand_gesture is not None:
                 self.right_hand_gesture = np.clip(right_hand_gesture, INSPIRE_HAND_CLOSED, INSPIRE_HAND_OPEN)
+            
+            # Debug: Log hand gesture updates (throttled)
+            if not hasattr(self, '_hand_log_counter'):
+                self._hand_log_counter = 0
+            self._hand_log_counter += 1
+            if self._hand_log_counter % 50 == 1:  # Log every 50th call (~1/sec at 50Hz)
+                if left_hand_gesture is not None or right_hand_gesture is not None:
+                    logger_mp.info(f"[ctrl_dual_arm] Hand gesture update: L={self.left_hand_gesture[:3]}..., R={self.right_hand_gesture[:3]}...")
     
     def send_hand_commands(self):
         """Send hand commands at 250Hz - same as robot control frequency"""
         if self.left_hand_pub is None or self.right_hand_pub is None:
+            # Debug: warn if publishers not initialized
+            if not hasattr(self, '_pub_warning_logged'):
+                self._pub_warning_logged = True
+                logger_mp.warning("[send_hand_commands] Hand publishers not initialized - commands not being sent!")
             return
             
-        # Copy target hand angles
+        # Copy target hand angles (under implicit lock from numpy)
         left_hand_angle = self.left_hand_gesture.copy()
         right_hand_angle = self.right_hand_gesture.copy()
+        
+        # Debug: Log what we're sending (throttled to every 0.5s at 250Hz)
+        if not hasattr(self, '_send_hand_log_counter'):
+            self._send_hand_log_counter = 0
+        self._send_hand_log_counter += 1
+        if self._send_hand_log_counter % 125 == 1:
+            logger_mp.debug(f"[send_hand_commands] Sending: L={[int(a) for a in left_hand_angle]}, R={[int(a) for a in right_hand_angle]}")
         
         # Create left hand command (angle mode)
         left_cmd = inspire_hand_defaut.get_inspire_hand_ctrl()

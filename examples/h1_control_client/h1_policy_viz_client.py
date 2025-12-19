@@ -423,7 +423,7 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
     Returns:
         39-dim joint positions for URDF (27 robot + 12 hand)
     """
-    leg_joints_zeros = np.zeros(13)
+        leg_joints_zeros = np.zeros(13)
     
     if len(joint_positions) == 14:
         robot_joints = np.concatenate([leg_joints_zeros, joint_positions])

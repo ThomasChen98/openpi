@@ -6,9 +6,16 @@ to the HDF5 format used by the H1 control pipeline for visualization and trainin
 
 Dataset source: https://humanoideveryday.github.io/
 
+Output format:
+  - 14 DoF (arms only): [left_arm(7), right_arm(7)]
+  - 26 DoF (arms + hands): [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+
 Usage:
-    # Convert a single task
+    # Convert with arms + hands (26 DoF, default)
     python convert_humanoid_everyday_to_hdf5.py --input_dir ~/Downloads/push_a_button --output_dir ./h1_data_processed/humanoid_everyday/
+
+    # Convert arms only (14 DoF)
+    python convert_humanoid_everyday_to_hdf5.py --input_dir ~/Downloads/push_a_button --output_dir ./output/ --no-include_hands
 
     # Convert with specific episodes
     python convert_humanoid_everyday_to_hdf5.py --input_dir ~/Downloads/push_a_button --output_dir ./output/ --max_episodes 10
@@ -59,19 +66,22 @@ def validate_humanoid_everyday_format(data_dir: Path) -> tuple[bool, str]:
     return True, f"Valid Humanoid Everyday dataset with {len(episode_dirs)} episodes"
 
 
-def load_humanoid_everyday_episode(episode_dir: Path) -> dict:
+def load_humanoid_everyday_episode(episode_dir: Path, include_hands: bool = True) -> dict:
     """Load a single episode from Humanoid Everyday format.
     
     Args:
         episode_dir: Path to episode directory
+        include_hands: If True, include hand state (26 DoF). If False, arms only (14 DoF)
         
     Returns:
         Dictionary with keys:
-            - actions: (N, 14) array of arm joint commands
-            - qpos: (N, 14) array of arm joint states
+            - actions: (N, D) array of joint commands (D=14 or 26)
+            - qpos: (N, D) array of joint states (D=14 or 26)
             - ego_cam: (N, H, W, 3) array of RGB images
             - depth: (N, H, W) array of depth maps (optional)
             - has_depth: bool indicating if depth data exists
+            - dof: int indicating degrees of freedom (14 or 26)
+            - has_hand_state: bool indicating if hand data was available and included
     """
     # Load JSON data
     with open(episode_dir / "data.json", "r") as f:
@@ -79,29 +89,53 @@ def load_humanoid_everyday_episode(episode_dir: Path) -> dict:
     
     num_steps = len(data)
     
-    # Extract arm states and actions (14 DoF)
-    arm_states = []
-    arm_actions = []
+    # Check if hand state exists in the data
+    first_step = data[0]
+    hand_state_raw = first_step["states"].get("hand_state")
+    has_hand_state = hand_state_raw is not None
+    
+    # Extract arm states and actions, optionally with hands
+    qpos_list = []
+    actions_list = []
     
     for i, step in enumerate(data):
         # Humanoid Everyday arm_state is 14 dimensions
         # This is the sensor reading - actual measured joint positions
         arm_state = np.array(step["states"]["arm_state"], dtype=np.float32)
-        arm_states.append(arm_state)
         
-        # FIX: Use next timestep's arm_state as the action target
+        # Optionally include hand state (12 dimensions)
+        if include_hands and has_hand_state:
+            hand_state = np.array(step["states"]["hand_state"], dtype=np.float32)
+            # 26 DoF: [arm_state(14), hand_state(12)]
+            current_state = np.concatenate([arm_state, hand_state])
+        else:
+            # 14 DoF: arms only
+            current_state = arm_state
+        
+        qpos_list.append(current_state)
+        
+        # FIX: Use next timestep's state as the action target
         # This ensures action and state are in the same coordinate frame.
         # Previously we used sol_q (IK motor commands) which has motor offsets
         # that don't match sensor readings, causing ~1.3 rad systematic offset.
         if i < len(data) - 1:
             next_arm_state = np.array(data[i + 1]["states"]["arm_state"], dtype=np.float32)
-            arm_actions.append(next_arm_state)
+            
+            if include_hands and has_hand_state:
+                next_hand_state = np.array(data[i + 1]["states"]["hand_state"], dtype=np.float32)
+                next_state = np.concatenate([next_arm_state, next_hand_state])
+            else:
+                next_state = next_arm_state
+            
+            actions_list.append(next_state)
         else:
             # For last timestep, use current state (no further motion)
-            arm_actions.append(arm_state.copy())
+            actions_list.append(current_state.copy())
     
-    qpos = np.array(arm_states, dtype=np.float32)  # (N, 14)
-    actions = np.array(arm_actions, dtype=np.float32)  # (N, 14)
+    qpos = np.array(qpos_list, dtype=np.float32)  # (N, 14) or (N, 26)
+    actions = np.array(actions_list, dtype=np.float32)  # (N, 14) or (N, 26)
+    
+    dof = 26 if (include_hands and has_hand_state) else 14
     
     # Load images
     color_dir = episode_dir / "color"
@@ -152,6 +186,8 @@ def load_humanoid_everyday_episode(episode_dir: Path) -> dict:
         "ego_cam": ego_cam,
         "depth": depth_maps,
         "has_depth": has_depth,
+        "dof": dof,
+        "has_hand_state": include_hands and has_hand_state,
     }
 
 
@@ -182,13 +218,15 @@ def convert_episode_to_hdf5(episode_data: dict, output_path: Path) -> None:
         f.attrs["fps"] = 30
         f.attrs["num_frames"] = len(episode_data["actions"])
         f.attrs["source"] = "humanoid_everyday"
-        f.attrs["arm_dof"] = 14
+        f.attrs["dof"] = episode_data["dof"]
+        f.attrs["has_hand_state"] = episode_data["has_hand_state"]
 
 
 def main(
     input_dir: str,
     output_dir: str,
     *,
+    include_hands: bool = True,
     max_episodes: Optional[int] = None,
     skip_depth: bool = False,
 ) -> None:
@@ -197,6 +235,7 @@ def main(
     Args:
         input_dir: Path to Humanoid Everyday task directory (e.g., ~/Downloads/push_a_button)
         output_dir: Output directory for HDF5 files
+        include_hands: Include hand data for 26 DoF output (default: True). If False, outputs 14 DoF arms only
         max_episodes: Maximum number of episodes to convert (None = all)
         skip_depth: Skip loading depth data (faster conversion)
     """
@@ -223,14 +262,27 @@ def main(
     print(f"\nConverting {len(episode_dirs)} episodes to HDF5 format...")
     print(f"Output directory: {output_path}")
     
+    # Track DoF information from first episode
+    first_episode_dof = None
+    first_episode_has_hands = None
+    
     # Convert each episode
-    for episode_dir in tqdm(episode_dirs, desc="Converting episodes"):
+    for idx, episode_dir in enumerate(tqdm(episode_dirs, desc="Converting episodes")):
         episode_num = int(episode_dir.name.split("_")[1])
         output_file = output_path / f"episode_{episode_num}.hdf5"
         
         try:
             # Load episode data
-            episode_data = load_humanoid_everyday_episode(episode_dir)
+            episode_data = load_humanoid_everyday_episode(episode_dir, include_hands=include_hands)
+            
+            # Track DoF info from first episode
+            if idx == 0:
+                first_episode_dof = episode_data['dof']
+                first_episode_has_hands = episode_data['has_hand_state']
+                dof_mode = "arms + hands" if first_episode_has_hands else "arms only"
+                print(f"\n  Mode: {dof_mode} ({first_episode_dof} DoF)")
+                if include_hands and not first_episode_has_hands:
+                    print(f"  Warning: --include_hands specified but dataset has no hand_state!")
             
             # Convert to HDF5
             convert_episode_to_hdf5(episode_data, output_file)
@@ -242,6 +294,7 @@ def main(
             continue
     
     print(f"\n✓ Conversion complete! Converted {len(episode_dirs)} episodes")
+    print(f"  DoF: {first_episode_dof} ({'arms + hands' if first_episode_has_hands else 'arms only'})")
     print(f"\nYou can now visualize with:")
     print(f"  python utils/data_replay.py --hdf5-path {output_path}/episode_0.hdf5")
     print(f"\nOr convert to LeRobot format:")

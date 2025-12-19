@@ -175,6 +175,11 @@ class H1TrainingClient:
         self.running = True
         self.last_policy_epoch = -1  # Track which policy epoch we've seen
         
+        # Hand control configuration - read from robot.include_hands in config
+        self.include_hands = self.config.get('robot', {}).get('include_hands', False)
+        self.action_dim = 26 if self.include_hands else 14
+        logger.info(f"Hand control: {'enabled (26 DOF)' if self.include_hands else 'disabled (14 DOF)'}")
+        
         # Components (initialized lazily)
         self.robot = None
         self.ik_solver = None
@@ -237,17 +242,17 @@ class H1TrainingClient:
             self.ik_solver = H1_2_ArmIK(
                 Unit_Test=False,
                 Visualization=False,
-                Hand_Control=True
+                Hand_Control=self.include_hands
             )
             logger.info("  IK solver ready")
             
-            # Initialize robot controller (includes hand bridges)
-            logger.info("  Initializing robot controller...")
+            # Initialize robot controller (includes hand bridges if enabled)
+            logger.info(f"  Initializing robot controller (hand_control={self.include_hands})...")
             self.robot = H1_2_ArmController(
                 simulation_mode=False,
-                hand_control=True,
-                left_hand_ip=robot_config.get('left_hand_ip', '192.168.123.211'),
-                right_hand_ip=robot_config.get('right_hand_ip', '192.168.123.210'),
+                hand_control=self.include_hands,
+                left_hand_ip=robot_config.get('left_hand_ip', '192.168.123.211') if self.include_hands else None,
+                right_hand_ip=robot_config.get('right_hand_ip', '192.168.123.210') if self.include_hands else None,
                 network_interface=robot_config.get('network_interface', 'eno1')
             )
             logger.info("  Robot controller ready")
@@ -602,6 +607,33 @@ class H1TrainingClient:
         
         return gravity_torques
     
+    def scale_hand_values(self, hand_values: np.ndarray) -> np.ndarray:
+        """
+        Scale hand values from 0-1 range to 0-1000 range for Inspire hands.
+        
+        Data convention (LeRobot/humanoid_everyday):
+          - 0.0 = fully open
+          - 1.0 = fully closed (grasping)
+        
+        Inspire hardware convention:
+          - 0 = fully open
+          - 1000 = fully closed
+        
+        Same convention! Direct scaling: data * 1000
+        
+        Args:
+            hand_values: (6,) array of hand joint values in 0-1 range
+            
+        Returns:
+            (6,) array scaled to 0-1000 range
+        """
+        raw_max = np.max(hand_values)
+        
+        # If max value is <= 1.5, assume it's normalized 0-1 and scale to 0-1000
+        if raw_max <= 1.5:
+            return hand_values * 1000.0
+        return hand_values
+    
     def reset_to_pose(self, duration: float = 2.0):
         """
         Smoothly reset the robot to the configured reset pose.
@@ -644,7 +676,9 @@ class H1TrainingClient:
         Query the policy server for an action chunk.
         
         Returns:
-            Action chunk of shape (action_horizon, action_dim), typically (50, 14)
+            Action chunk of shape (action_horizon, action_dim)
+            - (50, 14) for arms only (include_hands=false)
+            - (50, 26) for arms + hands (include_hands=true)
         """
         # Get observation formatted for policy inference
         obs = self.get_observation(for_policy=True)
@@ -667,8 +701,12 @@ class H1TrainingClient:
         - Records state and images for each timestep
         - Checks for stop signal between actions
         
+        Supports two action formats based on include_hands config:
+        - 14 DOF: arm joints only [left_arm(7), right_arm(7)]
+        - 26 DOF: arm joints (14) + hand joints (12) [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+        
         Args:
-            action_chunk: Array of shape (N, 14) with arm joint actions
+            action_chunk: Array of shape (N, 14) or (N, 26) depending on include_hands
             
         Returns:
             Number of actions executed (may be less than N if stopped early)
@@ -676,7 +714,8 @@ class H1TrainingClient:
         control_period = 1.0 / 50  # 50Hz
         actions_executed = 0
         
-        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz...")
+        action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
+        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz ({action_dim} DOF)...")
         
         for i, action in enumerate(action_chunk):
             loop_start = time.time()
@@ -687,25 +726,50 @@ class H1TrainingClient:
                 logger.info(f"Stop signal received at action {i}/{len(action_chunk)}")
                 return actions_executed
             
-            # Ensure action is correct dimension
-            arm_joints = action[:14] if len(action) > 14 else action
+            # Extract arm joints (first 14)
+            arm_joints = action[:14]
+            
+            # Extract hand joints if include_hands and 26 DOF action
+            if self.include_hands and len(action) >= 26:
+                # Format: [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+                # Scale from 0-1 to 0-1000 range for Inspire hands
+                left_hand = self.scale_hand_values(action[14:20])    # Indices 14-19
+                right_hand = self.scale_hand_values(action[20:26])   # Indices 20-25
+            else:
+                # Default to fully open hands
+                left_hand = np.full(6, 1000.0)
+                right_hand = np.full(6, 1000.0)
             
             # Compute gravity compensation
             gravity_torques = self.compute_gravity_compensation(arm_joints)
             
-            # Send command to robot
-            self.robot.ctrl_dual_arm(
-                q_target=arm_joints,
-                tauff_target=gravity_torques
-            )
+            # Send command to robot (with hand gestures if enabled)
+            # SWAP left/right hands to match physical robot convention
+            # Data "left" goes to physical right hand, data "right" goes to physical left hand
+            if self.include_hands:
+                self.robot.ctrl_dual_arm(
+                    q_target=arm_joints,
+                    tauff_target=gravity_torques,
+                    left_hand_gesture=right_hand,   # SWAPPED
+                    right_hand_gesture=left_hand    # SWAPPED
+                )
+            else:
+                self.robot.ctrl_dual_arm(
+                    q_target=arm_joints,
+                    tauff_target=gravity_torques
+                )
             
             # Record timestep if recording is active
             if self.recording_active and self.episode_writer:
                 current_q = self.robot.get_current_dual_arm_q()
                 obs = self.get_observation(for_policy=False)
+                
+                # For recording, use the full action (arm + hands if applicable)
+                recorded_action = action[:self.action_dim] if len(action) >= self.action_dim else action
+                
                 self.episode_writer.add_timestep(
                     qpos=current_q,
-                    action=arm_joints,
+                    action=recorded_action,
                     images=obs.get('images'),
                     phase="policy"
                 )
@@ -714,7 +778,10 @@ class H1TrainingClient:
             
             # Log progress every 10 actions
             if i % 10 == 0:
-                logger.info(f"   Step {i}/{len(action_chunk)}: joints = [{arm_joints[0]:.2f}, {arm_joints[1]:.2f}, ...]")
+                if self.include_hands and len(action) >= 26:
+                    logger.info(f"   Step {i}/{len(action_chunk)}: arm=[{arm_joints[0]:.2f}, ...], left_hand=[{left_hand[0]:.0f}, ...]")
+                else:
+                    logger.info(f"   Step {i}/{len(action_chunk)}: joints = [{arm_joints[0]:.2f}, {arm_joints[1]:.2f}, ...]")
             
             # Maintain 50Hz control rate
             elapsed = time.time() - loop_start
