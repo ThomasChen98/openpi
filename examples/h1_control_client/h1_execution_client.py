@@ -200,6 +200,9 @@ class H1TrainingClient:
         self.recording_active = False
         self.current_phase = "policy"
         self.current_advantage_label = None  # True = good, False = bad
+        self.recording_fps = 30  # Default recording rate (can differ from control rate)
+        self.control_fps = 30   # Control loop rate (fixed for smooth motion)
+        self.frame_accumulator = 0.0  # For sub-sampling when recording_fps < control_fps
         
         # Action chunk execution state
         self.current_action_chunk = None  # Current action chunk from policy
@@ -451,7 +454,8 @@ class H1TrainingClient:
         
         # Get recording settings
         recording_config = self.config.get('recording', {})
-        fps = recording_config.get('fps', 50)
+        self.recording_fps = recording_config.get('fps', 30)  # Recording rate (default 30Hz)
+        self.frame_accumulator = 0.0  # Reset accumulator for new recording
         
         # Get data save directory (supports both old and new config structure)
         data_config = self.config.get('data', {})
@@ -470,13 +474,14 @@ class H1TrainingClient:
         self.episode_writer = EpisodeWriterHDF5(
             save_dir=epoch_dir,
             label_name="",  # Episodes saved directly in epoch_dir
-            fps=fps
+            fps=self.recording_fps
         )
         self.episode_writer.start_recording()
         self.recording_active = True
         logger.info(f"Started recording: {self.episode_writer.filepath}")
         logger.info(f"   Task: {task_name}")
         logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
+        logger.info(f"   Recording at {self.recording_fps}Hz (control at {self.control_fps}Hz)")
     
     def stop_recording(self):
         """Stop and save the current recording (emergency/cleanup use)"""
@@ -759,20 +764,29 @@ class H1TrainingClient:
                     tauff_target=gravity_torques
                 )
             
-            # Record timestep if recording is active
+            # Record timestep if recording is active (sub-sampled to recording_fps)
+            # Control runs at 50Hz, recording at recording_fps (e.g., 30Hz)
             if self.recording_active and self.episode_writer:
-                current_q = self.robot.get_current_dual_arm_q()
-                obs = self.get_observation(for_policy=False)
+                # Accumulate frames based on recording rate ratio
+                # e.g., 30Hz recording / 50Hz control = 0.6, so record ~every 1.67 control frames
+                frame_increment = self.recording_fps / self.control_fps
+                self.frame_accumulator += frame_increment
                 
-                # For recording, use the full action (arm + hands if applicable)
-                recorded_action = action[:self.action_dim] if len(action) >= self.action_dim else action
-                
-                self.episode_writer.add_timestep(
-                    qpos=current_q,
-                    action=recorded_action,
-                    images=obs.get('images'),
-                    phase="policy"
-                )
+                if self.frame_accumulator >= 1.0:
+                    self.frame_accumulator -= 1.0
+                    
+                    current_q = self.robot.get_current_dual_arm_q()
+                    obs = self.get_observation(for_policy=False)
+                    
+                    # For recording, use the full action (arm + hands if applicable)
+                    recorded_action = action[:self.action_dim] if len(action) >= self.action_dim else action
+                    
+                    self.episode_writer.add_timestep(
+                        qpos=current_q,
+                        action=recorded_action,
+                        images=obs.get('images'),
+                        phase="policy"
+                    )
             
             actions_executed += 1
             
@@ -1112,7 +1126,7 @@ class H1TrainingClient:
             
             logger.info(f"Saved episode: {filepath}")
             logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
-            logger.info(f"   Total frames: {length} (at 50Hz = {length/50:.1f}s)")
+            logger.info(f"   Total frames: {length} (at {self.recording_fps}Hz = {length/self.recording_fps:.1f}s)")
             logger.info(f"   Advantage: {advantage_str}")
         
         # Reset for next episode

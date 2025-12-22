@@ -1,0 +1,10 @@
+{
+  "task_name": "place_kettle_on_base",
+  "task_description": "Pick up the kettle with right hand and place it onto the charger",
+  "config_name": "pi05_h1_auto",
+  "epoch": 0,
+  "last_checkpoint": "",
+  "base_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/place_kettle_on_base_26dof/3000",
+  "status": "interrupted",
+  "updated_at": "2025-12-19T12:47:41-08:00"
+}

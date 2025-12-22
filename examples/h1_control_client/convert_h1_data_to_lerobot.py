@@ -253,7 +253,7 @@ def main(
     with h5py.File(first_file, "r") as f:
         detected_action_dim = int(f["action"].shape[1])  # Get DoF (14 or 26), convert to Python int
         state_dim = int(f["observations"]["qpos"].shape[1])  # Convert to Python int
-        fps = int(f.attrs.get("fps", 50))  # Default to 50 if not specified, convert to Python int
+        fps = int(f.attrs.get("fps", 30))  # Default to 30 if not specified, convert to Python int
     
     # Use provided action_dim or fall back to detected
     if action_dim is not None:

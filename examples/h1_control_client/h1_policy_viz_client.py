@@ -417,54 +417,60 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
     
     For visualization, we pad leg joints with zeros since we only have upper body control.
     
+    For 26 DoF datasets: 14 DoF upper body + 12 DoF hands
+    - First 14 dimensions: upper body joints
+    - Last 12 dimensions: hand joints (6 per hand)
+    
+    The hand joints are already in the correct order:
+    - Left hand (indices 14-19): thumb_yaw, thumb_pitch, index, middle, ring, pinky
+    - Right hand (indices 20-25): thumb_yaw, thumb_pitch, index, middle, ring, pinky
+    
+    We need to:
+    1. Pad the 14 upper body joints to 27 robot joints (add 13 zeros for legs)
+    2. Scale the 12 hand joints from encoder values (0-1000) to radians
+    
     Args:
         joint_positions: 14-dim (arm only) or 26-dim (arm + hand) joint positions
         
     Returns:
         39-dim joint positions for URDF (27 robot + 12 hand)
     """
-        leg_joints_zeros = np.zeros(13)
+    leg_joints_zeros = np.zeros(13)
     
     if len(joint_positions) == 14:
+        # 14 DoF: upper body only, no hand data
         robot_joints = np.concatenate([leg_joints_zeros, joint_positions])
         hand_joints = np.zeros(12)
     elif len(joint_positions) == 26:
+        # 26 DoF: 14 upper body + 12 hand joints
         arm_joints = joint_positions[:14]
-        hand_raw = joint_positions[14:26]
         robot_joints = np.concatenate([leg_joints_zeros, arm_joints])
         
-        # Data format (per hand): [pinky, ring, middle, index, thumb-bend, thumb-rotation]
-        # Data: indices 0-5 = left hand, indices 6-11 = right hand
-        # Data values: 0.0 = open, 1.0 = closed (SWAPPED)
-        #
-        # URDF format (per hand): [thumb_yaw, thumb_pitch, index, middle, ring, pinky]
-        # URDF: indices 0-5 = left hand, indices 6-11 = right hand (SWAPPED from data)
-        # URDF values: 0 = closed, higher = open
-        #   - thumb_yaw: -0.1 to 1.3 rad
-        #   - thumb_pitch: 0 to 0.5 rad  
-        #   - fingers: 0 to 1.7 rad
+        # Extract hand joints (last 12 dimensions)
+        hand_joint_values = joint_positions[14:26]
         
-        left_data = hand_raw[0:6]   # [pinky, ring, middle, index, thumb-bend, thumb-rotation]
-        right_data = hand_raw[6:12]
+        # Scale hand joints with different ranges for thumb joints
+        hand_joints = np.zeros_like(hand_joint_values)
         
-        hand_joints = np.zeros(12)
+        # Left hand thumb joints (indices 0, 1): thumb_yaw, thumb_pitch
+        # Right hand thumb joints (indices 6, 7): thumb_yaw, thumb_pitch
+        thumb_yaw_indices = [0, 6]  # Left and right thumb_yaw
+        thumb_pitch_indices = [1, 7]  # Left and right thumb_pitch
         
-        # SWAPPED: Left URDF (indices 0-5) <- from RIGHT data
-        # Direction inverted: (1 - data) so 0=open->max, 1=closed->0
-        hand_joints[0] = -0.1 + (1 - right_data[5]) * 1.4    # thumb_yaw from thumb-rotation
-        hand_joints[1] = (1 - right_data[4]) * 0.5           # thumb_pitch from thumb-bend
-        hand_joints[2] = (1 - right_data[3]) * 1.7           # index
-        hand_joints[3] = (1 - right_data[2]) * 1.7           # middle
-        hand_joints[4] = (1 - right_data[1]) * 1.7           # ring
-        hand_joints[5] = (1 - right_data[0]) * 1.7           # pinky
+        # Scale thumb_yaw: (0, 1000) -> (1.3, -0.1)
+        for idx in thumb_yaw_indices:
+            hand_joints[idx] = 1.3 - (hand_joint_values[idx] * 1.4 / 1000.0)
         
-        # SWAPPED: Right URDF (indices 6-11) <- from LEFT data
-        hand_joints[6] = -0.1 + (1 - left_data[5]) * 1.4     # thumb_yaw from thumb-rotation
-        hand_joints[7] = (1 - left_data[4]) * 0.5            # thumb_pitch from thumb-bend
-        hand_joints[8] = (1 - left_data[3]) * 1.7            # index
-        hand_joints[9] = (1 - left_data[2]) * 1.7            # middle
-        hand_joints[10] = (1 - left_data[1]) * 1.7           # ring
-        hand_joints[11] = (1 - left_data[0]) * 1.7           # pinky
+        # Scale thumb_pitch: (0, 1000) -> (0.6, -0.1)
+        for idx in thumb_pitch_indices:
+            hand_joints[idx] = 0.6 - (hand_joint_values[idx] * 0.7 / 1000.0)
+        
+        # Scale other finger joints: (0, 1000) -> (1.7, 0)
+        # Left hand: index, middle, ring, pinky (indices 2, 3, 4, 5)
+        # Right hand: index, middle, ring, pinky (indices 8, 9, 10, 11)
+        other_indices = [2, 3, 4, 5, 8, 9, 10, 11]
+        for idx in other_indices:
+            hand_joints[idx] = 1.7 - (hand_joint_values[idx] * 1.7 / 1000.0)
     else:
         return joint_positions
     

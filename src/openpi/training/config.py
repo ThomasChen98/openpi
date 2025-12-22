@@ -396,7 +396,7 @@ class LeRobotH1LocalDataConfig(DataConfigFactory):
 
         if self.extra_delta_transform:
             # Only apply delta transform to the arm joints (first 14), not hands
-            delta_action_mask = _transforms.make_bool_mask(26)
+            delta_action_mask = _transforms.make_bool_mask(14, -12)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1107,10 +1107,11 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
-        num_train_steps=5_000,
-        batch_size=32,
-        save_interval=1_000,
-        keep_period=1_000,
+        log_interval=10,
+        num_train_steps=3_000,
+        batch_size=64,
+        save_interval=500,
+        keep_period=500,
         # lr_schedule=_optimizer.CosineDecaySchedule(
         #     warmup_steps=1_000,
         #     peak_lr=2.5e-6,
