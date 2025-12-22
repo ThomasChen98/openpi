@@ -976,8 +976,8 @@ class H1RemoteClient:
                                         self.robot.ctrl_dual_arm(
                                             q_target=arm_joints,
                                             tauff_target=gravity_torques,
-                                            left_hand_gesture=right_hand,   # SWAPPED
-                                            right_hand_gesture=left_hand    # SWAPPED
+                                            left_hand_gesture=left_hand,   # SWAPPED
+                                            right_hand_gesture=right_hand    # SWAPPED
                                         )
                                         
                                         # Get current executed state
@@ -1059,8 +1059,8 @@ class H1RemoteClient:
                                 self.robot.ctrl_dual_arm(
                                     q_target=arm_joints,
                                     tauff_target=gravity_torques,
-                                    left_hand_gesture=right_hand,   # SWAPPED
-                                    right_hand_gesture=left_hand    # SWAPPED
+                                    left_hand_gesture=left_hand,   # SWAPPED
+                                    right_hand_gesture=right_hand    # SWAPPED
                                 )
                                 
                                 # Execute at configured control_fps
@@ -1117,8 +1117,8 @@ class H1RemoteClient:
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
                                     tauff_target=gravity_torques,
-                                    left_hand_gesture=right_hand,   # SWAPPED
-                                    right_hand_gesture=left_hand    # SWAPPED
+                                    left_hand_gesture=left_hand,   # SWAPPED
+                                    right_hand_gesture=right_hand    # SWAPPED
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             

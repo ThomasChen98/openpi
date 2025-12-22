@@ -758,8 +758,8 @@ class H1TrainingClient:
                 self.robot.ctrl_dual_arm(
                     q_target=arm_joints,
                     tauff_target=gravity_torques,
-                    left_hand_gesture=right_hand,   # SWAPPED
-                    right_hand_gesture=left_hand    # SWAPPED
+                    left_hand_gesture=left_hand,   # SWAPPED
+                    right_hand_gesture=right_hand    # SWAPPED
                 )
             else:
                 self.robot.ctrl_dual_arm(
