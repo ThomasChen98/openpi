@@ -279,20 +279,21 @@ def euler_to_quaternion(pitch: float, yaw: float, roll: float) -> tuple[float, f
     return (w, x, y, z)
 
 
-def get_observation_at_frame(data: dict, frame_idx: int, prompt: str, target_size: tuple = (224, 224)) -> dict:
+def get_observation_at_frame(data: dict, frame_idx: int, prompt: str, action_dim: int = 26, target_size: tuple = (224, 224)) -> dict:
     """Get observation at specific frame in the format expected by the policy.
     
     Args:
         data: Loaded data (HDF5 or LeRobot)
         frame_idx: Frame index to get observation from
         prompt: Task prompt/instruction
+        action_dim: Action dimension (used to slice state, default 26 for arms+hands)
         target_size: Target image size (height, width)
         
     Returns:
         Observation dictionary compatible with H1 policy
     """
-    # Get state (first 14 dimensions of qpos)
-    state = data['qpos'][frame_idx][:14].astype(np.float32)
+    # Get state (first action_dim dimensions of qpos to match what model expects)
+    state = data['qpos'][frame_idx][:action_dim].astype(np.float32)
     
     # Policy expected camera names
     policy_cameras = ['cam_head', 'cam_left_wrist', 'cam_right_wrist']
@@ -525,11 +526,16 @@ def main(args: Args) -> None:
         api_key=args.api_key,
     )
     
-    print(f"Server metadata: {policy.get_server_metadata()}")
+    server_metadata = policy.get_server_metadata()
+    print(f"Server metadata: {server_metadata}")
+    
+    # Extract action_dim from server metadata (default to 26 if not specified)
+    action_dim = server_metadata.get('action_dim', 26)
+    print(f"Using action_dim: {action_dim}")
     
     # Warm up the policy with a test observation
     print("Warming up policy...")
-    test_obs = get_observation_at_frame(data, 0, args.prompt)
+    test_obs = get_observation_at_frame(data, 0, args.prompt, action_dim=action_dim)
     policy.infer(test_obs)
     print("Policy ready!")
     
@@ -805,7 +811,7 @@ def main(args: Args) -> None:
                     return
             else:
                 inference_status.value = f"Running inference for frame {current_frame}..."
-                obs = get_observation_at_frame(data, current_frame, args.prompt)
+                obs = get_observation_at_frame(data, current_frame, args.prompt, action_dim=action_dim)
             
             # Run inference
             start_time = time.time()

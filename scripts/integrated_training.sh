@@ -256,7 +256,7 @@ start_server() {
             echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
             echo -e "${GREEN}║  POLICY SERVER RUNNING                                         ║${NC}"
             echo -e "${GREEN}║                                                                ║${NC}"
-            echo -e "${GREEN}║  WebSocket: ws://${SERVER_HOST}:${SERVER_PORT}                          ║${NC}"
+            echo -e "${GREEN}║  WebSocket: ws://${SERVER_HOST}:${SERVER_PORT}                 ║${NC}"
             echo -e "${GREEN}║  Task: ${TASK_NAME}                                            ║${NC}"
             echo -e "${GREEN}║  Prompt: ${TASK_DESCRIPTION}, Advantage=True                   ║${NC}"
             echo -e "${GREEN}║                                                                ║${NC}"

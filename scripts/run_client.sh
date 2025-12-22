@@ -6,13 +6,13 @@ set -e
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
 # Default values
-DATA_PATH="${DATA_PATH:-h1_data_processed/fold_cloth_with_both_hands_corrected_delta14/episode_01.hdf5}"
+DATA_PATH="${DATA_PATH:-h1_data_processed/fold_cloth_with_both_hands_corrected/episode_01.hdf5}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-Fold the cloth with both hands}"
+PROMPT="${PROMPT:-fold the cloth with both hands}"
 
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
-POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/999}"
+POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/1500}"
 
 # Color codes for output
 GREEN='\033[0;32m'

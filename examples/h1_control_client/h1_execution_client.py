@@ -181,6 +181,12 @@ class H1TrainingClient:
         self.action_dim = 26 if self.include_hands else 14
         logger.info(f"Hand control: {'enabled (26 DOF)' if self.include_hands else 'disabled (14 DOF)'}")
         
+        # Track current hand joint positions (in 0-1000 range)
+        # When include_hands=True, these are updated with commanded values
+        # Format: [left_hand(6), right_hand(6)] in 0-1000 range
+        self.current_left_hand = np.full(6, 1000.0)   # Default: fully open
+        self.current_right_hand = np.full(6, 1000.0)  # Default: fully open
+        
         # Components (initialized lazily)
         self.robot = None
         self.ik_solver = None
@@ -216,9 +222,18 @@ class H1TrainingClient:
         
         # Reset pose for robot (14 joints: left arm 7 + right arm 7)
         # This pose is used at the start of execution and after labeling
+        # self.reset_pose = np.array([
+        #     -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
+        #     -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
+        # ]) # for lid lifting
         self.reset_pose = np.array([
-            -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
-            -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
+            -6.1706924e-01,  4.4004798e-01, -2.1151316e-01,  2.8873777e-01,
+            8.3609962e-01, -1.4772022e-01,  3.4319836e-01, -7.1449423e-01,
+            -2.6916218e-01,  2.3940849e-01,  5.0628179e-01, -8.3155775e-01,
+            -1.5378428e-01, -5.6665635e-01,  9.4041882e+02,  9.9613104e+02,
+            9.7590662e+02,  9.6762476e+02,  8.8504492e+02,  9.2926117e+02,
+            8.1216455e+02,  9.2394373e+02,  9.4085907e+02,  9.4222583e+02,
+            1.0000000e+03,  8.3412482e+02
         ])
         
         # Signal handling
@@ -486,6 +501,26 @@ class H1TrainingClient:
         logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
         logger.info(f"   Recording at {self.recording_fps}Hz (control at {self.control_fps}Hz)")
     
+    def get_full_qpos(self) -> np.ndarray:
+        """
+        Get full robot state (qpos) including arms and hands if enabled.
+        
+        Returns:
+            - If include_hands=False: (14,) array with arm joints only
+            - If include_hands=True: (26,) array with [arm_joints(14), hand_joints(12)]
+              Hand format: [left_hand(6), right_hand(6)] in 0-1000 range
+        """
+        # Get arm joints (14 DOF)
+        arm_q = self.robot.get_current_dual_arm_q()
+        
+        if not self.include_hands:
+            return arm_q
+        
+        # Include hand joints (12 DOF) in 0-1000 range
+        # Concatenate: [arm(14), left_hand(6), right_hand(6)] = 26 DOF
+        full_qpos = np.concatenate([arm_q, self.current_left_hand, self.current_right_hand])
+        return full_qpos
+    
     def stop_recording(self):
         """Stop and save the current recording (emergency/cleanup use)"""
         if self.episode_writer:
@@ -517,8 +552,8 @@ class H1TrainingClient:
         Returns:
             Observation dict with state and images
         """
-        # Get current joint positions
-        current_q = self.robot.get_current_dual_arm_q()
+        # Get current joint positions (14 DOF or 26 DOF depending on include_hands)
+        current_q = self.get_full_qpos()
         
         # Dummy image for fallback
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -650,10 +685,25 @@ class H1TrainingClient:
             duration: Time in seconds to complete the reset motion
         """
         logger.info(f"Resetting robot to configured pose (duration: {duration}s)...")
-        logger.info(f"  Target pose: {self.reset_pose}")
         
-        # Get current position
-        current_q = self.robot.get_current_dual_arm_q()
+        # Extract arm joints (first 14) and hand joints (last 12) from reset pose
+        reset_arm_joints = self.reset_pose[:14]
+        
+        if self.include_hands and len(self.reset_pose) >= 26:
+            # Extract hand joints from reset pose (indices 14-25)
+            # Scale from 0-1 to 0-1000 range for Inspire hands
+            reset_left_hand = self.scale_hand_values(self.reset_pose[14:20])
+            reset_right_hand = self.scale_hand_values(self.reset_pose[20:26])
+            logger.info(f"  Target arm pose: {reset_arm_joints}")
+            logger.info(f"  Target hand pose: left={reset_left_hand[:3]}, right={reset_right_hand[:3]}")
+        else:
+            # No hand control or reset pose is 14 DOF
+            reset_left_hand = np.full(6, 1000.0)
+            reset_right_hand = np.full(6, 1000.0)
+            logger.info(f"  Target arm pose: {reset_arm_joints}")
+        
+        # Get current arm position
+        current_arm_q = self.robot.get_current_dual_arm_q()
         
         # Interpolate smoothly to reset pose
         control_rate = self.control_fps  # Hz
@@ -664,16 +714,33 @@ class H1TrainingClient:
             # Smooth interpolation (ease in-out)
             t_smooth = t * t * (3 - 2 * t)
             
-            target_q = current_q + t_smooth * (self.reset_pose - current_q)
+            # Interpolate arm joints
+            target_arm_q = current_arm_q + t_smooth * (reset_arm_joints - current_arm_q)
+            
+            # Interpolate hand joints
+            target_left_hand = self.current_left_hand + t_smooth * (reset_left_hand - self.current_left_hand)
+            target_right_hand = self.current_right_hand + t_smooth * (reset_right_hand - self.current_right_hand)
+            
+            # Update tracked hand positions
+            self.current_left_hand = target_left_hand.copy()
+            self.current_right_hand = target_right_hand.copy()
             
             # Compute gravity compensation
-            gravity_torques = self.compute_gravity_compensation(target_q)
+            gravity_torques = self.compute_gravity_compensation(target_arm_q)
             
-            # Send command
-            self.robot.ctrl_dual_arm(
-                q_target=target_q,
-                tauff_target=gravity_torques
-            )
+            # Send command (with hands if enabled)
+            if self.include_hands:
+                self.robot.ctrl_dual_arm(
+                    q_target=target_arm_q,
+                    tauff_target=gravity_torques,
+                    left_hand_gesture=target_left_hand,
+                    right_hand_gesture=target_right_hand
+                )
+            else:
+                self.robot.ctrl_dual_arm(
+                    q_target=target_arm_q,
+                    tauff_target=gravity_torques
+                )
             
             time.sleep(1.0 / control_rate)
         
@@ -748,18 +815,20 @@ class H1TrainingClient:
                 left_hand = np.full(6, 1000.0)
                 right_hand = np.full(6, 1000.0)
             
+            # Update tracked hand positions (used for recording full qpos)
+            self.current_left_hand = left_hand.copy()
+            self.current_right_hand = right_hand.copy()
+            
             # Compute gravity compensation
             gravity_torques = self.compute_gravity_compensation(arm_joints)
             
             # Send command to robot (with hand gestures if enabled)
-            # SWAP left/right hands to match physical robot convention
-            # Data "left" goes to physical right hand, data "right" goes to physical left hand
             if self.include_hands:
                 self.robot.ctrl_dual_arm(
                     q_target=arm_joints,
                     tauff_target=gravity_torques,
-                    left_hand_gesture=left_hand,   # SWAPPED
-                    right_hand_gesture=right_hand    # SWAPPED
+                    left_hand_gesture=left_hand,
+                    right_hand_gesture=right_hand
                 )
             else:
                 self.robot.ctrl_dual_arm(
@@ -768,17 +837,18 @@ class H1TrainingClient:
                 )
             
             # Record timestep if recording is active (sub-sampled to recording_fps)
-            # Control runs at 50Hz, recording at recording_fps (e.g., 30Hz)
+            # Control runs at control_fps (e.g., 30Hz), recording at recording_fps (e.g., 30Hz)
             if self.recording_active and self.episode_writer:
                 # Accumulate frames based on recording rate ratio
-                # e.g., 30Hz recording / 50Hz control = 0.6, so record ~every 1.67 control frames
+                # e.g., 30Hz recording / 30Hz control = 1.0, so record every control frame
                 frame_increment = self.recording_fps / self.control_fps
                 self.frame_accumulator += frame_increment
                 
                 if self.frame_accumulator >= 1.0:
                     self.frame_accumulator -= 1.0
                     
-                    current_q = self.robot.get_current_dual_arm_q()
+                    # Get full qpos (14 or 26 DOF depending on include_hands)
+                    current_q = self.get_full_qpos()
                     obs = self.get_observation(for_policy=False)
                     
                     # For recording, use the full action (arm + hands if applicable)
