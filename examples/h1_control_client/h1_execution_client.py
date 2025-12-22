@@ -154,12 +154,13 @@ class H1TrainingClient:
     and hand control matching h1_remote_client.py.
     """
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, control_fps: int = 30):
         """
         Initialize training client.
         
         Args:
             config_path: Path to training_config.yaml
+            control_fps: Control loop frequency in Hz (default: 30)
         """
         # Load configuration
         with open(config_path, 'r') as f:
@@ -201,8 +202,10 @@ class H1TrainingClient:
         self.current_phase = "policy"
         self.current_advantage_label = None  # True = good, False = bad
         self.recording_fps = 30  # Default recording rate (can differ from control rate)
-        self.control_fps = 30   # Control loop rate (fixed for smooth motion)
+        self.control_fps = control_fps   # Control loop rate (configurable for smooth motion)
         self.frame_accumulator = 0.0  # For sub-sampling when recording_fps < control_fps
+        
+        logger.info(f"Control frequency: {self.control_fps}Hz")
         
         # Action chunk execution state
         self.current_action_chunk = None  # Current action chunk from policy
@@ -653,7 +656,7 @@ class H1TrainingClient:
         current_q = self.robot.get_current_dual_arm_q()
         
         # Interpolate smoothly to reset pose
-        control_rate = 50  # Hz
+        control_rate = self.control_fps  # Hz
         num_steps = int(duration * control_rate)
         
         for i in range(num_steps):
@@ -699,10 +702,10 @@ class H1TrainingClient:
     
     def execute_action_chunk(self, action_chunk: np.ndarray) -> int:
         """
-        Execute a full action chunk on the robot at 50Hz, recording each timestep.
+        Execute a full action chunk on the robot, recording each timestep.
         
         This matches h1_remote_client's execute_action_chunk behavior:
-        - Executes all actions in the chunk at 50Hz
+        - Executes all actions in the chunk at configured control_fps
         - Records state and images for each timestep
         - Checks for stop signal between actions
         
@@ -716,11 +719,11 @@ class H1TrainingClient:
         Returns:
             Number of actions executed (may be less than N if stopped early)
         """
-        control_period = 1.0 / 50  # 50Hz
+        control_period = 1.0 / self.control_fps
         actions_executed = 0
         
         action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
-        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz ({action_dim} DOF)...")
+        logger.info(f"   Executing {len(action_chunk)} actions at {self.control_fps}Hz ({action_dim} DOF)...")
         
         for i, action in enumerate(action_chunk):
             loop_start = time.time()
@@ -928,7 +931,7 @@ class H1TrainingClient:
         This properly executes action chunks like h1_remote_client:
         1. Reset robot to configured reset pose
         2. Query policy ONCE to get action chunk (50 actions)
-        3. Execute ALL 50 actions at 50Hz
+        3. Execute ALL actions at configured control_fps
         4. Repeat until user presses 's' to stop
         
         This ensures smooth robot motion and proper frame count.
@@ -936,7 +939,7 @@ class H1TrainingClient:
         print("\n" + "=" * 60)
         print(f"[EXECUTING] Running policy (epoch {self.epoch_num}, episode {self.episode_num})")
         print("  Press 's' to stop execution and enter labeling mode")
-        print("  Each policy query returns 50 actions executed at 50Hz (~1 second)")
+        print(f"  Each policy query returns 50 actions executed at {self.control_fps}Hz (~{50/self.control_fps:.1f} seconds)")
         print("=" * 60)
         
         # Reset robot to starting pose before execution
@@ -993,7 +996,7 @@ class H1TrainingClient:
         
         print("\n" + "=" * 60)
         print(f"[LABELING] Episode {self.episode_num} execution complete")
-        print(f"  Recorded {frame_count} frames ({frame_count/50:.1f} seconds)")
+        print(f"  Recorded {frame_count} frames ({frame_count/self.recording_fps:.1f} seconds)")
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
@@ -1046,7 +1049,7 @@ class H1TrainingClient:
     
     def _hold_current_position(self):
         """Background thread to hold robot at current position with gravity compensation"""
-        control_rate = 50  # Hz
+        control_rate = self.control_fps  # Hz
         control_period = 1.0 / control_rate
         
         while self._hold_position_background and self.running:
@@ -1079,7 +1082,7 @@ class H1TrainingClient:
         # Enter damping mode
         self.robot.enter_damping_mode()
         
-        control_rate = 50  # Hz
+        control_rate = self.control_fps  # Hz
         control_period = 1.0 / control_rate
         
         with self.keyboard:
@@ -1351,6 +1354,12 @@ def main():
         action="store_true",
         help="Skip WAITING state and start collecting data immediately"
     )
+    parser.add_argument(
+        "--control-fps",
+        type=int,
+        default=30,
+        help="Control loop frequency in Hz (default: 30)"
+    )
     
     args = parser.parse_args()
     
@@ -1359,7 +1368,7 @@ def main():
         logger.error(f"Config file not found: {args.config}")
         return 1
     
-    client = H1TrainingClient(args.config)
+    client = H1TrainingClient(args.config, control_fps=args.control_fps)
     return client.run(start_immediately=args.start_immediately)
 
 

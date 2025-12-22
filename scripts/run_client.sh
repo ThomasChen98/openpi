@@ -12,7 +12,7 @@ PORT="${PORT:-8000}"
 PROMPT="${PROMPT:-Fold the cloth with both hands}"
 
 POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
-POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/500}"
+POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/999}"
 
 # Color codes for output
 GREEN='\033[0;32m'

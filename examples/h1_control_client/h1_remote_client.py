@@ -134,12 +134,16 @@ class H1RemoteClient:
                  visualization: bool = False,
                  head_camera_server_ip: str = "192.168.123.163",
                  head_camera_server_port: int = 5555,
-                 prompt: str = "bimanual manipulation task"):
+                 prompt: str = "bimanual manipulation task",
+                 control_fps: int = 30):
         
         self.server_host = server_host
         self.server_port = server_port
         self.policy_client = None
         self.prompt = prompt
+        self.control_fps = control_fps
+        
+        logger.info(f"Control frequency: {self.control_fps}Hz")
         
         # Initialize IK solver
         print(" Initializing IK solver...")
@@ -472,11 +476,11 @@ class H1RemoteClient:
     
     def _image_capture_loop(self):
         """
-        Continuous image capture thread running at 50Hz.
+        Continuous image capture thread running at configured control_fps.
         Buffers images with timestamps for synchronized recording.
         Matches the joint recording rate for consistent data.
         """
-        logger.info("Image capture thread started at 50Hz")
+        logger.info(f"Image capture thread started at {self.control_fps}Hz")
         
         while self.image_capture_running:
             try:
@@ -493,9 +497,9 @@ class H1RemoteClient:
                     if len(self.image_buffer) > self.max_image_buffer_size:
                         self.image_buffer.pop(0)
                 
-                # Sleep to maintain ~50Hz (accounting for capture time)
+                # Sleep to maintain control_fps (accounting for capture time)
                 elapsed = time.time() - loop_start
-                sleep_time = max(0, (1.0 / 50) - elapsed)
+                sleep_time = max(0, (1.0 / self.control_fps) - elapsed)
                 time.sleep(sleep_time)
                 
             except Exception as e:
@@ -542,7 +546,7 @@ class H1RemoteClient:
                 daemon=True
             )
             self.image_capture_thread.start()
-            logger.info("Started continuous image capture at 50Hz")
+            logger.info(f"Started continuous image capture at {self.control_fps}Hz")
     
     def stop_image_capture(self):
         """Stop continuous image capture"""
@@ -866,12 +870,12 @@ class H1RemoteClient:
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
                 tauff_target=gravity_torques,
-                left_hand_gesture=right_hand,   # SWAPPED
-                right_hand_gesture=left_hand    # SWAPPED
+                left_hand_gesture=left_hand,   # SWAPPED
+                right_hand_gesture=right_hand    # SWAPPED
             )
             
-            # Control at 50Hz (matches policy recording rate)
-            time.sleep(1.0 / 50)
+            # Control at configured control_fps
+            time.sleep(1.0 / self.control_fps)
         
         logger.info("✅ Action chunk execution complete")
     
@@ -989,8 +993,8 @@ class H1RemoteClient:
                                             images=images
                                         )
                                         
-                                        # Control at 50Hz
-                                        await asyncio.sleep(1.0 / 50)
+                                        # Control at configured control_fps
+                                        await asyncio.sleep(1.0 / self.control_fps)
                                     
                                     logger.info(f" RECORDED {len(actions)} timesteps to episode")
                                 except Exception as e:
@@ -1011,7 +1015,7 @@ class H1RemoteClient:
                             logger.info(f"Replaying {len(actions)} teleop frames...")
                             logger.info(f"   Action shape: {actions.shape}")
                             logger.info(f"   Mode: {'Arms + Hands (26 DOF)' if action_dim >= 26 else 'Arms only (14 DOF)'}")
-                            logger.info(f"   Duration: ~{len(actions)/50:.1f}s at 50Hz")
+                            logger.info(f"   Duration: ~{len(actions)/self.control_fps:.1f}s at {self.control_fps}Hz")
                             logger.info(f"   Computing gravity compensation for all frames...")
                             
                             # Set velocity limit to max for better tracking
@@ -1059,8 +1063,8 @@ class H1RemoteClient:
                                     right_hand_gesture=left_hand    # SWAPPED
                                 )
                                 
-                                # Execute at 50Hz (matching recording rate)
-                                await asyncio.sleep(1.0 / 50)
+                                # Execute at configured control_fps
+                                await asyncio.sleep(1.0 / self.control_fps)
                             
                             logger.info(f"Teleop replay complete")
                             response = {"status": "success", "message": f"Replayed {len(actions)} frames"}
@@ -1209,7 +1213,7 @@ class H1RemoteClient:
                                     self.episode_writer = EpisodeWriterHDF5(
                                         save_dir=save_dir,
                                         label_name=label_name,
-                                        fps=50
+                                        fps=self.control_fps
                                     )
                                     self.episode_writer.start_recording()
                                     
@@ -1219,7 +1223,7 @@ class H1RemoteClient:
                                     self.is_recording = True
                                     logger.info(f"SET is_recording=True, episode_writer={self.episode_writer is not None}")
                                     logger.info(f"Started recording to {save_dir}/{label_name}")
-                                    logger.info("Started parallel image capture at 10Hz")
+                                    logger.info(f"Started parallel image capture at {self.control_fps}Hz")
                                     response = {
                                         "status": "success",
                                         "message": f"Started recording episode {self.episode_writer.episode_idx} for label '{label_name}'",
@@ -1399,6 +1403,8 @@ def main():
                        help="Listen for commands from viz client instead of running control loop")
     parser.add_argument("--listen-port", type=int, default=5007,
                        help="Port to listen on in listen mode (default: 5007)")
+    parser.add_argument("--control-fps", type=int, default=30,
+                       help="Control loop frequency in Hz (default: 30)")
     
     args = parser.parse_args()
     
@@ -1419,7 +1425,8 @@ def main():
         head_camera_server_ip=args.head_camera_server_ip,
         head_camera_server_port=args.head_camera_server_port,
         visualization=args.visualization,
-        prompt=args.prompt
+        prompt=args.prompt,
+        control_fps=args.control_fps
     )
     
     if args.listen_mode:
