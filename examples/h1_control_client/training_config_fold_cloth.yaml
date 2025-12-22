@@ -17,7 +17,7 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "fold_cloth_with_both_hands_corrected_delta14"                                    # Short name for directories/checkpoints
+  name: "fold_cloth_with_both_hands_auto"                                    # Short name for directories/checkpoints
   description: "Fold cloth with both hands"
 
 # =============================================================================
@@ -25,7 +25,7 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/2999"                                # Leave empty to train from scratch
+  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/1500"                                # Leave empty to train from scratch
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
@@ -34,7 +34,7 @@ training:
   max_epochs: 1000
   save_interval: 1000
   keep_period: 1000
-  num_repeats: 2
+  num_repeats: 1
   labeling_mode: "human_labeling"                   # none, human_labeling, reward_labeling
   gpu_id: 0
 

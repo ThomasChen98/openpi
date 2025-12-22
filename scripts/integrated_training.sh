@@ -534,7 +534,7 @@ train_epoch() {
     
     local train_args="--task-name $TASK_NAME --epoch $EPOCH --config-name $CONFIG_NAME --gpu $GPU_ID"
     train_args="$train_args --max-epochs $MAX_EPOCHS --save-interval $SAVE_INTERVAL --keep-period $KEEP_PERIOD"
-    train_args="$train_args --action-dim $ACTION_DIM"
+    # train_args="$train_args --action-dim $ACTION_DIM"
     
     if [ -n "$base_checkpoint" ]; then
         train_args="$train_args --base-checkpoint $base_checkpoint"
