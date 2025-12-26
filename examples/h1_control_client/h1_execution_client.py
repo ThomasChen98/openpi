@@ -180,6 +180,10 @@ class H1TrainingClient:
         self.action_dim = 26 if self.include_hands else 14
         logger.info(f"Hand control: {'enabled (26 DOF)' if self.include_hands else 'disabled (14 DOF)'}")
         
+        # Control frequency configuration
+        self.control_freq = self.config.get('robot', {}).get('control_freq', 30)
+        logger.info(f"Control frequency: {self.control_freq}Hz")
+        
         # Components (initialized lazily)
         self.robot = None
         self.ik_solver = None
@@ -208,12 +212,29 @@ class H1TrainingClient:
         # Position hold state (for labeling phase)
         self._hold_position_background = False
         
-        # Reset pose for robot (14 joints: left arm 7 + right arm 7)
+        # Reset pose for robot (14 arm joints + optional 12 hand joints)
         # This pose is used at the start of execution and after labeling
-        self.reset_pose = np.array([
-            -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
-            -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
-        ])
+        # Format: [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+        if self.include_hands:
+            # Full 26 DOF pose (arms + hands)
+            self.reset_pose = np.array([
+                -5.86500406e-01,  4.23975229e-01, -2.18959212e-01,  3.03983688e-01,
+                 8.37489605e-01, -1.48091733e-01,  3.26156795e-01, -6.73690319e-01,
+                -2.56984234e-01,  2.46559739e-01,  5.24306059e-01, -8.21682692e-01,
+                -1.56169176e-01, -5.53857088e-01,  # 14 arm joints
+                9.49755615e+02,  9.94054688e+02,  9.75871399e+02,  9.71857544e+02,
+                8.82695190e+02,  9.43722473e+02,  # Left hand (6 joints)
+                8.38617737e+02,  9.47012756e+02,  9.35925964e+02,  9.37267151e+02,
+                1.00186505e+03,  8.59005188e+02   # Right hand (6 joints)
+            ])
+        else:
+            # Arms only (14 DOF)
+            self.reset_pose = np.array([
+                -5.86500406e-01,  4.23975229e-01, -2.18959212e-01,  3.03983688e-01,
+                 8.37489605e-01, -1.48091733e-01,  3.26156795e-01, -6.73690319e-01,
+                -2.56984234e-01,  2.46559739e-01,  5.24306059e-01, -8.21682692e-01,
+                -1.56169176e-01, -5.53857088e-01   # 14 arm joints
+            ])
         
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -449,14 +470,13 @@ class H1TrainingClient:
         """Start recording a new episode within the current epoch."""
         from utils.episode_writer_hdf5 import EpisodeWriterHDF5
         
-        # Get recording settings
-        recording_config = self.config.get('recording', {})
-        fps = recording_config.get('fps', 50)
+        # Get recording settings (use control_freq instead of config fps)
+        fps = self.control_freq
         
         # Get data save directory (supports both old and new config structure)
         data_config = self.config.get('data', {})
         base_save_dir = data_config.get('save_dir', 
-            recording_config.get('save_dir', './h1_data_auto'))
+            self.config.get('recording', {}).get('save_dir', './h1_data_auto'))
         
         # Get task name (supports both old and new config structure)
         task_config = self.config.get('task', {})
@@ -647,27 +667,39 @@ class H1TrainingClient:
         # Get current position
         current_q = self.robot.get_current_dual_arm_q()
         
-        # Interpolate smoothly to reset pose
-        control_rate = 50  # Hz
-        num_steps = int(duration * control_rate)
+        # Interpolate smoothly to reset pose (arm joints only)
+        num_steps = int(duration * self.control_freq)
         
         for i in range(num_steps):
             t = (i + 1) / num_steps  # 0 to 1
             # Smooth interpolation (ease in-out)
             t_smooth = t * t * (3 - 2 * t)
             
-            target_q = current_q + t_smooth * (self.reset_pose - current_q)
+            # Interpolate arm joints (first 14)
+            target_q = current_q + t_smooth * (self.reset_pose[:14] - current_q)
             
             # Compute gravity compensation
             gravity_torques = self.compute_gravity_compensation(target_q)
             
-            # Send command
-            self.robot.ctrl_dual_arm(
-                q_target=target_q,
-                tauff_target=gravity_torques
-            )
+            # Send command with hand positions if enabled
+            if self.include_hands and len(self.reset_pose) >= 26:
+                # Extract hand positions from reset pose
+                left_hand = self.reset_pose[14:20]
+                right_hand = self.reset_pose[20:26]
+                
+                self.robot.ctrl_dual_arm(
+                    q_target=target_q,
+                    tauff_target=gravity_torques,
+                    left_hand_gesture=left_hand,
+                    right_hand_gesture=right_hand
+                )
+            else:
+                self.robot.ctrl_dual_arm(
+                    q_target=target_q,
+                    tauff_target=gravity_torques
+                )
             
-            time.sleep(1.0 / control_rate)
+            time.sleep(1.0 / self.control_freq)
         
         logger.info("Reset complete")
     
@@ -694,10 +726,10 @@ class H1TrainingClient:
     
     def execute_action_chunk(self, action_chunk: np.ndarray) -> int:
         """
-        Execute a full action chunk on the robot at 50Hz, recording each timestep.
+        Execute a full action chunk on the robot at the configured control frequency, recording each timestep.
         
         This matches h1_remote_client's execute_action_chunk behavior:
-        - Executes all actions in the chunk at 50Hz
+        - Executes all actions in the chunk at the configured control frequency
         - Records state and images for each timestep
         - Checks for stop signal between actions
         
@@ -711,11 +743,11 @@ class H1TrainingClient:
         Returns:
             Number of actions executed (may be less than N if stopped early)
         """
-        control_period = 1.0 / 50  # 50Hz
+        control_period = 1.0 / self.control_freq
         actions_executed = 0
         
         action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
-        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz ({action_dim} DOF)...")
+        logger.info(f"   Executing {len(action_chunk)} actions at {self.control_freq}Hz ({action_dim} DOF)...")
         
         for i, action in enumerate(action_chunk):
             loop_start = time.time()
@@ -750,8 +782,8 @@ class H1TrainingClient:
                 self.robot.ctrl_dual_arm(
                     q_target=arm_joints,
                     tauff_target=gravity_torques,
-                    left_hand_gesture=right_hand,   # SWAPPED
-                    right_hand_gesture=left_hand    # SWAPPED
+                    left_hand_gesture=left_hand,   # SWAPPED
+                    right_hand_gesture=right_hand    # SWAPPED
                 )
             else:
                 self.robot.ctrl_dual_arm(
@@ -914,7 +946,7 @@ class H1TrainingClient:
         This properly executes action chunks like h1_remote_client:
         1. Reset robot to configured reset pose
         2. Query policy ONCE to get action chunk (50 actions)
-        3. Execute ALL 50 actions at 50Hz
+        3. Execute ALL 50 actions at the configured control frequency
         4. Repeat until user presses 's' to stop
         
         This ensures smooth robot motion and proper frame count.
@@ -922,7 +954,7 @@ class H1TrainingClient:
         print("\n" + "=" * 60)
         print(f"[EXECUTING] Running policy (epoch {self.epoch_num}, episode {self.episode_num})")
         print("  Press 's' to stop execution and enter labeling mode")
-        print("  Each policy query returns 50 actions executed at 50Hz (~1 second)")
+        print(f"  Each policy query returns 50 actions executed at {self.control_freq}Hz (~{50/self.control_freq:.1f} seconds)")
         print("=" * 60)
         
         # Reset robot to starting pose before execution
@@ -979,7 +1011,7 @@ class H1TrainingClient:
         
         print("\n" + "=" * 60)
         print(f"[LABELING] Episode {self.episode_num} execution complete")
-        print(f"  Recorded {frame_count} frames ({frame_count/50:.1f} seconds)")
+        print(f"  Recorded {frame_count} frames ({frame_count/self.control_freq:.1f} seconds)")
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
@@ -1032,8 +1064,7 @@ class H1TrainingClient:
     
     def _hold_current_position(self):
         """Background thread to hold robot at current position with gravity compensation"""
-        control_rate = 50  # Hz
-        control_period = 1.0 / control_rate
+        control_period = 1.0 / self.control_freq
         
         while self._hold_position_background and self.running:
             try:
@@ -1065,8 +1096,7 @@ class H1TrainingClient:
         # Enter damping mode
         self.robot.enter_damping_mode()
         
-        control_rate = 50  # Hz
-        control_period = 1.0 / control_rate
+        control_period = 1.0 / self.control_freq
         
         with self.keyboard:
             while self.running and self.state == TrainingState.DAMPING:
@@ -1112,7 +1142,7 @@ class H1TrainingClient:
             
             logger.info(f"Saved episode: {filepath}")
             logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
-            logger.info(f"   Total frames: {length} (at 50Hz = {length/50:.1f}s)")
+            logger.info(f"   Total frames: {length} (at {self.control_freq}Hz = {length/self.control_freq:.1f}s)")
             logger.info(f"   Advantage: {advantage_str}")
         
         # Reset for next episode
