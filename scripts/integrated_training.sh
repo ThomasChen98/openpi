@@ -80,7 +80,7 @@ TASK_DESCRIPTION=$(yq -r '.task.description' "$CONFIG_FILE")
 
 # Policy
 CONFIG_NAME=$(yq -r '.policy.config_name' "$CONFIG_FILE")
-BASE_CHECKPOINT=$(yq -r '.policy.base_checkpoint // ""' "$CONFIG_FILE")
+WARMUP_CHECKPOINT=$(yq -r '.policy.warmup_checkpoint // .policy.base_checkpoint // ""' "$CONFIG_FILE")
 
 # Training
 MAX_EPOCHS=$(yq -r '.training.max_epochs // 400' "$CONFIG_FILE")
@@ -192,7 +192,7 @@ save_state() {
   "config_name": "$CONFIG_NAME",
   "epoch": $EPOCH,
   "last_checkpoint": "$LAST_CHECKPOINT",
-  "base_checkpoint": "$BASE_CHECKPOINT",
+  "warmup_checkpoint": "$WARMUP_CHECKPOINT",
   "status": "$status",
   "updated_at": "$(date -Iseconds)"
 }
@@ -490,6 +490,11 @@ convert_epoch_data() {
     log_info "Labeling mode: $LABELING_MODE"
     log_info "Action dim: $ACTION_DIM (include_hands=$INCLUDE_HANDS)"
     
+    # For epoch 0, only keep good rollouts (collected via warmup checkpoint trained on teleoperation data)
+    if [ "$EPOCH" -eq 0 ]; then
+        log_info "Epoch 0: Filtering to keep only good rollouts (Advantage=True)"
+    fi
+    
     # Build convert command
     local convert_cmd="./scripts/convert_data.sh \
         --task-name \"$TASK_NAME\" \
@@ -500,6 +505,11 @@ convert_epoch_data() {
         --config-name \"$CONFIG_NAME\" \
         --data-dir \"$raw_dir\" \
         --action-dim \"$ACTION_DIM\""
+    
+    # For epoch 0, force filtering to only good episodes
+    if [ "$EPOCH" -eq 0 ]; then
+        convert_cmd="$convert_cmd --filter-good-only"
+    fi
     
     # Add reward labeling parameters if in reward_labeling mode
     if [ "$LABELING_MODE" = "reward_labeling" ]; then
@@ -586,17 +596,17 @@ show_config() {
     echo -e "${CYAN}  Configuration (from $CONFIG_FILE)${NC}"
     echo -e "${CYAN}========================================================${NC}"
     echo ""
-    echo -e "  Task Name:        ${GREEN}$TASK_NAME${NC}"
-    echo -e "  Task Description: ${GREEN}$TASK_DESCRIPTION${NC}"
-    echo -e "  Policy Config:    $CONFIG_NAME"
-    echo -e "  Base Checkpoint:  ${BASE_CHECKPOINT:-none}"
-    echo -e "  Include Hands:    $INCLUDE_HANDS (action_dim=$ACTION_DIM)"
-    echo -e "  Max Epochs:       $MAX_EPOCHS"
-    echo -e "  Save Interval:    $SAVE_INTERVAL"
-    echo -e "  Keep Period:      $KEEP_PERIOD"
-    echo -e "  Labeling Mode:    $LABELING_MODE"
-    echo -e "  GPU:              $GPU_ID"
-    echo -e "  Server:           $SERVER_HOST:$SERVER_PORT"
+    echo -e "  Task Name:         ${GREEN}$TASK_NAME${NC}"
+    echo -e "  Task Description:  ${GREEN}$TASK_DESCRIPTION${NC}"
+    echo -e "  Policy Config:     $CONFIG_NAME"
+    echo -e "  Warmup Checkpoint: ${WARMUP_CHECKPOINT:-none}"
+    echo -e "  Include Hands:     $INCLUDE_HANDS (action_dim=$ACTION_DIM)"
+    echo -e "  Max Epochs:        $MAX_EPOCHS"
+    echo -e "  Save Interval:     $SAVE_INTERVAL"
+    echo -e "  Keep Period:       $KEEP_PERIOD"
+    echo -e "  Labeling Mode:     $LABELING_MODE"
+    echo -e "  GPU:               $GPU_ID"
+    echo -e "  Server:            $SERVER_HOST:$SERVER_PORT"
     echo ""
 }
 
@@ -635,9 +645,9 @@ determine_checkpoint() {
         fi
     fi
     
-    # Fall back to BASE_CHECKPOINT
-    if [ -z "$checkpoint" ] && [ -n "$BASE_CHECKPOINT" ] && [ "$BASE_CHECKPOINT" != "null" ]; then
-        local cleaned="${BASE_CHECKPOINT%/}"
+    # Fall back to WARMUP_CHECKPOINT
+    if [ -z "$checkpoint" ] && [ -n "$WARMUP_CHECKPOINT" ] && [ "$WARMUP_CHECKPOINT" != "null" ]; then
+        local cleaned="${WARMUP_CHECKPOINT%/}"
         if [ -d "$cleaned" ]; then
             checkpoint="$cleaned"
         fi
@@ -688,7 +698,11 @@ run_data_collection_phase() {
     
     if [ -z "$checkpoint" ]; then
         log_error "No checkpoint available for serving!"
-        log_error "Set policy.base_checkpoint in $CONFIG_FILE"
+        if [ "$EPOCH" -eq 0 ]; then
+            log_error "Set policy.warmup_checkpoint in $CONFIG_FILE for epoch 0 data collection"
+        else
+            log_error "No checkpoint found from previous epoch"
+        fi
         exit 1
     fi
     
@@ -713,7 +727,21 @@ run_data_collection_phase() {
 }
 
 run_training_phase() {
-    local checkpoint=$(determine_checkpoint)
+    local checkpoint=""
+    
+    # For epoch 0, train from scratch using base weights in policy.config_name
+    # For epoch 1+, fine-tune from previous epoch's checkpoint
+    if [ "$EPOCH" -eq 0 ]; then
+        log_info "Epoch 0: Training from scratch using base weights in config ($CONFIG_NAME)"
+        checkpoint=""
+    else
+        checkpoint=$(determine_checkpoint)
+        if [ -z "$checkpoint" ]; then
+            log_error "No checkpoint available for epoch $EPOCH training!"
+            return 1
+        fi
+        log_info "Epoch $EPOCH: Fine-tuning from checkpoint: $checkpoint"
+    fi
     
     save_state "converting"
     convert_epoch_data

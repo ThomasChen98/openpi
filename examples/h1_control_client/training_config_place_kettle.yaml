@@ -20,8 +20,8 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  # Base checkpoint: pretrained on humanoid_everyday kettle data (3000 steps)
-  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/place_kettle_on_base_26dof/3000"
+  # Warmup checkpoint: pretrained on humanoid_everyday kettle data (used only for epoch 0 data collection)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/place_kettle_on_base_26dof/3000"
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train

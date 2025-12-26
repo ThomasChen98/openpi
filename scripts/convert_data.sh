@@ -62,6 +62,10 @@ while [[ $# -gt 0 ]]; do
             ACTION_DIM="$2"
             shift 2
             ;;
+        --filter-good-only)
+            FILTER_GOOD_ONLY="true"
+            shift 1
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -85,6 +89,9 @@ REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
 
 # Action dimension (empty = auto-detect from HDF5, 14=arms, 26=arms+hands)
 ACTION_DIM="${ACTION_DIM:-}"
+
+# Filter good only (for epoch 0, filter out bad rollouts)
+FILTER_GOOD_ONLY="${FILTER_GOOD_ONLY:-false}"
 
 # Base directories
 BASE_DATA_DIR="${BASE_DATA_DIR:-examples/h1_control_client/h1_data_processed}"
@@ -114,6 +121,7 @@ echo "LeRobot data directory: $LEROBOT_DATA_DIR"
 echo "Number of repeats: $NUM_REPEATS"
 echo "Labeling mode: $LABELING_MODE"
 echo "Config name: $CONFIG_NAME"
+echo "Filter good only: $FILTER_GOOD_ONLY"
 if [ -n "$EPOCH_NUM" ]; then
     echo "Epoch: $EPOCH_NUM"
 fi
@@ -162,6 +170,11 @@ fi
 # Add action dimension if specified (otherwise convert script auto-detects from HDF5)
 if [ -n "$ACTION_DIM" ]; then
     CONVERT_CMD="$CONVERT_CMD --action_dim $ACTION_DIM"
+fi
+
+# Add filter good only flag if set
+if [ "$FILTER_GOOD_ONLY" = "true" ]; then
+    CONVERT_CMD="$CONVERT_CMD --filter_good_only"
 fi
 
 echo ""

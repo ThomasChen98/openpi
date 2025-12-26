@@ -25,7 +25,7 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  base_checkpoint: ""                                # Leave empty to train from scratch
+  warmup_checkpoint: ""                              # Checkpoint for epoch 0 data collection (trained on teleoperation)
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train

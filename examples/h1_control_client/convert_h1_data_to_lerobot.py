@@ -161,6 +161,7 @@ def main(
     reward_image_rotation: int = 0,
     reward_advantage_threshold: float = 0.3,
     action_dim: int = None,
+    filter_good_only: bool = False,
 ):
     """Convert H1 HDF5 data to LeRobot format.
     
@@ -181,6 +182,7 @@ def main(
                                    e.g., 0.3 means top 30% episodes get Advantage=True
         action_dim: Expected action dimension (14=arms, 26=arms+hands). If provided, validates against HDF5 data.
                    If not provided, auto-detects from HDF5 files.
+        filter_good_only: If True, only keep episodes with Advantage=True (for epoch 0 training from warmup checkpoint)
     """
     # Validate labeling mode
     if labeling_mode == "reward_labeling":
@@ -192,6 +194,14 @@ def main(
     if use_advantage:
         print(f"Using advantage labeling mode: {labeling_mode}")
         print("  Prompts will be formatted as: '{task_description}, Advantage=True/False'")
+    
+    # If filter_good_only is enabled, force reading advantage labels
+    if filter_good_only:
+        if not use_advantage:
+            print("Warning: filter_good_only requires advantage labels, enabling human_labeling mode")
+            labeling_mode = "human_labeling"
+            use_advantage = True
+        print(f"Filtering: Only episodes with Advantage=True will be included in the dataset")
         
     # Run reward labeling if needed
     reward_labels = {}
@@ -368,6 +378,21 @@ def main(
         print(f"\nAdvantage label statistics:")
         print(f"  Good episodes (Advantage=True): {advantage_stats['true']}")
         print(f"  Bad episodes (Advantage=False): {advantage_stats['false']}")
+    
+    # Filter to keep only good episodes if requested
+    if filter_good_only:
+        original_count = len(episodes_data)
+        episodes_data = [ep for ep in episodes_data if ep.get("advantage", False)]
+        filtered_count = len(episodes_data)
+        removed_count = original_count - filtered_count
+        
+        print(f"\nFiltering episodes (filter_good_only=True):")
+        print(f"  Original episodes: {original_count}")
+        print(f"  Kept (Advantage=True): {filtered_count}")
+        print(f"  Removed (Advantage=False): {removed_count}")
+        
+        if filtered_count == 0:
+            raise ValueError("No episodes with Advantage=True found after filtering! Cannot create dataset.")
 
     # Create zero-padded images for missing cameras
     zero_image = np.zeros((224, 224, 3), dtype=np.uint8)

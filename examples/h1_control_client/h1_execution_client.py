@@ -154,13 +154,12 @@ class H1TrainingClient:
     and hand control matching h1_remote_client.py.
     """
     
-    def __init__(self, config_path: str, control_fps: int = 30):
+    def __init__(self, config_path: str):
         """
         Initialize training client.
         
         Args:
             config_path: Path to training_config.yaml
-            control_fps: Control loop frequency in Hz (default: 30)
         """
         # Load configuration
         with open(config_path, 'r') as f:
@@ -180,12 +179,6 @@ class H1TrainingClient:
         self.include_hands = self.config.get('robot', {}).get('include_hands', False)
         self.action_dim = 26 if self.include_hands else 14
         logger.info(f"Hand control: {'enabled (26 DOF)' if self.include_hands else 'disabled (14 DOF)'}")
-        
-        # Track current hand joint positions (in 0-1000 range)
-        # When include_hands=True, these are updated with commanded values
-        # Format: [left_hand(6), right_hand(6)] in 0-1000 range
-        self.current_left_hand = np.full(6, 1000.0)   # Default: fully open
-        self.current_right_hand = np.full(6, 1000.0)  # Default: fully open
         
         # Components (initialized lazily)
         self.robot = None
@@ -207,11 +200,6 @@ class H1TrainingClient:
         self.recording_active = False
         self.current_phase = "policy"
         self.current_advantage_label = None  # True = good, False = bad
-        self.recording_fps = 30  # Default recording rate (can differ from control rate)
-        self.control_fps = control_fps   # Control loop rate (configurable for smooth motion)
-        self.frame_accumulator = 0.0  # For sub-sampling when recording_fps < control_fps
-        
-        logger.info(f"Control frequency: {self.control_fps}Hz")
         
         # Action chunk execution state
         self.current_action_chunk = None  # Current action chunk from policy
@@ -222,18 +210,9 @@ class H1TrainingClient:
         
         # Reset pose for robot (14 joints: left arm 7 + right arm 7)
         # This pose is used at the start of execution and after labeling
-        # self.reset_pose = np.array([
-        #     -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
-        #     -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
-        # ]) # for lid lifting
         self.reset_pose = np.array([
-            -6.1706924e-01,  4.4004798e-01, -2.1151316e-01,  2.8873777e-01,
-            8.3609962e-01, -1.4772022e-01,  3.4319836e-01, -7.1449423e-01,
-            -2.6916218e-01,  2.3940849e-01,  5.0628179e-01, -8.3155775e-01,
-            -1.5378428e-01, -5.6665635e-01,  9.4041882e+02,  9.9613104e+02,
-            9.7590662e+02,  9.6762476e+02,  8.8504492e+02,  9.2926117e+02,
-            8.1216455e+02,  9.2394373e+02,  9.4085907e+02,  9.4222583e+02,
-            1.0000000e+03,  8.3412482e+02
+            -1.3784605,  0.5561533, -0.6081275,  1.4666988,  0.78704786, -0.3014539, 0.5918832,  # Left arm
+            -1.4271733, -0.12644243, 0.6738282,  1.4659743, -0.785754, -0.08189094, -0.5348861   # Right arm
         ])
         
         # Signal handling
@@ -472,8 +451,7 @@ class H1TrainingClient:
         
         # Get recording settings
         recording_config = self.config.get('recording', {})
-        self.recording_fps = recording_config.get('fps', 30)  # Recording rate (default 30Hz)
-        self.frame_accumulator = 0.0  # Reset accumulator for new recording
+        fps = recording_config.get('fps', 50)
         
         # Get data save directory (supports both old and new config structure)
         data_config = self.config.get('data', {})
@@ -492,34 +470,13 @@ class H1TrainingClient:
         self.episode_writer = EpisodeWriterHDF5(
             save_dir=epoch_dir,
             label_name="",  # Episodes saved directly in epoch_dir
-            fps=self.recording_fps
+            fps=fps
         )
         self.episode_writer.start_recording()
         self.recording_active = True
         logger.info(f"Started recording: {self.episode_writer.filepath}")
         logger.info(f"   Task: {task_name}")
         logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
-        logger.info(f"   Recording at {self.recording_fps}Hz (control at {self.control_fps}Hz)")
-    
-    def get_full_qpos(self) -> np.ndarray:
-        """
-        Get full robot state (qpos) including arms and hands if enabled.
-        
-        Returns:
-            - If include_hands=False: (14,) array with arm joints only
-            - If include_hands=True: (26,) array with [arm_joints(14), hand_joints(12)]
-              Hand format: [left_hand(6), right_hand(6)] in 0-1000 range
-        """
-        # Get arm joints (14 DOF)
-        arm_q = self.robot.get_current_dual_arm_q()
-        
-        if not self.include_hands:
-            return arm_q
-        
-        # Include hand joints (12 DOF) in 0-1000 range
-        # Concatenate: [arm(14), left_hand(6), right_hand(6)] = 26 DOF
-        full_qpos = np.concatenate([arm_q, self.current_left_hand, self.current_right_hand])
-        return full_qpos
     
     def stop_recording(self):
         """Stop and save the current recording (emergency/cleanup use)"""
@@ -552,8 +509,8 @@ class H1TrainingClient:
         Returns:
             Observation dict with state and images
         """
-        # Get current joint positions (14 DOF or 26 DOF depending on include_hands)
-        current_q = self.get_full_qpos()
+        # Get current joint positions
+        current_q = self.robot.get_current_dual_arm_q()
         
         # Dummy image for fallback
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -685,28 +642,13 @@ class H1TrainingClient:
             duration: Time in seconds to complete the reset motion
         """
         logger.info(f"Resetting robot to configured pose (duration: {duration}s)...")
+        logger.info(f"  Target pose: {self.reset_pose}")
         
-        # Extract arm joints (first 14) and hand joints (last 12) from reset pose
-        reset_arm_joints = self.reset_pose[:14]
-        
-        if self.include_hands and len(self.reset_pose) >= 26:
-            # Extract hand joints from reset pose (indices 14-25)
-            # Scale from 0-1 to 0-1000 range for Inspire hands
-            reset_left_hand = self.scale_hand_values(self.reset_pose[14:20])
-            reset_right_hand = self.scale_hand_values(self.reset_pose[20:26])
-            logger.info(f"  Target arm pose: {reset_arm_joints}")
-            logger.info(f"  Target hand pose: left={reset_left_hand[:3]}, right={reset_right_hand[:3]}")
-        else:
-            # No hand control or reset pose is 14 DOF
-            reset_left_hand = np.full(6, 1000.0)
-            reset_right_hand = np.full(6, 1000.0)
-            logger.info(f"  Target arm pose: {reset_arm_joints}")
-        
-        # Get current arm position
-        current_arm_q = self.robot.get_current_dual_arm_q()
+        # Get current position
+        current_q = self.robot.get_current_dual_arm_q()
         
         # Interpolate smoothly to reset pose
-        control_rate = self.control_fps  # Hz
+        control_rate = 50  # Hz
         num_steps = int(duration * control_rate)
         
         for i in range(num_steps):
@@ -714,33 +656,16 @@ class H1TrainingClient:
             # Smooth interpolation (ease in-out)
             t_smooth = t * t * (3 - 2 * t)
             
-            # Interpolate arm joints
-            target_arm_q = current_arm_q + t_smooth * (reset_arm_joints - current_arm_q)
-            
-            # Interpolate hand joints
-            target_left_hand = self.current_left_hand + t_smooth * (reset_left_hand - self.current_left_hand)
-            target_right_hand = self.current_right_hand + t_smooth * (reset_right_hand - self.current_right_hand)
-            
-            # Update tracked hand positions
-            self.current_left_hand = target_left_hand.copy()
-            self.current_right_hand = target_right_hand.copy()
+            target_q = current_q + t_smooth * (self.reset_pose - current_q)
             
             # Compute gravity compensation
-            gravity_torques = self.compute_gravity_compensation(target_arm_q)
+            gravity_torques = self.compute_gravity_compensation(target_q)
             
-            # Send command (with hands if enabled)
-            if self.include_hands:
-                self.robot.ctrl_dual_arm(
-                    q_target=target_arm_q,
-                    tauff_target=gravity_torques,
-                    left_hand_gesture=target_left_hand,
-                    right_hand_gesture=target_right_hand
-                )
-            else:
-                self.robot.ctrl_dual_arm(
-                    q_target=target_arm_q,
-                    tauff_target=gravity_torques
-                )
+            # Send command
+            self.robot.ctrl_dual_arm(
+                q_target=target_q,
+                tauff_target=gravity_torques
+            )
             
             time.sleep(1.0 / control_rate)
         
@@ -769,10 +694,10 @@ class H1TrainingClient:
     
     def execute_action_chunk(self, action_chunk: np.ndarray) -> int:
         """
-        Execute a full action chunk on the robot, recording each timestep.
+        Execute a full action chunk on the robot at 50Hz, recording each timestep.
         
         This matches h1_remote_client's execute_action_chunk behavior:
-        - Executes all actions in the chunk at configured control_fps
+        - Executes all actions in the chunk at 50Hz
         - Records state and images for each timestep
         - Checks for stop signal between actions
         
@@ -786,11 +711,11 @@ class H1TrainingClient:
         Returns:
             Number of actions executed (may be less than N if stopped early)
         """
-        control_period = 1.0 / self.control_fps
+        control_period = 1.0 / 50  # 50Hz
         actions_executed = 0
         
         action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
-        logger.info(f"   Executing {len(action_chunk)} actions at {self.control_fps}Hz ({action_dim} DOF)...")
+        logger.info(f"   Executing {len(action_chunk)} actions at 50Hz ({action_dim} DOF)...")
         
         for i, action in enumerate(action_chunk):
             loop_start = time.time()
@@ -815,20 +740,18 @@ class H1TrainingClient:
                 left_hand = np.full(6, 1000.0)
                 right_hand = np.full(6, 1000.0)
             
-            # Update tracked hand positions (used for recording full qpos)
-            self.current_left_hand = left_hand.copy()
-            self.current_right_hand = right_hand.copy()
-            
             # Compute gravity compensation
             gravity_torques = self.compute_gravity_compensation(arm_joints)
             
             # Send command to robot (with hand gestures if enabled)
+            # SWAP left/right hands to match physical robot convention
+            # Data "left" goes to physical right hand, data "right" goes to physical left hand
             if self.include_hands:
                 self.robot.ctrl_dual_arm(
                     q_target=arm_joints,
                     tauff_target=gravity_torques,
-                    left_hand_gesture=left_hand,
-                    right_hand_gesture=right_hand
+                    left_hand_gesture=right_hand,   # SWAPPED
+                    right_hand_gesture=left_hand    # SWAPPED
                 )
             else:
                 self.robot.ctrl_dual_arm(
@@ -836,30 +759,20 @@ class H1TrainingClient:
                     tauff_target=gravity_torques
                 )
             
-            # Record timestep if recording is active (sub-sampled to recording_fps)
-            # Control runs at control_fps (e.g., 30Hz), recording at recording_fps (e.g., 30Hz)
+            # Record timestep if recording is active
             if self.recording_active and self.episode_writer:
-                # Accumulate frames based on recording rate ratio
-                # e.g., 30Hz recording / 30Hz control = 1.0, so record every control frame
-                frame_increment = self.recording_fps / self.control_fps
-                self.frame_accumulator += frame_increment
+                current_q = self.robot.get_current_dual_arm_q()
+                obs = self.get_observation(for_policy=False)
                 
-                if self.frame_accumulator >= 1.0:
-                    self.frame_accumulator -= 1.0
-                    
-                    # Get full qpos (14 or 26 DOF depending on include_hands)
-                    current_q = self.get_full_qpos()
-                    obs = self.get_observation(for_policy=False)
-                    
-                    # For recording, use the full action (arm + hands if applicable)
-                    recorded_action = action[:self.action_dim] if len(action) >= self.action_dim else action
-                    
-                    self.episode_writer.add_timestep(
-                        qpos=current_q,
-                        action=recorded_action,
-                        images=obs.get('images'),
-                        phase="policy"
-                    )
+                # For recording, use the full action (arm + hands if applicable)
+                recorded_action = action[:self.action_dim] if len(action) >= self.action_dim else action
+                
+                self.episode_writer.add_timestep(
+                    qpos=current_q,
+                    action=recorded_action,
+                    images=obs.get('images'),
+                    phase="policy"
+                )
             
             actions_executed += 1
             
@@ -1001,7 +914,7 @@ class H1TrainingClient:
         This properly executes action chunks like h1_remote_client:
         1. Reset robot to configured reset pose
         2. Query policy ONCE to get action chunk (50 actions)
-        3. Execute ALL actions at configured control_fps
+        3. Execute ALL 50 actions at 50Hz
         4. Repeat until user presses 's' to stop
         
         This ensures smooth robot motion and proper frame count.
@@ -1009,7 +922,7 @@ class H1TrainingClient:
         print("\n" + "=" * 60)
         print(f"[EXECUTING] Running policy (epoch {self.epoch_num}, episode {self.episode_num})")
         print("  Press 's' to stop execution and enter labeling mode")
-        print(f"  Each policy query returns 50 actions executed at {self.control_fps}Hz (~{50/self.control_fps:.1f} seconds)")
+        print("  Each policy query returns 50 actions executed at 50Hz (~1 second)")
         print("=" * 60)
         
         # Reset robot to starting pose before execution
@@ -1066,7 +979,7 @@ class H1TrainingClient:
         
         print("\n" + "=" * 60)
         print(f"[LABELING] Episode {self.episode_num} execution complete")
-        print(f"  Recorded {frame_count} frames ({frame_count/self.recording_fps:.1f} seconds)")
+        print(f"  Recorded {frame_count} frames ({frame_count/50:.1f} seconds)")
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
@@ -1119,7 +1032,7 @@ class H1TrainingClient:
     
     def _hold_current_position(self):
         """Background thread to hold robot at current position with gravity compensation"""
-        control_rate = self.control_fps  # Hz
+        control_rate = 50  # Hz
         control_period = 1.0 / control_rate
         
         while self._hold_position_background and self.running:
@@ -1152,7 +1065,7 @@ class H1TrainingClient:
         # Enter damping mode
         self.robot.enter_damping_mode()
         
-        control_rate = self.control_fps  # Hz
+        control_rate = 50  # Hz
         control_period = 1.0 / control_rate
         
         with self.keyboard:
@@ -1199,7 +1112,7 @@ class H1TrainingClient:
             
             logger.info(f"Saved episode: {filepath}")
             logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
-            logger.info(f"   Total frames: {length} (at {self.recording_fps}Hz = {length/self.recording_fps:.1f}s)")
+            logger.info(f"   Total frames: {length} (at 50Hz = {length/50:.1f}s)")
             logger.info(f"   Advantage: {advantage_str}")
         
         # Reset for next episode
@@ -1424,12 +1337,6 @@ def main():
         action="store_true",
         help="Skip WAITING state and start collecting data immediately"
     )
-    parser.add_argument(
-        "--control-fps",
-        type=int,
-        default=30,
-        help="Control loop frequency in Hz (default: 30)"
-    )
     
     args = parser.parse_args()
     
@@ -1438,7 +1345,7 @@ def main():
         logger.error(f"Config file not found: {args.config}")
         return 1
     
-    client = H1TrainingClient(args.config, control_fps=args.control_fps)
+    client = H1TrainingClient(args.config)
     return client.run(start_immediately=args.start_immediately)
 
 

@@ -20,8 +20,8 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  # Base checkpoint: pretrained on move_lid task
-  base_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999"
+  # Warmup checkpoint: pretrained on move_lid task (used only for epoch 0 data collection)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/pi05_h1_move_lid/999"
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
