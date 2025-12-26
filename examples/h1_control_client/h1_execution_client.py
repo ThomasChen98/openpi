@@ -6,7 +6,7 @@ A systematic training pipeline that alternates between:
 1. Policy execution (robot runs inference)
 2. Human correction (operator adjusts robot in damping mode)
 
-All data is continuously recorded at 50Hz with phase labels.
+All data is continuously recorded at 30Hz with phase labels.
 
 State Machine:
     WAITING -> READY -> EXECUTING -> LABELING -> DAMPING -> SAVING -> DECIDING -> (loop or SYNCING)
@@ -518,6 +518,29 @@ class H1TrainingClient:
             
             self.recording_active = False
     
+    def get_current_state(self) -> np.ndarray:
+        """
+        Get current robot state (arms + hands if enabled).
+        
+        Returns:
+            State array:
+            - (14,) if include_hands=False: [left_arm(7), right_arm(7)]
+            - (26,) if include_hands=True: [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
+        """
+        # Get arm joint positions (14 DOF)
+        arm_q = self.robot.get_current_dual_arm_q()
+        
+        if self.include_hands:
+            # Append current hand command values (we don't have hand position feedback)
+            # Note: These are the commanded positions, not measured positions
+            return np.concatenate([
+                arm_q,
+                self.robot.left_hand_gesture,
+                self.robot.right_hand_gesture
+            ])
+        else:
+            return arm_q
+    
     def get_observation(self, for_policy: bool = False) -> dict:
         """
         Get current observation from robot with real camera feeds.
@@ -529,8 +552,8 @@ class H1TrainingClient:
         Returns:
             Observation dict with state and images
         """
-        # Get current joint positions
-        current_q = self.robot.get_current_dual_arm_q()
+        # Get current state (arms + hands if enabled)
+        current_q = self.get_current_state()
         
         # Dummy image for fallback
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -664,7 +687,7 @@ class H1TrainingClient:
         logger.info(f"Resetting robot to configured pose (duration: {duration}s)...")
         logger.info(f"  Target pose: {self.reset_pose}")
         
-        # Get current position
+        # Get current position (arms only for interpolation)
         current_q = self.robot.get_current_dual_arm_q()
         
         # Interpolate smoothly to reset pose (arm joints only)
@@ -793,7 +816,7 @@ class H1TrainingClient:
             
             # Record timestep if recording is active
             if self.recording_active and self.episode_writer:
-                current_q = self.robot.get_current_dual_arm_q()
+                current_q = self.get_current_state()
                 obs = self.get_observation(for_policy=False)
                 
                 # For recording, use the full action (arm + hands if applicable)
@@ -815,7 +838,7 @@ class H1TrainingClient:
                 else:
                     logger.info(f"   Step {i}/{len(action_chunk)}: joints = [{arm_joints[0]:.2f}, {arm_joints[1]:.2f}, ...]")
             
-            # Maintain 50Hz control rate
+            # Maintain 30Hz control rate
             elapsed = time.time() - loop_start
             sleep_time = max(0, control_period - elapsed)
             time.sleep(sleep_time)
@@ -1070,12 +1093,23 @@ class H1TrainingClient:
             try:
                 loop_start = time.time()
                 
+                # Get current arm position (for gravity compensation and holding)
                 current_q = self.robot.get_current_dual_arm_q()
                 gravity_torques = self.compute_gravity_compensation(current_q)
-                self.robot.ctrl_dual_arm(
-                    q_target=current_q,
-                    tauff_target=gravity_torques
-                )
+                
+                # Hold position with hands if enabled
+                if self.include_hands:
+                    self.robot.ctrl_dual_arm(
+                        q_target=current_q,
+                        tauff_target=gravity_torques,
+                        left_hand_gesture=self.robot.left_hand_gesture,
+                        right_hand_gesture=self.robot.right_hand_gesture
+                    )
+                else:
+                    self.robot.ctrl_dual_arm(
+                        q_target=current_q,
+                        tauff_target=gravity_torques
+                    )
                 
                 elapsed = time.time() - loop_start
                 sleep_time = max(0, control_period - elapsed)
@@ -1112,10 +1146,20 @@ class H1TrainingClient:
                 # NO recording in damping mode - just maintain gravity compensation
                 current_q = self.robot.get_current_dual_arm_q()
                 gravity_torques = self.compute_gravity_compensation(current_q)
-                self.robot.ctrl_dual_arm(
-                    q_target=current_q,  # Target = current (no movement)
-                    tauff_target=gravity_torques
-                )
+                
+                # Maintain hands position if enabled
+                if self.include_hands:
+                    self.robot.ctrl_dual_arm(
+                        q_target=current_q,  # Target = current (no movement)
+                        tauff_target=gravity_torques,
+                        left_hand_gesture=self.robot.left_hand_gesture,
+                        right_hand_gesture=self.robot.right_hand_gesture
+                    )
+                else:
+                    self.robot.ctrl_dual_arm(
+                        q_target=current_q,  # Target = current (no movement)
+                        tauff_target=gravity_torques
+                    )
                 
                 # Maintain control rate
                 elapsed = time.time() - loop_start
