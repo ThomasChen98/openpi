@@ -2,9 +2,9 @@
   "task_name": "fold_cloth_with_both_hands_corrected_delta14",
   "task_description": "Fold cloth with both hands",
   "config_name": "pi05_h1_auto",
-  "epoch": 1,
-  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/epoch_0/1499",
+  "epoch": 3,
+  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/epoch_2/1499",
   "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_cloth_with_both_hands_corrected_delta14/1500",
-  "status": "collecting_data",
-  "updated_at": "2025-12-26T04:29:27-08:00"
+  "status": "interrupted",
+  "updated_at": "2025-12-26T22:15:57-08:00"
 }
