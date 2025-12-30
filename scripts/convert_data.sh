@@ -147,7 +147,8 @@ fi
 echo "Found $HDF5_COUNT HDF5 file(s)"
 
 # Build the convert command with optional labeling mode
-CONVERT_CMD="uv run examples/h1_control_client/convert_h1_data_to_lerobot.py \
+# Note: Use python directly instead of 'uv run' to ensure correct dependencies for reward labeling
+CONVERT_CMD="python examples/h1_control_client/convert_h1_data_to_lerobot.py \
     --data_dir \"$DATA_DIR\" \
     --task_description \"$TASK_DESCRIPTION\" \
 --num_repeats $NUM_REPEATS \
@@ -186,7 +187,7 @@ echo "========================================================"
 echo "  > Computing normalization statistics..."
 echo "========================================================"
 
-uv run scripts/compute_norm_stats.py \
+python scripts/compute_norm_stats.py \
 --config-name "$CONFIG_NAME" \
 --data-dir "$LEROBOT_DATA_DIR"
 

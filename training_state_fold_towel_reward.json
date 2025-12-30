@@ -1,0 +1,10 @@
+{
+  "task_name": "fold_towel_reward",
+  "task_description": "Fold the towel into half with both hands",
+  "config_name": "pi05_h1_auto",
+  "epoch": 0,
+  "last_checkpoint": "",
+  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_reward/1499",
+  "status": "collecting_data",
+  "updated_at": "2025-12-30T04:48:02-08:00"
+}

@@ -212,12 +212,12 @@ def main(
         print(f"  Image rotation: {reward_image_rotation}")
         print(f"  Advantage threshold: {reward_advantage_threshold:.1%} (top {reward_advantage_threshold:.1%} episodes)")
         
-        # Import reward labeling
+        # Import Qwen-based reward labeling
         try:
-            from embodied_reward_labeling import label_episodes
+            from qwen_reward_labeling import label_episodes
         except ImportError:
-            print("Error: Could not import embodied_reward_labeling module")
-            print("Make sure embodied_reward_labeling.py is in the same directory")
+            print("Error: Could not import qwen_reward_labeling module")
+            print("Make sure qwen_reward_labeling.py is in the same directory")
             raise
         
         # Determine the directory to label
@@ -227,15 +227,28 @@ def main(
         else:
             label_dir = data_path
         
+        # Get checkpoint path from environment variable
+        checkpoint_path = os.environ.get("QWEN_REWARD_CHECKPOINT_PATH")
+        if not checkpoint_path:
+            print("Error: QWEN_REWARD_CHECKPOINT_PATH environment variable not set!")
+            print("Set it with: export QWEN_REWARD_CHECKPOINT_PATH='/path/to/checkpoint'")
+            raise ValueError("QWEN_REWARD_CHECKPOINT_PATH not set")
+        
+        if not os.path.exists(checkpoint_path):
+            print(f"Error: Checkpoint path does not exist: {checkpoint_path}")
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        print(f"  Checkpoint path: {checkpoint_path}")
+        
         # Run labeling
         reward_labels = label_episodes(
             data_dir=str(label_dir),
             task_instruction=reward_task_instruction,
+            checkpoint_path=checkpoint_path,
             max_frames=reward_max_frames,
             image_rotation=reward_image_rotation,
             advantage_threshold=reward_advantage_threshold,
-            use_reflection=True,
-            max_workers=64
+            inference_batch_size=30,
         )
         
         print(f"\nReward labeling complete. Labeled {len(reward_labels)} episodes.")

@@ -17,24 +17,24 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "my_task"                                    # Short name for directories/checkpoints
-  description: "Description of what the robot should do"
+  name: "fold_towel_reward"                                    # Short name for directories/checkpoints
+  description: "Fold the towel into half with both hands"
 
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  warmup_checkpoint: ""                              # Checkpoint for epoch 0 data collection (trained on teleoperation)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_reward/1499"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
 # =============================================================================
 training:
-  max_epochs: 1000
-  save_interval: 1000
-  keep_period: 1000
-  num_repeats: 2
+  max_epochs: 1500
+  save_interval: 1500
+  keep_period: 1500
+  num_repeats: 1
   labeling_mode: "reward_labeling"                   # none, human_labeling, reward_labeling
   gpu_id: 0
 
@@ -46,9 +46,7 @@ reward:
   checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-1130"
   
   task_instruction: |
-    Detailed task description for the VLM reward model.
-    Include success criteria and failure conditions.
-    If the task fails, all frames after failure should be scored 0.
+    Fold the towel into a small square.
   
   max_frames: 30
   image_rotation: 0
@@ -67,7 +65,7 @@ policy_server:
 # =============================================================================
 robot:
   # Hand control: true for 26 DOF (14 arm + 12 hand), false for 14 DOF (arms only)
-  include_hands: false
+  include_hands: true
   
   network_interface: "eno1"
   left_hand_ip: "192.168.123.211"

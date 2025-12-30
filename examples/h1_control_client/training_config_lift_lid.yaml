@@ -38,6 +38,9 @@ training:
 # REWARD LABELING CONFIGURATION - For reward_labeling mode
 # =============================================================================
 reward:
+  # Path to Qwen reward model checkpoint (required for reward_labeling mode)
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-1130"
+  
   task_instruction: |
     Lift the lid on top of the bowl with both hands, move it steadily away from the bowl, and place it flat on the table.
     The robot must use its two hands to carefully put the lid on the table.

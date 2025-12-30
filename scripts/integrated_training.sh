@@ -95,6 +95,7 @@ REWARD_TASK_INSTRUCTION=$(yq -r '.reward.task_instruction // ""' "$CONFIG_FILE")
 REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
 REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
 REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
+REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
 
 # Server
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
@@ -513,15 +514,24 @@ convert_epoch_data() {
     
     # Add reward labeling parameters if in reward_labeling mode
     if [ "$LABELING_MODE" = "reward_labeling" ]; then
-        # Check if OPENAI_API_KEY is set
-        if [ -z "$OPENAI_API_KEY" ]; then
-            log_error "OPENAI_API_KEY environment variable not set!"
-            log_error "Reward labeling requires OpenAI API key."
-            log_error "Set it with: export OPENAI_API_KEY='your-key-here'"
+        # Check if QWEN_REWARD_CHECKPOINT_PATH is set
+        if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
+            log_error "reward.checkpoint_path not set in config file!"
+            log_error "Reward labeling requires Qwen checkpoint path."
+            log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
             return 1
         fi
         
-        log_info "Using reward labeling with:"
+        if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
+            log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+            return 1
+        fi
+        
+        # Export checkpoint path for the convert script
+        export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
+        
+        log_info "Using Qwen-based reward labeling with:"
+        log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
         log_info "  Max frames: $REWARD_MAX_FRAMES"
         log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
         log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"

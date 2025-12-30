@@ -2,9 +2,9 @@
   "task_name": "fold_towel",
   "task_description": "Fold the towel into half with both hands",
   "config_name": "pi05_h1_auto",
-  "epoch": 0,
-  "last_checkpoint": "",
+  "epoch": 5,
+  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel/epoch_4/1499",
   "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel/1499",
-  "status": "collecting_data",
-  "updated_at": "2025-12-27T20:10:05-08:00"
+  "status": "interrupted",
+  "updated_at": "2025-12-30T04:42:31-08:00"
 }

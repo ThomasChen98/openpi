@@ -42,6 +42,9 @@ training:
 # REWARD LABELING CONFIGURATION - For reward_labeling mode
 # =============================================================================
 reward:
+  # Path to Qwen reward model checkpoint (required for reward_labeling mode)
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-1130"
+  
   task_instruction: |
     Detailed task description for the VLM reward model.
     Include success criteria and failure conditions.
