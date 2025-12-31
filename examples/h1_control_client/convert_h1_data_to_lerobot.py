@@ -252,6 +252,48 @@ def main(
         )
         
         print(f"\nReward labeling complete. Labeled {len(reward_labels)} episodes.")
+        
+        # Generate alignment visualization if human labels are available
+        try:
+            print(f"\n{'='*80}")
+            print("GENERATING REWARD ALIGNMENT VISUALIZATION")
+            print(f"{'='*80}")
+            
+            from reward_alignment_viz import generate_alignment_visualization
+            
+            # Determine output path based on save_dir
+            if save_dir is not None:
+                # Using custom save directory
+                current_dir = Path(__file__).parent.resolve()
+                viz_output_dir = current_dir / 'h1_data_lerobot' / save_dir
+                print(f"Using custom save directory: {viz_output_dir}")
+            else:
+                # Using HF_LEROBOT_HOME (default)
+                viz_output_dir = Path(HF_LEROBOT_HOME) / repo_id
+                print(f"Using HF_LEROBOT_HOME: {viz_output_dir}")
+            
+            viz_output_path = viz_output_dir / "reward_alignment.png"
+            print(f"Output path: {viz_output_path}")
+            print(f"Data dir: {label_dir}")
+            print(f"Number of reward labels: {len(reward_labels)}")
+            
+            generate_alignment_visualization(
+                data_dir=str(label_dir),
+                reward_labels=reward_labels,
+                output_path=str(viz_output_path),
+                checkpoint_path=checkpoint_path,
+                task_instruction=reward_task_instruction,
+            )
+            print(f"{'='*80}\n")
+        except Exception as e:
+            print(f"\n{'!'*80}")
+            print(f"ERROR: Could not generate alignment visualization")
+            print(f"{'!'*80}")
+            print(f"Error: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            print(f"{'!'*80}\n")
     
     # Determine if data_dir is a file or directory
     data_path = Path(data_dir)

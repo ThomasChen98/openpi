@@ -55,13 +55,19 @@ def main():
     parser.add_argument("--inference_batch_size", type=int, default=30, help="Batch size for inference")
     parser.add_argument("--base_model", type=str, default=None, help="Base model name")
     parser.add_argument("--dtype", type=str, default="bf16", choices=["bf16", "fp16"], help="Model dtype")
+    parser.add_argument("--gpu", type=int, default=0, help="GPU device ID to use (default: 0)")
     
     args = parser.parse_args()
+    
+    # Set GPU device
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     
     # Load model
     print(f"\nLoading Qwen model from: {args.checkpoint_path}")
     print(f"  Base model: {args.base_model or 'unsloth/Qwen3-VL-8B-Instruct'}")
     print(f"  Dtype: {args.dtype}")
+    print(f"  GPU: {args.gpu}")
     
     model, tokenizer = load_model_and_tokenizer(
         args.checkpoint_path,

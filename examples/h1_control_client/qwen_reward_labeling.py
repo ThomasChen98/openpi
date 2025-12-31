@@ -371,6 +371,12 @@ def main():
         help="Model data type"
     )
     parser.add_argument(
+        "--gpu",
+        type=int,
+        default=0,
+        help="GPU device ID to use (default: 0)"
+    )
+    parser.add_argument(
         "--output_json",
         type=str,
         default=None,
@@ -378,6 +384,10 @@ def main():
     )
     
     args = parser.parse_args()
+    
+    # Set GPU device
+    import os
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
     
     # Check checkpoint exists
     if not os.path.exists(args.checkpoint_path):

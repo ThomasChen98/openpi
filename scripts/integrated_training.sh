@@ -527,14 +527,27 @@ convert_epoch_data() {
             return 1
         fi
         
+        # Run setup script to ensure Qwen dependencies are installed
+        # (only runs once per session, checks are inside the script)
+        log_info "Ensuring Qwen reward dependencies are installed..."
+        if [ -f "$PROJECT_ROOT/scripts/setup_qwen_reward.sh" ]; then
+            bash "$PROJECT_ROOT/scripts/setup_qwen_reward.sh"
+        else
+            log_warn "Setup script not found, assuming dependencies are already installed"
+        fi
+        
         # Export checkpoint path for the convert script
         export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
+        
+        # Set CUDA_VISIBLE_DEVICES for reward labeling (use same GPU as training)
+        export CUDA_VISIBLE_DEVICES=$GPU_ID
         
         log_info "Using Qwen-based reward labeling with:"
         log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
         log_info "  Max frames: $REWARD_MAX_FRAMES"
         log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
         log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
+        log_info "  GPU: $GPU_ID"
         
         convert_cmd="$convert_cmd \
             --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \

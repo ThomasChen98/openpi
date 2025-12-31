@@ -18,7 +18,7 @@
 # =============================================================================
 task:
   name: "fold_towel_reward"                                    # Short name for directories/checkpoints
-  description: "Fold the towel into half with both hands"
+  description: "Fold the towel in half with both hands"
 
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
