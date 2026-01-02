@@ -12,6 +12,8 @@ import numpy as np
 import struct
 import sys
 import time
+import threading
+
 class ModbusDataHandler:
     def __init__(self, data=data_sheet, history_length=100, network=None, ip=None, port=6000, device_id=1, LR='r', use_serial=False, serial_port='/dev/ttyUSB0', baudrate=115200, states_structure=None, initDDS=True, max_retries=5, retry_delay=2):
         """_summary_
@@ -46,6 +48,19 @@ class ModbusDataHandler:
             'TEMP': [np.zeros(history_length) for _ in range(6)]
         }
         self.use_serial = use_serial
+        
+        # Per-instance lock instead of global (prevents left/right hand lock contention)
+        self._modbus_lock = threading.Lock()
+        
+        # Store connection params for reconnection
+        self._ip = ip
+        self._port = port
+        self._network = network
+        self._LR = LR
+        self._max_retries = max_retries
+        self._retry_delay = retry_delay
+        self._serial_port = serial_port
+        self._baudrate = baudrate
         
         self.states_structure = states_structure or [
             ('pos_act', 1534, 6, 'short'),
@@ -114,20 +129,23 @@ class ModbusDataHandler:
                     print("Max retries reached. Could not connect.")
                     raise   
     def write_registers_callback(self,msg:inspire_hand_ctrl):
-        with modbus_lock:
-            if msg.mode & 0b0001:  # 模式 1 - 角度
-                self.client.write_registers(1486, msg.angle_set, self.device_id)
-                # print('angle_set')
-            if msg.mode & 0b0010:  # 模式 2 - 位置
-                self.client.write_registers(1474, msg.pos_set, self.device_id)
-                # print('pos_set')
+        with self._modbus_lock:  # Use per-instance lock instead of global
+            try:
+                if msg.mode & 0b0001:  # 模式 1 - 角度
+                    self.client.write_registers(1486, msg.angle_set, self.device_id)
+                    # print('angle_set')
+                if msg.mode & 0b0010:  # 模式 2 - 位置
+                    self.client.write_registers(1474, msg.pos_set, self.device_id)
+                    # print('pos_set')
 
-            if msg.mode & 0b0100:  # 模式 4 - 力控
-                self.client.write_registers(1498, msg.force_set, self.device_id)
-                # print('force_set')
+                if msg.mode & 0b0100:  # 模式 4 - 力控
+                    self.client.write_registers(1498, msg.force_set, self.device_id)
+                    # print('force_set')
 
-            if msg.mode & 0b1000:  # 模式 8 - 速度
-                self.client.write_registers(1522, msg.speed_set, self.device_id)
+                if msg.mode & 0b1000:  # 模式 8 - 速度
+                    self.client.write_registers(1522, msg.speed_set, self.device_id)
+            except Exception as e:
+                print(f"[ModbusDataHandler] Write error: {e}")
                 
     def read(self):
         if not self.use_serial:
@@ -162,29 +180,86 @@ class ModbusDataHandler:
                 }
 
     def read_and_parse_registers(self, start_address, num_registers, data_type='short'):
-         with modbus_lock:
-            # 读取寄存器
-            response = self.client.read_holding_registers(start_address, num_registers, self.device_id)
+         with self._modbus_lock:  # Use per-instance lock instead of global
+            try:
+                # 读取寄存器
+                response = self.client.read_holding_registers(start_address, num_registers, self.device_id)
 
-            if not response.isError():
-                if data_type == 'short':
-                    # 将读取的寄存器打包为二进制数据
-                    packed_data = struct.pack('>' + 'H' * num_registers, *response.registers)
-                    # 将寄存器解包为带符号的 16 位整数 (short)
-                    angles = struct.unpack('>' + 'h' * num_registers, packed_data)
-                    return angles
-                elif data_type == 'byte':
-                    # 将每个 16 位寄存器拆分为两个 8 位 (uint8) 数据
-                    byte_list = []
-                    for reg in response.registers:
-                        high_byte = (reg >> 8) & 0xFF  # 高 8 位
-                        low_byte = reg & 0xFF          # 低 8 位
-                        byte_list.append(high_byte)
-                        byte_list.append(low_byte)
-                    return byte_list
-            else:
-                print("Error reading registers")
+                if not response.isError():
+                    if data_type == 'short':
+                        # 将读取的寄存器打包为二进制数据
+                        packed_data = struct.pack('>' + 'H' * num_registers, *response.registers)
+                        # 将寄存器解包为带符号的 16 位整数 (short)
+                        angles = struct.unpack('>' + 'h' * num_registers, packed_data)
+                        return angles
+                    elif data_type == 'byte':
+                        # 将每个 16 位寄存器拆分为两个 8 位 (uint8) 数据
+                        byte_list = []
+                        for reg in response.registers:
+                            high_byte = (reg >> 8) & 0xFF  # 高 8 位
+                            low_byte = reg & 0xFF          # 低 8 位
+                            byte_list.append(high_byte)
+                            byte_list.append(low_byte)
+                        return byte_list
+                else:
+                    print(f"[ModbusDataHandler] Error reading registers at addr {start_address}")
+                    return None
+            except Exception as e:
+                print(f"[ModbusDataHandler] Read exception: {e}")
                 return None
+
+    def is_connected(self):
+        """Check if Modbus connection is alive"""
+        try:
+            with self._modbus_lock:
+                response = self.client.read_holding_registers(1534, 1, self.device_id)
+                return not response.isError()
+        except Exception:
+            return False
+
+    def reconnect(self):
+        """Attempt to reconnect to Modbus server"""
+        print(f"[ModbusDataHandler] Attempting reconnect to {self._ip}...")
+        try:
+            with self._modbus_lock:
+                # Close existing connection
+                try:
+                    self.client.close()
+                except:
+                    pass
+                
+                time.sleep(0.5)
+                
+                # Create new client
+                if self.use_serial:
+                    self.client = ModbusSerialClient(method='rtu', port=self._serial_port, 
+                                                      baudrate=self._baudrate, timeout=1)
+                else:
+                    if self._ip is None:
+                        self.client = ModbusTcpClient(defaut_ip, port=6000)
+                    else:
+                        self.client = ModbusTcpClient(self._ip, port=self._port)
+            
+            # Try to connect (outside lock to avoid long hold)
+            self.connect_to_modbus(self._max_retries, self._retry_delay)
+            
+            # Reset error on hand
+            with self._modbus_lock:
+                self.client.write_register(1004, 1, self.device_id)
+            
+            print(f"[ModbusDataHandler] Reconnect to {self._ip} successful!")
+            return True
+        except Exception as e:
+            print(f"[ModbusDataHandler] Reconnect to {self._ip} failed: {e}")
+            return False
+
+    def close(self):
+        """Cleanly close the connection"""
+        try:
+            with self._modbus_lock:
+                self.client.close()
+        except:
+            pass
             
 
 if __name__ == "__main__":

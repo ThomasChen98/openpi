@@ -146,30 +146,29 @@ def generate_alignment_visualization(
     good_rewards = [c.qwen_reward for c in comparisons if c.human_label]
     bad_rewards = [c.qwen_reward for c in comparisons if not c.human_label]
     
-    # Create visualization
-    fig = plt.figure(figsize=(16, 10))
+    # Create visualization - match analyze_reward_alignment.py layout with stats appended
+    fig = plt.figure(figsize=(16, 14))
     
-    # Add title with dataset, epoch, checkpoint, and task info
-    title_parts = ["Reward Alignment Analysis"]
+    # Add title with dataset, epoch, and checkpoint info (no "Reward Alignment Analysis" or task)
+    title_parts = []
     if dataset_name:
-        title_parts.append(f"Dataset: {dataset_name}")
+        title_parts.append(f'Dataset: {dataset_name}')
     if epoch:
-        title_parts.append(f"Epoch: {epoch}")
+        title_parts.append(f'Epoch: {epoch}')
     if checkpoint_path:
         checkpoint_name = Path(checkpoint_path).name
-        title_parts.append(f"Checkpoint: {checkpoint_name}")
-    if task_instruction:
-        title_parts.append(f"Task: {task_instruction}")
+        title_parts.append(f'Checkpoint: {checkpoint_name}')
     
-    fig.suptitle(" | ".join(title_parts), fontsize=14, fontweight='bold', y=0.995)
+    fig.suptitle(' | '.join(title_parts), fontsize=16, fontweight='bold', y=0.985)
     
-    gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.3, top=0.96)
+    # Add more space between title and figures
+    gs = fig.add_gridspec(4, 3, hspace=0.4, wspace=0.3, top=0.93, bottom=0.05)
     
     # 1. Reward distribution by human label
     ax1 = fig.add_subplot(gs[0, 0])
     if good_rewards and bad_rewards:
         ax1.hist([good_rewards, bad_rewards], label=['Human: Good', 'Human: Bad'], 
-                 bins=min(20, len(comparisons)//2), alpha=0.7, color=['green', 'red'])
+                 bins=20, alpha=0.7, color=['green', 'red'])
     ax1.set_xlabel('Qwen Total Reward')
     ax1.set_ylabel('Count')
     ax1.set_title('Reward Distribution by Human Label')
@@ -200,62 +199,100 @@ def generate_alignment_visualization(
     plt.colorbar(im, ax=ax3)
     ax3.set_title('Confusion Matrix')
     
-    # 4. Scatter plot: rewards vs episode index
+    # 4. Scatter plot: rewards vs episode index (spans full width)
     ax4 = fig.add_subplot(gs[1, :])
     for i, comp in enumerate(comparisons):
         color = 'green' if comp.human_label else 'red'
         marker = 'o' if comp.qwen_label else 'x'
         ax4.scatter(i, comp.qwen_reward, c=color, marker=marker, s=100, alpha=0.7)
-    ax4.set_xlabel('Episode Index (Natural Order)')
+    ax4.set_xlabel('Episode Index')
     ax4.set_ylabel('Qwen Total Reward')
     ax4.set_title('Reward by Episode (Color=Human Label, Marker=Qwen Label)\n'
                   'Green=Good, Red=Bad | Circle=Qwen Good, X=Qwen Bad')
     ax4.grid(True, alpha=0.3)
     
-    # 5. Metrics summary
+    # 5. Agreement analysis (pie chart)
     ax5 = fig.add_subplot(gs[2, 0])
-    ax5.axis('off')
-    metrics_text = f"""
-    Alignment Metrics
-    ─────────────────
-    Accuracy:  {accuracy:.1%}
-    Precision: {precision:.1%}
-    Recall:    {recall:.1%}
-    F1 Score:  {f1:.3f}
-    
-    Episodes:  {total}
-    Good:      {sum(1 for c in comparisons if c.human_label)}
-    Bad:       {sum(1 for c in comparisons if not c.human_label)}
-    """
-    ax5.text(0.1, 0.5, metrics_text, fontsize=11, verticalalignment='center',
-             family='monospace', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-    
-    # 6. Agreement analysis
-    ax6 = fig.add_subplot(gs[2, 1])
     agree = sum(1 for c in comparisons if c.human_label == c.qwen_label)
     disagree = total - agree
-    ax6.pie([agree, disagree], labels=['Agreement', 'Disagreement'], 
+    ax5.pie([agree, disagree], labels=['Agreement', 'Disagreement'], 
             autopct='%1.1f%%', colors=['lightgreen', 'lightcoral'])
-    ax6.set_title(f'Overall Agreement\n({agree}/{total} episodes)')
+    ax5.set_title(f'Overall Agreement\n({agree}/{total} episodes)')
     
-    # 7. Reward statistics
+    # 6. Misclassification details
+    ax6 = fig.add_subplot(gs[2, 1])
+    false_positives = [c.qwen_reward for c in comparisons if not c.human_label and c.qwen_label]
+    false_negatives = [c.qwen_reward for c in comparisons if c.human_label and not c.qwen_label]
+    
+    if false_positives or false_negatives:
+        data = []
+        labels = []
+        if false_positives:
+            data.append(false_positives)
+            labels.append(f'False Positives\n(n={len(false_positives)})')
+        if false_negatives:
+            data.append(false_negatives)
+            labels.append(f'False Negatives\n(n={len(false_negatives)})')
+        ax6.boxplot(data, labels=labels)
+        ax6.set_ylabel('Qwen Total Reward')
+        ax6.set_title('Misclassification Analysis')
+        ax6.grid(True, alpha=0.3)
+    else:
+        ax6.text(0.5, 0.5, 'No Misclassifications!', 
+                ha='center', va='center', fontsize=14, color='green')
+        ax6.set_title('Perfect Agreement')
+        ax6.axis('off')
+    
+    # 7. Threshold analysis
     ax7 = fig.add_subplot(gs[2, 2])
-    ax7.axis('off')
-    stats_text = f"""
-    Reward Statistics
-    ─────────────────
-    Good Episodes:
-      Mean: {np.mean(good_rewards):.1f}
-      Std:  {np.std(good_rewards):.1f}
+    qwen_rewards_list = [c.qwen_reward for c in comparisons]
+    sorted_rewards = sorted(qwen_rewards_list)
+    # Calculate accuracy at different thresholds
+    thresholds = np.linspace(min(sorted_rewards), max(sorted_rewards), 50)
+    accuracies = []
+    for thresh in thresholds:
+        correct = sum(1 for c in comparisons if (c.qwen_reward >= thresh) == c.human_label)
+        accuracies.append(correct / len(comparisons))
     
-    Bad Episodes:
-      Mean: {np.mean(bad_rewards):.1f}
-      Std:  {np.std(bad_rewards):.1f}
+    ax7.plot(thresholds, accuracies, 'b-', linewidth=2)
+    # Mark current threshold (top 30% - but use the actual threshold from the data)
+    # Calculate the actual cutoff used
+    sorted_by_reward = sorted(comparisons, key=lambda x: x.qwen_reward, reverse=True)
+    num_good = sum(1 for c in comparisons if c.qwen_label)
+    if num_good > 0:
+        cutoff_idx = num_good - 1
+        current_thresh = sorted_by_reward[cutoff_idx].qwen_reward
+        current_acc = accuracies[np.argmin(np.abs(thresholds - current_thresh))]
+        threshold_pct = (num_good / len(comparisons)) * 100
+        ax7.axvline(current_thresh, color='r', linestyle='--', label=f'Current ({threshold_pct:.0f}% threshold)')
+        ax7.scatter([current_thresh], [current_acc], color='r', s=100, zorder=5)
+    ax7.set_xlabel('Reward Threshold')
+    ax7.set_ylabel('Accuracy')
+    ax7.set_title('Accuracy vs Threshold')
+    ax7.legend()
+    ax7.grid(True, alpha=0.3)
     
-    Separation: {np.mean(good_rewards) - np.mean(bad_rewards):.1f}
-    """
-    ax7.text(0.1, 0.5, stats_text, fontsize=11, verticalalignment='center',
-             family='monospace', bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.3))
+    # 8. Combined statistics panel (bottom, single centered block)
+    ax8 = fig.add_subplot(gs[3, :])
+    ax8.axis('off')
+    
+    # Create side-by-side text using proper formatting
+    combined_text = (
+        f"{'Alignment Metrics':^40}{'Reward Statistics':^40}\n"
+        f"{'─' * 17:^40}{'─' * 17:^40}\n"
+        f"{'Accuracy: ' + f'{accuracy:.1%}':^40}{'Good Episodes:':^40}\n"
+        f"{'Precision: ' + f'{precision:.1%}':^40}{'  Mean: ' + f'{np.mean(good_rewards):.1f}':^40}\n"
+        f"{'Recall: ' + f'{recall:.1%}':^40}{'  Std:  ' + f'{np.std(good_rewards):.1f}':^40}\n"
+        f"{'F1 Score: ' + f'{f1:.3f}':^40}{' ':^40}\n"
+        f"{' ':^40}{'Bad Episodes:':^40}\n"
+        f"{'Episodes: ' + f'{total}':^40}{'  Mean: ' + f'{np.mean(bad_rewards):.1f}':^40}\n"
+        f"{'Good: ' + f'{sum(1 for c in comparisons if c.human_label)}':^40}{'  Std:  ' + f'{np.std(bad_rewards):.1f}':^40}\n"
+        f"{'Bad: ' + f'{sum(1 for c in comparisons if not c.human_label)}':^40}{' ':^40}\n"
+        f"{' ':^40}{'Separation: ' + f'{np.mean(good_rewards) - np.mean(bad_rewards):.1f}':^40}"
+    )
+    
+    ax8.text(0.5, 0.5, combined_text, fontsize=11, verticalalignment='center', horizontalalignment='center',
+             family='monospace', bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
     
     # Save
     output_path = Path(output_path)

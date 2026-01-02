@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.grpo_trainer import (Any, AutoConfig, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer, BaseTrainer, DataLoader, Dataset, FSDP, GRPOConfig, GRPOTrainer, GenerationConfig, IterableDataset, Optional, Path, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RepeatSampler, RewardFunc, Sampler, SyncRefModelCallback, TrainerCallback, Union, VLLMClient, _ForwardRedirection, apply_chat_template, broadcast_object_list, datasets, defaultdict, deque, disable_dropout_in_model, ensure_master_addr_port, entropy_from_logits, gather, gather_object, identity, inspect, is_conversational, is_datasets_available, is_flash_attn_2_available, is_liger_kernel_available, is_peft_model, is_rich_available, is_vllm_available, logger, logging, maybe_apply_chat_template, nanmax, nanmin, nanstd, nn, nullcontext, os, pad, partial, prepare_deepspeed, prepare_fsdp, prepare_multimodal_messages, prepare_peft_model, print_prompt_completions_sample, profiling_context, profiling_decorator, seed_worker, selective_log_softmax, set_seed, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, textwrap, torch, transformers, unsplit_pixel_values_by_grid, unwrap_model_for_generation, wandb, Any, Union, gather, gather_object, is_conversational, logging, nanmax, nanmin, nanstd, os, pad, torch, FSDP, Optional, apply_chat_template, broadcast_object_list, gather, gather_object, is_flash_attn_2_available, maybe_apply_chat_template, nullcontext, os, pad, prepare_multimodal_messages, profiling_context, torch, transformers, unwrap_model_for_generation, entropy_from_logits, os, pad, selective_log_softmax, torch, transformers, Any, Union, profiling_decorator, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, torch, unsplit_pixel_values_by_grid, PreTrainedModel, logger, os, torch, FSDP, nn, os, FSDP, nn, torch, GRPOTrainer, gather, nanmax, nanmin, os, torch)
+from trl.trainer.grpo_trainer import (Any, AutoConfig, AutoModelForSequenceClassification, AutoProcessor, AutoTokenizer, BaseTrainer, DataLoader, Dataset, FSDP, GRPOConfig, GRPOTrainer, GenerationConfig, IterableDataset, Optional, Path, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, RepeatSampler, RewardFunc, Sampler, SyncRefModelCallback, TrainerCallback, Union, VLLMClient, _ForwardRedirection, apply_chat_template, broadcast_object_list, datasets, defaultdict, deque, disable_dropout_in_model, ensure_master_addr_port, entropy_from_logits, gather, gather_object, identity, inspect, is_conversational, is_datasets_available, is_flash_attn_2_available, is_liger_kernel_available, is_peft_model, is_rich_available, is_vllm_available, logger, logging, maybe_apply_chat_template, nanmax, nanmin, nanstd, nn, nullcontext, os, pad, partial, prepare_deepspeed, prepare_fsdp, prepare_multimodal_messages, prepare_peft_model, print_prompt_completions_sample, profiling_context, profiling_decorator, seed_worker, selective_log_softmax, set_seed, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, textwrap, torch, transformers, unsplit_pixel_values_by_grid, unwrap_model_for_generation, wandb, Any, Union, gather, gather_object, is_conversational, logging, nanmax, nanmin, nanstd, os, pad, torch, FSDP, Optional, apply_chat_template, broadcast_object_list, gather, gather_object, is_flash_attn_2_available, maybe_apply_chat_template, nullcontext, os, pad, prepare_multimodal_messages, profiling_context, torch, transformers, unwrap_model_for_generation, entropy_from_logits, os, pad, selective_log_softmax, torch, transformers, Any, Union, profiling_decorator, shuffle_sequence_dict, split_pixel_values_by_grid, split_tensor_dict, torch, unsplit_pixel_values_by_grid, PreTrainedModel, logger, os, torch, FSDP, nn, os, FSDP, nn, torch, GRPOTrainer, gather, os, torch)
 
 
 import os
@@ -1304,9 +1304,9 @@ class UnslothGRPOConfig(GRPOConfig):
                 per_device_train_batch_size = num_generations
         
         if temperature <= 0:
-            raise MathError('Unsloth: Please set a positive non-zero temperature since your results will be wrong.')
+            raise ValueError('Unsloth: Please set a positive non-zero temperature since your results will be wrong.')
         elif temperature >= 10:
-            raise MathError('Unsloth: Please set a positive non-zero temperature less than 10, since sampling will be quite erratic.')
+            raise ValueError('Unsloth: Please set a positive non-zero temperature less than 10, since sampling will be quite erratic.')
         
         
         super().__init__(
@@ -3095,13 +3095,19 @@ class _UnslothGRPOTrainer(BaseTrainer):
                 else torch.tensor(0.0, device = self.model.device)
             )
             self._metrics[mode]["sampling/importance_sampling_ratio/min"].append(
-                nanmin(self.accelerator.gather(min_importance_sampling_ratio)).item()
+                self.accelerator.gather(min_importance_sampling_ratio)
+                .nan_to_num(nan = float("inf"))
+                .min()
+                .item()
             )
             self._metrics[mode]["sampling/importance_sampling_ratio/mean"].append(
                 self.accelerator.gather(mean_importance_sampling_ratio).nanmean().item()
             )
             self._metrics[mode]["sampling/importance_sampling_ratio/max"].append(
-                nanmax(self.accelerator.gather(max_importance_sampling_ratio)).item()
+                self.accelerator.gather(max_importance_sampling_ratio)
+                .nan_to_num(nan = float("-inf"))
+                .max()
+                .item()
             )
 
         return loss
@@ -3491,6 +3497,11 @@ class UnslothGRPOTrainer(_UnslothGRPOTrainer):
             if args_max_seq_length is None and model_max_seq_length is not None:
                 max_seq_length = model.max_seq_length
                 if hasattr(args, 'max_seq_length'): args.max_seq_length = max_seq_length
+            elif args_max_seq_length is not None and model_max_seq_length is not None:
+                if args_max_seq_length > model_max_seq_length:
+                    print('Unsloth: You set `max_seq_length` as ' + str(args_max_seq_length) + ' but '
+                           'the maximum the model supports is ' + str(model_max_seq_length) + '. We shall reduce it.')
+                    args.max_seq_length = model_max_seq_length
         if model is not None and hasattr(model, 'for_training'):
             model.for_training(use_gradient_checkpointing=getattr(args, 'gradient_checkpointing', True))
         if 'tokenizer' in locals() and hasattr(tokenizer, 'padding_side'): tokenizer.padding_side = 'right'

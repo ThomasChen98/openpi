@@ -13,7 +13,8 @@ Usage:
         --data_dir examples/h1_control_client/h1_data_auto/lift_lid_dec7/epoch_5/raw \
         --task_instruction "Lift the lid off the bowl" \
         --checkpoint_path /path/to/qwen/checkpoint \
-        --advantage_threshold 0.3
+        --advantage_threshold 0.3 \
+        --ranking_frames 5
 
     # Label episodes (called by convert script)
     python qwen_reward_labeling.py \
@@ -21,6 +22,7 @@ Usage:
         --task_instruction "task description" \
         --checkpoint_path /path/to/checkpoint \
         --advantage_threshold 0.3 \
+        --ranking_frames 5 \
         --output_json labels.json
 """
 
@@ -199,6 +201,7 @@ def label_episodes(
     inference_batch_size: int = 30,
     base_model: str = None,
     dtype: str = "bf16",
+    ranking_frames: int = 5,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Label all HDF5 episodes in a directory with advantage labels using Qwen model.
@@ -214,6 +217,7 @@ def label_episodes(
         inference_batch_size: Batch size for inference (30 works well)
         base_model: Base model name (default: unsloth/Qwen3-VL-8B-Instruct)
         dtype: Data type for model (bf16, fp16)
+        ranking_frames: Number of frames from the end to use for ranking (default: 5, use 0 for all frames)
     
     Returns:
         Dictionary mapping filename to labeling results
@@ -265,7 +269,20 @@ def label_episodes(
                 'corrected_reward_pred': result['corrected_reward_pred'],
                 'total_reward': result['total_reward'],
                 'corrected_total_reward': result['corrected_total_reward'],
+                'ranking_reward': None,  # Will be calculated below
             }
+            
+            # Calculate ranking reward based on last N frames
+            reward_pred = result['reward_pred']
+            if ranking_frames > 0 and len(reward_pred) > 0:
+                # Use sum of last N frames for ranking
+                last_n_frames = reward_pred[-ranking_frames:]
+                ranking_reward = sum(last_n_frames)
+            else:
+                # Use total reward (all frames)
+                ranking_reward = result['corrected_total_reward']
+            
+            results[hdf5_file.name]['ranking_reward'] = ranking_reward
             
             print(format_reward_progress(hdf5_file.name, result['corrected_total_reward']))
             
@@ -287,12 +304,18 @@ def label_episodes(
         print("\nNo valid results to calculate percentile")
         return results
     
-    # Sort by corrected total reward (descending)
-    sorted_results = sorted(valid_results, key=lambda x: x[1]['corrected_total_reward'], reverse=True)
+    # Sort by ranking_reward (descending) instead of corrected_total_reward
+    sorted_results = sorted(valid_results, key=lambda x: x[1]['ranking_reward'], reverse=True)
     
     # Calculate cutoff index for top X%
     num_good = max(1, int(len(sorted_results) * advantage_threshold))
-    cutoff_reward = sorted_results[num_good - 1][1]['corrected_total_reward'] if num_good > 0 else float('inf')
+    cutoff_reward = sorted_results[num_good - 1][1]['ranking_reward'] if num_good > 0 else float('inf')
+    
+    # Print ranking method info
+    if ranking_frames > 0:
+        print(f"\nRanking method: Sum of last {ranking_frames} frames")
+    else:
+        print(f"\nRanking method: Sum of all {max_frames} frames")
     
     # Print percentile calculation info
     print_percentile_calculation(advantage_threshold, len(sorted_results), num_good, cutoff_reward)
@@ -352,6 +375,12 @@ def main():
              "e.g., 0.3 means top 30%% episodes get Advantage=True"
     )
     parser.add_argument(
+        "--ranking_frames",
+        type=int,
+        default=5,
+        help="Number of frames from the end to use for ranking (default: 5, use 0 for all frames)"
+    )
+    parser.add_argument(
         "--inference_batch_size",
         type=int,
         default=30,
@@ -405,6 +434,7 @@ def main():
         inference_batch_size=args.inference_batch_size,
         base_model=args.base_model,
         dtype=args.dtype,
+        ranking_frames=args.ranking_frames,
     )
     
     # Print summary

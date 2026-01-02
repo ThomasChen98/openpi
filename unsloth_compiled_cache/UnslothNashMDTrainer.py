@@ -381,9 +381,9 @@ class UnslothNashMDConfig(NashMDConfig):
             elif memory_gb_left <= 10: dataset_num_proc = min(4, dataset_num_proc)
             elif memory_gb_left <= 14: dataset_num_proc = min(6, dataset_num_proc)
         if temperature <= 0:
-            raise MathError('Unsloth: Please set a positive non-zero temperature since your results will be wrong.')
+            raise ValueError('Unsloth: Please set a positive non-zero temperature since your results will be wrong.')
         elif temperature >= 10:
-            raise MathError('Unsloth: Please set a positive non-zero temperature less than 10, since sampling will be quite erratic.')
+            raise ValueError('Unsloth: Please set a positive non-zero temperature less than 10, since sampling will be quite erratic.')
         
         
         super().__init__(
@@ -1083,6 +1083,11 @@ class UnslothNashMDTrainer(_UnslothNashMDTrainer):
             if args_max_seq_length is None and model_max_seq_length is not None:
                 max_seq_length = model.max_seq_length
                 if hasattr(args, 'max_seq_length'): args.max_seq_length = max_seq_length
+            elif args_max_seq_length is not None and model_max_seq_length is not None:
+                if args_max_seq_length > model_max_seq_length:
+                    print('Unsloth: You set `max_seq_length` as ' + str(args_max_seq_length) + ' but '
+                           'the maximum the model supports is ' + str(model_max_seq_length) + '. We shall reduce it.')
+                    args.max_seq_length = model_max_seq_length
         if model is not None and hasattr(model, 'for_training'):
             model.for_training(use_gradient_checkpointing=getattr(args, 'gradient_checkpointing', True))
         if 'tokenizer' in locals() and hasattr(tokenizer, 'padding_side'): tokenizer.padding_side = 'right'

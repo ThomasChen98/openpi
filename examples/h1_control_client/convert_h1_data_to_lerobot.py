@@ -160,6 +160,7 @@ def main(
     reward_max_frames: int = 30,
     reward_image_rotation: int = 0,
     reward_advantage_threshold: float = 0.3,
+    reward_ranking_frames: int = 5,
     action_dim: int = None,
     filter_good_only: bool = False,
 ):
@@ -180,6 +181,7 @@ def main(
         reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
         reward_advantage_threshold: Percentile threshold for advantage labeling (0.0-1.0)
                                    e.g., 0.3 means top 30% episodes get Advantage=True
+        reward_ranking_frames: Number of frames from the end to use for ranking (default: 5, use 0 for all frames)
         action_dim: Expected action dimension (14=arms, 26=arms+hands). If provided, validates against HDF5 data.
                    If not provided, auto-detects from HDF5 files.
         filter_good_only: If True, only keep episodes with Advantage=True (for epoch 0 training from warmup checkpoint)
@@ -211,6 +213,7 @@ def main(
         print(f"  Max frames: {reward_max_frames}")
         print(f"  Image rotation: {reward_image_rotation}")
         print(f"  Advantage threshold: {reward_advantage_threshold:.1%} (top {reward_advantage_threshold:.1%} episodes)")
+        print(f"  Ranking frames: {reward_ranking_frames if reward_ranking_frames > 0 else 'all'}")
         
         # Import Qwen-based reward labeling
         try:
@@ -249,51 +252,10 @@ def main(
             image_rotation=reward_image_rotation,
             advantage_threshold=reward_advantage_threshold,
             inference_batch_size=30,
+            ranking_frames=reward_ranking_frames,
         )
         
         print(f"\nReward labeling complete. Labeled {len(reward_labels)} episodes.")
-        
-        # Generate alignment visualization if human labels are available
-        try:
-            print(f"\n{'='*80}")
-            print("GENERATING REWARD ALIGNMENT VISUALIZATION")
-            print(f"{'='*80}")
-            
-            from reward_alignment_viz import generate_alignment_visualization
-            
-            # Determine output path based on save_dir
-            if save_dir is not None:
-                # Using custom save directory
-                current_dir = Path(__file__).parent.resolve()
-                viz_output_dir = current_dir / 'h1_data_lerobot' / save_dir
-                print(f"Using custom save directory: {viz_output_dir}")
-            else:
-                # Using HF_LEROBOT_HOME (default)
-                viz_output_dir = Path(HF_LEROBOT_HOME) / repo_id
-                print(f"Using HF_LEROBOT_HOME: {viz_output_dir}")
-            
-            viz_output_path = viz_output_dir / "reward_alignment.png"
-            print(f"Output path: {viz_output_path}")
-            print(f"Data dir: {label_dir}")
-            print(f"Number of reward labels: {len(reward_labels)}")
-            
-            generate_alignment_visualization(
-                data_dir=str(label_dir),
-                reward_labels=reward_labels,
-                output_path=str(viz_output_path),
-                checkpoint_path=checkpoint_path,
-                task_instruction=reward_task_instruction,
-            )
-            print(f"{'='*80}\n")
-        except Exception as e:
-            print(f"\n{'!'*80}")
-            print(f"ERROR: Could not generate alignment visualization")
-            print(f"{'!'*80}")
-            print(f"Error: {e}")
-            print(f"Error type: {type(e).__name__}")
-            import traceback
-            traceback.print_exc()
-            print(f"{'!'*80}\n")
     
     # Determine if data_dir is a file or directory
     data_path = Path(data_dir)
@@ -524,6 +486,39 @@ def main(
             license="apache-2.0",
         )
         print("Dataset pushed successfully!")
+    
+    # Generate alignment visualization if reward labeling was used and human labels are available
+    if labeling_mode == "reward_labeling" and 'reward_labels' in locals():
+        try:
+            print(f"\n{'='*80}")
+            print("GENERATING REWARD ALIGNMENT VISUALIZATION")
+            print(f"{'='*80}")
+            
+            from reward_alignment_viz import generate_alignment_visualization
+            
+            # Output path for visualization (in the dataset directory)
+            viz_output_path = output_path / "reward_alignment.png"
+            print(f"Output path: {viz_output_path}")
+            print(f"Data dir: {label_dir}")
+            print(f"Number of reward labels: {len(reward_labels)}")
+            
+            generate_alignment_visualization(
+                data_dir=str(label_dir),
+                reward_labels=reward_labels,
+                output_path=str(viz_output_path),
+                checkpoint_path=checkpoint_path,
+                task_instruction=reward_task_instruction,
+            )
+            print(f"{'='*80}\n")
+        except Exception as e:
+            print(f"\n{'!'*80}")
+            print(f"ERROR: Could not generate alignment visualization")
+            print(f"{'!'*80}")
+            print(f"Error: {e}")
+            print(f"Error type: {type(e).__name__}")
+            import traceback
+            traceback.print_exc()
+            print(f"{'!'*80}\n")
 
 
 if __name__ == "__main__":

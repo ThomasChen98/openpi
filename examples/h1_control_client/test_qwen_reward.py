@@ -8,13 +8,13 @@ Usage:
     uv run python examples/h1_control_client/test_qwen_reward.py \
         --video_path third_party/videos/fold_towel_epoch_2_episode_000000_bad.mp4 \
         --task_instruction "Fold the towel into a small square" \
-        --checkpoint_path third_party/emboided_reward/checkpoint-1130
+        --checkpoint_path third_party/emboided_reward/checkpoint-1240
     
     # Test on an HDF5 file
     uv run python examples/h1_control_client/test_qwen_reward.py \
         --hdf5_path examples/h1_control_client/h1_data_auto/fold_towel/epoch_5/raw/episode_0.hdf5 \
         --task_instruction "Fold the towel into a small square" \
-        --checkpoint_path third_party/emboided_reward/checkpoint-1130
+        --checkpoint_path third_party/emboided_reward/checkpoint-1240
 """
 
 import sys

@@ -11,10 +11,11 @@ This script:
 
 Usage:
     python examples/h1_control_client/utils/analyze_reward_alignment.py \
-        --data_dir examples/h1_control_client/h1_data_auto/fold_towel_reward/epoch_0/raw \
+        --data_dir examples/h1_control_client/h1_data_auto/fold_towel_reward/epoch_4/raw \
         --task_instruction "Fold the towel into a small square" \
-        --checkpoint_path third_party/emboided_reward/checkpoint-1130 \
+        --checkpoint_path third_party/emboided_reward/checkpoint-1240 \
         --output_dir results/analysis \
+        --ranking_frames 5 \
         --save_videos \
         --gpu 1
 """
@@ -104,6 +105,7 @@ class EpisodeResult:
     qwen_label: Optional[bool] = None  # Will be set after thresholding
     frame_rewards: List[float] = None
     episode_length: int = 0
+    ranking_reward: Optional[float] = None  # Reward used for ranking (last N frames or total)
     
     def to_dict(self):
         return asdict(self)
@@ -321,8 +323,8 @@ def plot_alignment_analysis(results: List[EpisodeResult], output_dir: Path, chec
     good_rewards = [r.qwen_reward for r in results if r.human_label]
     bad_rewards = [r.qwen_reward for r in results if not r.human_label]
     
-    # Create figure with subplots
-    fig = plt.figure(figsize=(16, 12))
+    # Create figure with subplots (expanded to 4x3 for stats panels)
+    fig = plt.figure(figsize=(16, 14))
     
     # Add main title with dataset, epoch, and checkpoint info
     title_parts = ['Reward Alignment Analysis']
@@ -334,9 +336,10 @@ def plot_alignment_analysis(results: List[EpisodeResult], output_dir: Path, chec
         checkpoint_name = Path(checkpoint_path).name
         title_parts.append(f'Checkpoint: {checkpoint_name}')
     
-    fig.suptitle(' | '.join(title_parts), fontsize=16, fontweight='bold', y=0.995)
+    fig.suptitle(' | '.join(title_parts), fontsize=16, fontweight='bold', y=0.985)
     
-    gs = fig.add_gridspec(3, 3, hspace=0.35, wspace=0.3, top=0.96)
+    # Add more space between title and figures
+    gs = fig.add_gridspec(4, 3, hspace=0.4, wspace=0.3, top=0.93, bottom=0.05)
     
     # 1. Reward distribution by human label
     ax1 = fig.add_subplot(gs[0, 0])
@@ -451,6 +454,40 @@ def plot_alignment_analysis(results: List[EpisodeResult], output_dir: Path, chec
     ax7.legend()
     ax7.grid(True, alpha=0.3)
     
+    # Calculate metrics for stats panels
+    total = len(results)
+    tp = sum(1 for r in results if r.human_label and r.qwen_label)
+    fp = sum(1 for r in results if not r.human_label and r.qwen_label)
+    tn = sum(1 for r in results if not r.human_label and not r.qwen_label)
+    fn = sum(1 for r in results if r.human_label and not r.qwen_label)
+    
+    accuracy = (tp + tn) / total if total > 0 else 0
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
+    
+    # 8. Combined statistics panel (bottom, single centered block)
+    ax8 = fig.add_subplot(gs[3, :])
+    ax8.axis('off')
+    
+    # Create side-by-side text using proper formatting
+    combined_text = (
+        f"{'Alignment Metrics':^40}{'Reward Statistics':^40}\n"
+        f"{'─' * 17:^40}{'─' * 17:^40}\n"
+        f"{'Accuracy: ' + f'{accuracy:.1%}':^40}{'Good Episodes:':^40}\n"
+        f"{'Precision: ' + f'{precision:.1%}':^40}{'  Mean: ' + f'{np.mean(good_rewards):.1f}':^40}\n"
+        f"{'Recall: ' + f'{recall:.1%}':^40}{'  Std:  ' + f'{np.std(good_rewards):.1f}':^40}\n"
+        f"{'F1 Score: ' + f'{f1:.3f}':^40}{' ':^40}\n"
+        f"{' ':^40}{'Bad Episodes:':^40}\n"
+        f"{'Episodes: ' + f'{total}':^40}{'  Mean: ' + f'{np.mean(bad_rewards):.1f}':^40}\n"
+        f"{'Good: ' + f'{sum(1 for r in results if r.human_label)}':^40}{'  Std:  ' + f'{np.std(bad_rewards):.1f}':^40}\n"
+        f"{'Bad: ' + f'{sum(1 for r in results if not r.human_label)}':^40}{' ':^40}\n"
+        f"{' ':^40}{'Separation: ' + f'{np.mean(good_rewards) - np.mean(bad_rewards):.1f}':^40}"
+    )
+    
+    ax8.text(0.5, 0.5, combined_text, fontsize=11, verticalalignment='center', horizontalalignment='center',
+             family='monospace', bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+    
     plt.savefig(output_dir / 'alignment_analysis.png', dpi=150, bbox_inches='tight')
     plt.close()
     
@@ -535,6 +572,8 @@ def main():
                        help="Batch size for inference")
     parser.add_argument("--advantage_threshold", type=float, default=0.3,
                        help="Percentile threshold for Qwen labeling (0.3 = top 30%%)")
+    parser.add_argument("--ranking_frames", type=int, default=5,
+                       help="Number of frames from the end to use for ranking (default: 5, use 0 for all frames)")
     parser.add_argument("--save_videos", action="store_true",
                        help="Convert HDF5 files to MP4 videos")
     parser.add_argument("--video_fps", type=int, default=30,
@@ -634,20 +673,33 @@ def main():
         human_adv, ep_len = human_labels[filename]
         if filename in qwen_results and 'error' not in qwen_results[filename]:
             qwen_data = qwen_results[filename]
+            frame_rewards = qwen_data.get('reward_pred', [])
+            total_reward = qwen_data['corrected_total_reward']
+            
+            # Calculate ranking reward based on last N frames
+            if args.ranking_frames > 0 and len(frame_rewards) > 0:
+                # Use sum of last N frames for ranking
+                last_n_frames = frame_rewards[-args.ranking_frames:]
+                ranking_reward = sum(last_n_frames)
+            else:
+                # Use total reward (all frames)
+                ranking_reward = total_reward
+            
             combined_results.append(EpisodeResult(
                 filename=filename,
                 human_label=human_adv,
-                qwen_reward=qwen_data['corrected_total_reward'],
-                frame_rewards=qwen_data.get('reward_pred', []),
+                qwen_reward=total_reward,
+                frame_rewards=frame_rewards,
                 episode_length=ep_len,
+                ranking_reward=ranking_reward,
             ))
     
     if not combined_results:
         print("Error: No valid results to compare!")
         return
     
-    # Determine Qwen labels based on threshold
-    sorted_by_reward = sorted(combined_results, key=lambda x: x.qwen_reward, reverse=True)
+    # Determine Qwen labels based on threshold using ranking_reward
+    sorted_by_reward = sorted(combined_results, key=lambda x: x.ranking_reward, reverse=True)
     num_good = max(1, int(len(sorted_by_reward) * args.advantage_threshold))
     
     for i, result in enumerate(sorted_by_reward):
@@ -661,6 +713,10 @@ def main():
     print("ALIGNMENT METRICS")
     print("="*80)
     print(f"Total episodes: {metrics['total_episodes']}")
+    if args.ranking_frames > 0:
+        print(f"Ranking method: Sum of last {args.ranking_frames} frames")
+    else:
+        print(f"Ranking method: Sum of all {args.max_frames} frames")
     print()
     print("Confusion Matrix:")
     cm = metrics['confusion_matrix']
@@ -691,6 +747,7 @@ def main():
             'task_instruction': args.task_instruction,
             'checkpoint_path': args.checkpoint_path,
             'advantage_threshold': args.advantage_threshold,
+            'ranking_frames': args.ranking_frames,
         }
     }
     

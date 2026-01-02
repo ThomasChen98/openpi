@@ -1596,6 +1596,11 @@ class UnslothORPOTrainer(_UnslothORPOTrainer):
             if args_max_seq_length is None and model_max_seq_length is not None:
                 max_seq_length = model.max_seq_length
                 if hasattr(args, 'max_seq_length'): args.max_seq_length = max_seq_length
+            elif args_max_seq_length is not None and model_max_seq_length is not None:
+                if args_max_seq_length > model_max_seq_length:
+                    print('Unsloth: You set `max_seq_length` as ' + str(args_max_seq_length) + ' but '
+                           'the maximum the model supports is ' + str(model_max_seq_length) + '. We shall reduce it.')
+                    args.max_seq_length = model_max_seq_length
         if model is not None and hasattr(model, 'for_training'):
             model.for_training(use_gradient_checkpointing=getattr(args, 'gradient_checkpointing', True))
         if 'tokenizer' in locals() and hasattr(tokenizer, 'padding_side'): tokenizer.padding_side = 'right'
