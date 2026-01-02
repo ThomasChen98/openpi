@@ -174,6 +174,7 @@ class H1TrainingClient:
         self.total_episodes = 0  # Total episodes across all epochs
         self.running = True
         self.last_policy_epoch = -1  # Track which policy epoch we've seen
+        self.episode_rejected = False  # Track if last episode was rejected
         
         # Hand control configuration - read from robot.include_hands in config
         self.include_hands = self.config.get('robot', {}).get('include_hands', False)
@@ -1038,6 +1039,7 @@ class H1TrainingClient:
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
+        print("    'x' - REJECT - Discard this episode without saving")
         print("=" * 60)
         
         # Stop adding frames but don't save yet
@@ -1051,8 +1053,37 @@ class H1TrainingClient:
         hold_thread.start()
         
         with self.keyboard:
-            key = self.keyboard.wait_for_key({'g', 'b'}, "Label this episode (g/b): ")
+            key = self.keyboard.wait_for_key({'g', 'b', 'x'}, "Label this episode (g/b/x): ")
             
+            # Handle rejection
+            if key == 'x':
+                logger.info("Episode REJECTED - will not be saved")
+                
+                # Stop holding position
+                self._hold_position_background = False
+                hold_thread.join(timeout=0.5)
+                
+                # Discard the episode writer without saving
+                if self.episode_writer:
+                    logger.info("Discarding episode data...")
+                    # Don't call stop_recording() - just abandon the episode_writer
+                    self.episode_writer = None
+                
+                # Mark as rejected
+                self.episode_rejected = True
+                
+                # Reset robot to starting pose
+                print("  Resetting robot to starting pose...")
+                self.reset_to_pose(duration=2.0)
+                
+                # Go directly to DECIDING state (episode_num unchanged, will be reused)
+                print("\n" + "=" * 60)
+                print("[REJECTED] Episode discarded - ready for next attempt")
+                print("=" * 60)
+                self.state = TrainingState.DECIDING
+                return
+            
+            # Handle normal labeling (g/b)
             if key == 'g':
                 self.current_advantage_label = True
                 logger.info("Episode labeled as GOOD (Advantage=True)")
@@ -1191,6 +1222,7 @@ class H1TrainingClient:
         
         # Reset for next episode
         self.current_advantage_label = None
+        self.episode_rejected = False  # Clear rejection flag on successful save
         self.state = TrainingState.DECIDING
     
     def run_deciding_state(self):
@@ -1202,10 +1234,21 @@ class H1TrainingClient:
         - 'n': Finish this epoch, sync data, and wait for new training
         """
         print("\n" + "=" * 60)
-        print(f"[DECIDING] Epoch {self.epoch_num} - Episode {self.episode_num} complete")
-        print(f"  Total episodes this epoch: {self.episode_num}")
-        print("  Press 'y' to collect another episode (same epoch)")
-        print("  Press 'n' to finish epoch and sync data")
+        
+        # Check if last episode was rejected
+        if self.episode_rejected:
+            print(f"[DECIDING] Episode rejected - NOT saved")
+            print(f"  Total saved episodes this epoch: {self.episode_num - 1}")
+            print("  Press 'y' to retry (collect another episode)")
+            print("  Press 'n' to finish epoch and sync data")
+            # Reset rejection flag for next attempt
+            self.episode_rejected = False
+        else:
+            print(f"[DECIDING] Epoch {self.epoch_num} - Episode {self.episode_num} complete")
+            print(f"  Total episodes this epoch: {self.episode_num}")
+            print("  Press 'y' to collect another episode (same epoch)")
+            print("  Press 'n' to finish epoch and sync data")
+        
         print("=" * 60)
         
         with self.keyboard:
@@ -1216,7 +1259,8 @@ class H1TrainingClient:
                 self.state = TrainingState.READY
             else:
                 # Confirm end of epoch
-                print(f"\nFinish epoch {self.epoch_num} with {self.episode_num} episodes?")
+                saved_count = self.episode_num if not self.episode_rejected else self.episode_num - 1
+                print(f"\nFinish epoch {self.epoch_num} with {saved_count} saved episodes?")
                 confirm = self.keyboard.wait_for_key({'y', 'n'}, "Confirm (y/n): ")
                 
                 if confirm == 'y':
