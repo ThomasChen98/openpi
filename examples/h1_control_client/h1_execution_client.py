@@ -1394,6 +1394,13 @@ class H1TrainingClient:
                 self.robot.ctrl_dual_arm_go_home()
             except Exception as e:
                 logger.warning(f"Error moving robot to home: {e}")
+            
+            # Critical: cleanup DDS resources for fast reconnection
+            logger.info("Cleaning up robot DDS resources...")
+            try:
+                self.robot.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up robot: {e}")
         
         logger.info("Cleanup complete")
 

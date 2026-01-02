@@ -434,11 +434,23 @@ def main():
     finally:
         # Return to initial pose, then home
         print("\nReturning to initial pose...")
-        reset_to_pose(robot, duration=2.0, control_freq=30)
-        time.sleep(1.0)
+        try:
+            reset_to_pose(robot, duration=2.0, control_freq=30)
+            time.sleep(1.0)
+        except:
+            pass
+        
         print("Returning to home position...")
-        robot.ctrl_dual_arm_go_home()
-        time.sleep(1.0)
+        try:
+            robot.ctrl_dual_arm_go_home()
+            time.sleep(1.0)
+        except:
+            pass
+        
+        # Critical: cleanup DDS resources for fast reconnection
+        print("Cleaning up DDS resources...")
+        robot.cleanup()
+        print("Cleanup complete - next run should connect instantly")
     
     print("\n" + "=" * 80)
     print("  Test Complete")

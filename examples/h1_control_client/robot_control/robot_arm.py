@@ -491,6 +491,55 @@ class H1_2_ArmController:
     def is_damping_mode(self):
         """Check if currently in damping mode."""
         return self.damping_mode
+    
+    def cleanup(self):
+        """
+        Cleanup DDS resources to allow fast reconnection.
+        
+        This is critical - without proper cleanup, DDS lease timeouts
+        can cause 4+ minute delays when restarting the program.
+        """
+        logger_mp.info("[H1_2_ArmController] Cleaning up DDS resources...")
+        
+        try:
+            # Stop hand bridge threads if running
+            if self.hand_control and self.bridge_running:
+                logger_mp.info("  Stopping hand bridge threads...")
+                self.bridge_running = False
+                for thread in self.bridge_threads:
+                    if thread.is_alive():
+                        thread.join(timeout=1.0)
+            
+            # Close hand publishers
+            if self.left_hand_pub is not None:
+                logger_mp.info("  Closing left hand publisher...")
+                self.left_hand_pub.Close()
+            
+            if self.right_hand_pub is not None:
+                logger_mp.info("  Closing right hand publisher...")
+                self.right_hand_pub.Close()
+            
+            # Close lowcmd publisher
+            if hasattr(self, 'lowcmd_publisher') and self.lowcmd_publisher is not None:
+                logger_mp.info("  Closing lowcmd publisher...")
+                self.lowcmd_publisher.Close()
+            
+            # Close lowstate subscriber
+            if hasattr(self, 'lowstate_subscriber') and self.lowstate_subscriber is not None:
+                logger_mp.info("  Closing lowstate subscriber...")
+                self.lowstate_subscriber.Close()
+            
+            logger_mp.info("[H1_2_ArmController] Cleanup complete")
+            
+        except Exception as e:
+            logger_mp.warning(f"[H1_2_ArmController] Error during cleanup: {e}")
+    
+    def __del__(self):
+        """Destructor - ensure cleanup is called"""
+        try:
+            self.cleanup()
+        except:
+            pass  # Ignore errors in destructor
 
 class H1_2_JointArmIndex(IntEnum):
     # Left arm
