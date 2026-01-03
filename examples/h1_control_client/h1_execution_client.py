@@ -1069,14 +1069,19 @@ class H1TrainingClient:
                     # Don't call stop_recording() - just abandon the episode_writer
                     self.episode_writer = None
                 
-                # Mark as rejected
+                # Mark as rejected and decrement episode number
+                # This undoes the increment from READY state, so when we retry
+                # and go back to READY, the increment will reuse the same episode number
                 self.episode_rejected = True
+                self.episode_num -= 1
+                self.total_episodes -= 1
+                logger.info(f"Episode number decremented back to {self.episode_num} for retry")
                 
                 # Reset robot to starting pose
                 print("  Resetting robot to starting pose...")
                 self.reset_to_pose(duration=2.0)
                 
-                # Go directly to DECIDING state (episode_num unchanged, will be reused)
+                # Go directly to DECIDING state (episode_num will be reused on retry)
                 print("\n" + "=" * 60)
                 print("[REJECTED] Episode discarded - ready for next attempt")
                 print("=" * 60)
@@ -1238,8 +1243,8 @@ class H1TrainingClient:
         # Check if last episode was rejected
         if self.episode_rejected:
             print(f"[DECIDING] Episode rejected - NOT saved")
-            print(f"  Total saved episodes this epoch: {self.episode_num - 1}")
-            print("  Press 'y' to retry (collect another episode)")
+            print(f"  Total saved episodes this epoch: {self.episode_num}")
+            print("  Press 'y' to retry (same episode number)")
             print("  Press 'n' to finish epoch and sync data")
             # Reset rejection flag for next attempt
             self.episode_rejected = False
@@ -1259,8 +1264,7 @@ class H1TrainingClient:
                 self.state = TrainingState.READY
             else:
                 # Confirm end of epoch
-                saved_count = self.episode_num if not self.episode_rejected else self.episode_num - 1
-                print(f"\nFinish epoch {self.epoch_num} with {saved_count} saved episodes?")
+                print(f"\nFinish epoch {self.epoch_num} with {self.episode_num} saved episodes?")
                 confirm = self.keyboard.wait_for_key({'y', 'n'}, "Confirm (y/n): ")
                 
                 if confirm == 'y':
