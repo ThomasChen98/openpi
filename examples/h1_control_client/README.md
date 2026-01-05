@@ -64,7 +64,7 @@ python h1_policy_viz_client.py --hdf5-path data.hdf5 --host localhost --port 800
 
 **SSH Tunnel (to GPU server):**
 ```bash
-ssh -L 8000:localhost:8000 -L 8080:localhost:8080 P6000
+ssh -R 5007:localhost:5007 -L 8000:localhost:8000 -L 8080:localhost:8080 P6000
 ```
 
 ## Configuration

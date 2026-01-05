@@ -226,6 +226,11 @@ class H1RemoteClient:
         self.episode_writer = None
         self.is_recording = False
         
+        # Track last hand command for state construction
+        # At time t, state = [arm_qpos(t), hand_action(t-1)]
+        # Initialize to zeros (fully open in 0-1 range)
+        self.last_hand_command = np.zeros(12, dtype=np.float32)
+        
         # Image capture for recording
         self.image_capture_running = False
         self.image_buffer = []  # Buffer of (timestamp, images_dict)
@@ -689,6 +694,10 @@ class H1RemoteClient:
             self.right_wrist_frame_count = 0
             self.session_start_time = current_time
         
+        # Build 26-dim state: [arm_qpos(t), hand_action(t-1)]
+        # This matches the training data convention from data_fix.py
+        state_26 = np.concatenate([current_arm_q, self.last_hand_command])
+        
         # OpenPi model expects this structure (cam_head, cam_left_wrist, cam_right_wrist)
         observation = {
             "image": {
@@ -701,7 +710,7 @@ class H1RemoteClient:
                 "cam_left_wrist": True,
                 "cam_right_wrist": True,
             },
-            "state": current_arm_q,  # 14 arm joints
+            "state": state_26,  # 26 dims: 14 arm joints + 12 hand joints from t-1
             "prompt": self.prompt,
         }
         
@@ -827,9 +836,14 @@ class H1RemoteClient:
             logger.info(f"   Mode: Arms + Hands (26 DOF)")
             logger.info(f"   Arm range: [{policy_actions[:, :14].min():.3f}, {policy_actions[:, :14].max():.3f}]")
             logger.info(f"   Hand range: [{policy_actions[:, 14:].min():.3f}, {policy_actions[:, 14:].max():.3f}]")
+            # Update last_hand_command with the last action's hand values (in 0-1 range)
+            # This will be used for state construction in the next inference
+            self.last_hand_command = policy_actions[-1, 14:26].astype(np.float32)
+            logger.info(f"   Updated last_hand_command: L=[{self.last_hand_command[:3]}...], R=[{self.last_hand_command[6:9]}...]")
         elif action_dim == 14:
             logger.info(f"   Mode: Arms only (14 DOF)")
             logger.info(f"   Range: [{policy_actions.min():.3f}, {policy_actions.max():.3f}]")
+            # For 14 DOF, keep hands at default (zeros = fully open)
         else:
             logger.error(f"Invalid action dimension: {action_dim}, expected 14 or 26")
             return

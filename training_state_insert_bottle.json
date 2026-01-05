@@ -1,0 +1,10 @@
+{
+  "task_name": "insert_bottle",
+  "task_description": "Insert the bottle into the cupholder",
+  "config_name": "pi05_h1_auto",
+  "epoch": 2,
+  "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle/epoch_1/1199",
+  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle/1199",
+  "status": "training",
+  "updated_at": "2026-01-05T14:15:01-08:00"
+}

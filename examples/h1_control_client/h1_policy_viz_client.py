@@ -1403,6 +1403,9 @@ def main(args: Args) -> None:
         if show_ground_truth:
             # Show ground truth qpos (use all DOF - either 14 or 26)
             joints = data['qpos'][current_frame]
+            print('+'*100)
+            print(joints)
+            print('+'*100)
         elif predicted_actions is not None and show_predicted_cb.value:
             # Show predicted action at selected index
             action_idx = int(action_index_slider.value)
