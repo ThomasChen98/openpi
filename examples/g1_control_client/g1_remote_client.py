@@ -60,6 +60,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pinocchio as pin
 import websockets
 from websockets.server import serve
 
@@ -78,19 +79,9 @@ except ImportError:
     websocket_client_policy = None
     image_tools = None
 
-# Import from xr_teleoperate
-xr_teleoperate_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'xr_teleoperate')
-if os.path.exists(xr_teleoperate_path):
-    sys.path.insert(0, xr_teleoperate_path)
-
-try:
-    from teleop.robot_control.robot_arm import G1_29_ArmController
-    from teleop.robot_control.robot_arm_ik import G1_29_ArmIK
-    from teleop.image_server.image_client import ImageClient
-except ImportError as e:
-    logger.error(f"Could not import from xr_teleoperate: {e}")
-    logger.error("Make sure xr_teleoperate is cloned next to openpi/")
-    sys.exit(1)
+# Import from local robot_control module (no external xr_teleoperate dependency)
+from robot_control import G1_29_ArmController, G1_29_ArmIK, ImageClient
+IMAGE_CLIENT_AVAILABLE = True
 
 # Import Unitree SDK for direct Dex3 control
 try:
@@ -427,6 +418,11 @@ class G1RemoteClient:
 
     def _init_head_camera(self):
         """Initialize client to receive head camera from robot"""
+        if not IMAGE_CLIENT_AVAILABLE:
+            logger.warning("ImageClient not available - camera streaming disabled")
+            self.cameras_ready = True
+            return
+            
         try:
             # Head camera: single RealSense at 480x640
             self.head_img_shape = (480, 640, 3)
@@ -496,6 +492,39 @@ class G1RemoteClient:
         except Exception as e:
             logger.error(f"Failed to connect to policy server: {e}")
             return False
+
+    def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
+        """
+        Compute gravity compensation torques for given joint positions using RNEA.
+        
+        This computes the torques needed to hold the robot at the given pose
+        (counteracting gravity), which should be added as feedforward to PD control.
+        
+        Uses the IK solver's reduced robot model (14 DOF arms only).
+        
+        Args:
+            joint_positions: (14,) array of arm joint positions
+            
+        Returns:
+            gravity_torques: (14,) array of feedforward torques for gravity compensation
+        """
+        if self.ik_solver is None:
+            return np.zeros(14, dtype=np.float32)
+        
+        # Use Pinocchio RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
+        # With zero velocity and zero acceleration, this gives us pure gravity compensation
+        zero_velocity = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        zero_acceleration = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        
+        gravity_torques = pin.rnea(
+            self.ik_solver.reduced_robot.model,
+            self.ik_solver.reduced_robot.data,
+            joint_positions,
+            zero_velocity,
+            zero_acceleration
+        )
+        
+        return gravity_torques
 
     def get_observation(self) -> dict:
         """
@@ -604,10 +633,11 @@ class G1RemoteClient:
             else:
                 hand_joints = np.zeros(14, dtype=np.float32)
             
-            # Send arm command
+            # Send arm command with gravity compensation
+            gravity_torques = self.compute_gravity_compensation(arm_joints)
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14)
+                tauff_target=gravity_torques
             )
             
             # Send hand command (direct joint angles)
@@ -720,9 +750,11 @@ class G1RemoteClient:
                             for i in range(steps):
                                 alpha = (i + 1) / steps
                                 interp = current * (1 - alpha) + arm_target * alpha
+                                # Compute gravity compensation for interpolated position
+                                gravity_torques = self.compute_gravity_compensation(interp)
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
-                                    tauff_target=np.zeros(14)
+                                    tauff_target=gravity_torques
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             
@@ -765,11 +797,12 @@ class G1RemoteClient:
                         
                         elif cmd == "emergency_stop":
                             logger.warning("EMERGENCY STOP")
-                            # Stop arm movement
+                            # Stop arm movement - hold current position with gravity comp
                             current = self.robot.get_current_dual_arm_q()
+                            gravity_torques = self.compute_gravity_compensation(current)
                             self.robot.ctrl_dual_arm(
                                 q_target=current,
-                                tauff_target=np.zeros(14)
+                                tauff_target=gravity_torques
                             )
                             # Stop locomotion
                             if self.loco_client is not None:
