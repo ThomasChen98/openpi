@@ -21,6 +21,7 @@ import openpi.policies.aloha_policy as aloha_policy
 import openpi.policies.droid_policy as droid_policy
 import openpi.policies.libero_policy as libero_policy
 import openpi.policies.h1_policy as h1_policy
+import openpi.policies.g1_policy as g1_policy
 import openpi.shared.download as _download
 import openpi.shared.normalize as _normalize
 import openpi.training.droid_rlds_dataset as droid_rlds_dataset
@@ -412,6 +413,94 @@ class LeRobotH1LocalDataConfig(DataConfigFactory):
             self.base_config or DataConfig(),
             repo_id=self.data_dir,  # Use local directory as repo_id
             asset_id=self.data_dir,  # Use data_dir as asset_id for consistency
+            norm_stats=norm_stats,
+            use_quantile_norm=model_config.model_type != ModelType.PI0,
+            repack_transforms=repack_transforms,
+            data_transforms=data_transforms,
+            model_transforms=model_transforms,
+            action_sequence_keys=self.action_sequence_keys,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class LeRobotG1LocalDataConfig(DataConfigFactory):
+    """
+    G1 robot data config for local LeRobot format datasets.
+    
+    Handles G1 with Dex3 hands and locomotion control.
+    
+    State Space (32 dims):
+        [0:28]  qpos        - arm (14) + hand (14) joint positions
+        [28:31] rpy         - roll, pitch, yaw from IMU
+        [31]    yaw_rate    - yaw angular velocity from gyroscope
+    
+    Action Space (32 dims):
+        [0:28]  upper_body  - arm (14) + hand (14) joint targets
+        [28]    vx          - forward/backward velocity
+        [29]    vy          - strafe left/right velocity
+        [30]    vyaw        - turn (yaw angular velocity)
+        [31]    padding     - zero
+    
+    HDF5 data format:
+        qpos: [T, 28] - arm + hand joints
+        loco_state: [T, 17] - mode, rpy(3), quaternion(4), accel(3), gyro(3), leg_joints(3)
+        action: [T, 28] - arm + hand targets
+        loco_action: [T, 20] - joystick(4) + buttons(16)
+    """
+    # Local directory path containing the LeRobot format dataset
+    data_dir: str = tyro.MISSING
+    # If true, will convert arm joint dimensions to deltas (not hands or loco)
+    extra_delta_transform: bool = True
+    # Action keys that will be used to read the action sequence from the dataset
+    # Include both upper body and locomotion actions for proper alignment
+    action_sequence_keys: Sequence[str] = ("action", "loco_action")
+    
+    @override
+    def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        # Repack transform: map HDF5 keys to policy input format
+        repack_transforms = _transforms.Group(
+            inputs=[
+                _transforms.RepackTransform(
+                    {
+                        "images": {
+                            "cam_head": "ego_cam",  # G1 only has head camera
+                        },
+                        "state": "qpos",           # 28 dims
+                        "loco_state": "loco_state", # 17 dims (for rpy and gyro)
+                        "actions": "action",        # 28 dims (upper body)
+                        "loco_action": "loco_action", # 20 dims (for vx, vy, vyaw)
+                        "prompt": "task",
+                    }
+                ),
+                # Build 32-dim actions from action + loco_action
+                g1_policy.G1ActionsFromHDF5(),
+            ]
+        )
+
+        # Data transforms: G1Inputs builds 32-dim state, G1Outputs returns 32-dim actions
+        data_transforms = _transforms.Group(
+            inputs=[g1_policy.G1Inputs(model_type=model_config.model_type)],
+            outputs=[g1_policy.G1Outputs(action_dim=32)],
+        )
+
+        if self.extra_delta_transform:
+            # Apply delta transform to arm joints only (first 14), not hands or loco
+            # Mask: [True]*14 + [False]*18 = delta for arms, absolute for hands+loco
+            delta_action_mask = _transforms.make_bool_mask(14, -18)
+            data_transforms = data_transforms.push(
+                inputs=[_transforms.DeltaActions(delta_action_mask)],
+                outputs=[_transforms.AbsoluteActions(delta_action_mask)],
+            )
+
+        model_transforms = ModelTransformFactory()(model_config)
+
+        # Load norm stats from the data directory
+        norm_stats = self._load_norm_stats(epath.Path(self.data_dir), ".")
+
+        return dataclasses.replace(
+            self.base_config or DataConfig(),
+            repo_id=self.data_dir,
+            asset_id=self.data_dir,
             norm_stats=norm_stats,
             use_quantile_norm=model_config.model_type != ModelType.PI0,
             repack_transforms=repack_transforms,
@@ -1118,6 +1207,34 @@ _CONFIGS = [
         #     decay_steps=30_000,
         #     decay_lr=2.5e-7,
         # ),
+    ),
+    #
+    # G1 configs for Unitree G1 robot with Dex3 hands and locomotion
+    #
+    TrainConfig(
+        # Fine-tune pi05 on G1 data stored locally (LeRobot format)
+        # State: 32 dims = qpos(28) + rpy(3) + yaw_rate(1)
+        # Action: 32 dims = upper_body(28) + vx + vy + vyaw + padding
+        # NOTE: Override data_dir via --data-dir when training/serving
+        name="pi05_g1_auto",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_dim=32,  # 28 upper body + 3 loco + 1 padding
+            action_horizon=50,
+        ),
+        data=LeRobotG1LocalDataConfig(
+            # REQUIRED: Override with --data-dir when training or serving
+            data_dir=tyro.MISSING,
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=True,  # Delta for arm joints only
+        ),
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
+        log_interval=10,
+        num_train_steps=1_200,
+        batch_size=32,
+        save_interval=1_200,
+        keep_period=1_200,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.

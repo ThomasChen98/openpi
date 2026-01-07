@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-G1 Remote Policy Client - Dex3 Hand Mode with Hybrid Locomotion
+G1 Remote Policy Client - Direct Joint Control Mode
 
 Connects to OpenPi policy server and executes actions on G1 robot with Dex3 hands.
-Supports hybrid locomotion control where policy can override wireless controller.
+Uses DIRECT JOINT ANGLE control (no VR retargeting) for both arms and hands.
 
 Architecture:
-    - Arms: Controlled via DDS (unitree_sdk2py)
-    - Hands: Dex3 hands controlled via DDS
+    - Arms: Controlled via DDS (unitree_sdk2py) - direct joint angles
+    - Hands: Dex3 hands controlled via DDS - direct joint angles
     - Locomotion: LocoClient for Move commands (hybrid control)
     - Camera: Head camera from robot via ZMQ (image_server)
 
@@ -53,8 +53,9 @@ import struct
 import sys
 import threading
 import time
+from enum import IntEnum
 from io import BytesIO
-from multiprocessing import shared_memory, Array, Lock
+from multiprocessing import shared_memory
 from pathlib import Path
 
 import cv2
@@ -85,12 +86,21 @@ if os.path.exists(xr_teleoperate_path):
 try:
     from teleop.robot_control.robot_arm import G1_29_ArmController
     from teleop.robot_control.robot_arm_ik import G1_29_ArmIK
-    from teleop.robot_control.robot_hand_unitree import Dex3_1_Controller
     from teleop.image_server.image_client import ImageClient
 except ImportError as e:
     logger.error(f"Could not import from xr_teleoperate: {e}")
     logger.error("Make sure xr_teleoperate is cloned next to openpi/")
     sys.exit(1)
+
+# Import Unitree SDK for direct Dex3 control
+try:
+    from unitree_sdk2py.core.channel import ChannelPublisher, ChannelSubscriber, ChannelFactoryInitialize
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, HandState_
+    from unitree_sdk2py.idl.default import unitree_hg_msg_dds__HandCmd_
+    DEX3_AVAILABLE = True
+except ImportError:
+    logger.warning("Unitree SDK not available - hand control disabled")
+    DEX3_AVAILABLE = False
 
 # Try to import LocoClient for locomotion control
 try:
@@ -102,6 +112,33 @@ except ImportError:
 
 # Global for signal handler
 controller = None
+
+# Dex3 joint indices (matching robot_hand_unitree.py)
+class Dex3LeftJointIndex(IntEnum):
+    kLeftHandThumb0 = 0
+    kLeftHandThumb1 = 1
+    kLeftHandThumb2 = 2
+    kLeftHandMiddle0 = 3
+    kLeftHandMiddle1 = 4
+    kLeftHandIndex0 = 5
+    kLeftHandIndex1 = 6
+
+class Dex3RightJointIndex(IntEnum):
+    kRightHandThumb0 = 0
+    kRightHandThumb1 = 1
+    kRightHandThumb2 = 2
+    kRightHandMiddle0 = 3
+    kRightHandMiddle1 = 4
+    kRightHandIndex0 = 5
+    kRightHandIndex1 = 6
+
+DEX3_NUM_MOTORS = 7
+
+# DDS Topics
+kTopicDex3LeftCommand = "rt/dex3/left/cmd"
+kTopicDex3RightCommand = "rt/dex3/right/cmd"
+kTopicDex3LeftState = "rt/dex3/left/state"
+kTopicDex3RightState = "rt/dex3/right/state"
 
 
 def parse_wireless_remote(wireless_remote):
@@ -127,15 +164,169 @@ def signal_handler(sig, frame):
     sys.exit(0)
 
 
+class Dex3DirectController:
+    """
+    Direct joint angle controller for Dex3 hands.
+    
+    Unlike the VR-based Dex3_1_Controller, this class:
+    - Accepts joint angles directly (no retargeting)
+    - Runs in the same thread (no multiprocessing)
+    - Simpler and suitable for policy inference / data replay
+    """
+    
+    def __init__(self, dds_already_initialized: bool = False):
+        """
+        Initialize Dex3 direct controller.
+        
+        Args:
+            dds_already_initialized: If True, skip DDS initialization
+        """
+        logger.info("Initializing Dex3DirectController...")
+        
+        if not DEX3_AVAILABLE:
+            raise RuntimeError("Unitree SDK not available for Dex3 control")
+        
+        # DDS is already initialized by arm controller
+        if not dds_already_initialized:
+            ChannelFactoryInitialize(0)
+        
+        # Initialize publishers
+        self.left_cmd_publisher = ChannelPublisher(kTopicDex3LeftCommand, HandCmd_)
+        self.left_cmd_publisher.Init()
+        self.right_cmd_publisher = ChannelPublisher(kTopicDex3RightCommand, HandCmd_)
+        self.right_cmd_publisher.Init()
+        
+        # Initialize subscribers
+        self.left_state_subscriber = ChannelSubscriber(kTopicDex3LeftState, HandState_)
+        self.left_state_subscriber.Init()
+        self.right_state_subscriber = ChannelSubscriber(kTopicDex3RightState, HandState_)
+        self.right_state_subscriber.Init()
+        
+        # Initialize command messages
+        self._init_cmd_messages()
+        
+        # Current state
+        self.left_state = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
+        self.right_state = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
+        
+        # Start state subscriber thread
+        self.running = True
+        self.state_thread = threading.Thread(target=self._subscribe_state, daemon=True)
+        self.state_thread.start()
+        
+        # Wait for first state
+        for _ in range(50):  # 5 seconds
+            if np.any(self.left_state != 0) or np.any(self.right_state != 0):
+                break
+            time.sleep(0.1)
+        
+        logger.info("Dex3DirectController initialized")
+    
+    def _init_cmd_messages(self):
+        """Initialize command messages with default gains."""
+        q = 0.0
+        dq = 0.0
+        tau = 0.0
+        kp = 1.5
+        kd = 0.2
+        
+        # Left hand command
+        self.left_msg = unitree_hg_msg_dds__HandCmd_()
+        for joint_id in Dex3LeftJointIndex:
+            motor_mode = self._make_motor_mode(joint_id, status=0x01)
+            self.left_msg.motor_cmd[joint_id].mode = motor_mode
+            self.left_msg.motor_cmd[joint_id].q = q
+            self.left_msg.motor_cmd[joint_id].dq = dq
+            self.left_msg.motor_cmd[joint_id].tau = tau
+            self.left_msg.motor_cmd[joint_id].kp = kp
+            self.left_msg.motor_cmd[joint_id].kd = kd
+        
+        # Right hand command
+        self.right_msg = unitree_hg_msg_dds__HandCmd_()
+        for joint_id in Dex3RightJointIndex:
+            motor_mode = self._make_motor_mode(joint_id, status=0x01)
+            self.right_msg.motor_cmd[joint_id].mode = motor_mode
+            self.right_msg.motor_cmd[joint_id].q = q
+            self.right_msg.motor_cmd[joint_id].dq = dq
+            self.right_msg.motor_cmd[joint_id].tau = tau
+            self.right_msg.motor_cmd[joint_id].kp = kp
+            self.right_msg.motor_cmd[joint_id].kd = kd
+    
+    def _make_motor_mode(self, motor_id: int, status: int = 0x01, timeout: int = 0) -> int:
+        """Create motor mode byte."""
+        mode = 0
+        mode |= (motor_id & 0x0F)
+        mode |= (status & 0x07) << 4
+        mode |= (timeout & 0x01) << 7
+        return mode
+    
+    def _subscribe_state(self):
+        """Background thread to read hand states."""
+        while self.running:
+            try:
+                # Read left hand state
+                left_msg = self.left_state_subscriber.Read()
+                if left_msg is not None:
+                    for i, joint_id in enumerate(Dex3LeftJointIndex):
+                        self.left_state[i] = left_msg.motor_state[joint_id].q
+                
+                # Read right hand state
+                right_msg = self.right_state_subscriber.Read()
+                if right_msg is not None:
+                    for i, joint_id in enumerate(Dex3RightJointIndex):
+                        self.right_state[i] = right_msg.motor_state[joint_id].q
+            except Exception as e:
+                logger.debug(f"Error reading hand state: {e}")
+            
+            time.sleep(0.002)  # ~500Hz
+    
+    def ctrl_dual_hand(self, left_q: np.ndarray, right_q: np.ndarray):
+        """
+        Send joint angle commands to both hands.
+        
+        Args:
+            left_q: Left hand joint angles (7 DOF) in radians
+            right_q: Right hand joint angles (7 DOF) in radians
+        """
+        # Update left hand command
+        for i, joint_id in enumerate(Dex3LeftJointIndex):
+            self.left_msg.motor_cmd[joint_id].q = float(left_q[i])
+        
+        # Update right hand command
+        for i, joint_id in enumerate(Dex3RightJointIndex):
+            self.right_msg.motor_cmd[joint_id].q = float(right_q[i])
+        
+        # Publish
+        self.left_cmd_publisher.Write(self.left_msg)
+        self.right_cmd_publisher.Write(self.right_msg)
+    
+    def get_hand_state(self) -> np.ndarray:
+        """
+        Get current hand joint positions.
+        
+        Returns:
+            14-dim array: [left_hand(7), right_hand(7)]
+        """
+        return np.concatenate([self.left_state, self.right_state])
+    
+    def stop(self):
+        """Stop the controller."""
+        self.running = False
+        if self.state_thread.is_alive():
+            self.state_thread.join(timeout=1.0)
+        logger.info("Dex3DirectController stopped")
+
+
 class G1RemoteClient:
     """
-    G1 Remote Policy Client with Dex3 hands.
+    G1 Remote Policy Client with direct joint control.
     
     Supports:
     - Policy inference from OpenPi server
     - WebSocket command server for viz client
     - Head camera streaming from robot
-    - Arm and Dex3 hand control
+    - Direct joint angle control for arms and Dex3 hands
+    - Hybrid locomotion control
     """
 
     def __init__(
@@ -161,8 +352,7 @@ class G1RemoteClient:
         
         logger.info(f"Control frequency: {self.control_fps}Hz")
         
-        # IK solver and hand retargeting use relative paths (../assets/), so we need to 
-        # change to a directory where ../assets/ resolves to our local assets folder
+        # IK solver uses relative paths, so we need to change directory
         original_cwd = os.getcwd()
         script_dir = os.path.dirname(os.path.abspath(__file__))
         robot_control_dir = os.path.join(script_dir, 'robot_control')
@@ -190,14 +380,18 @@ class G1RemoteClient:
                 dds_already_initialized=False
             )
             logger.info("Arm controller ready")
-            
-            # Initialize Dex3 hand controller (uses ../assets/unitree_hand/)
-            logger.info("Initializing Dex3 hand controller...")
-            self._init_hand_controller()
-            logger.info("Hand controller ready")
         finally:
-            # Always restore original directory
+            # Restore original directory
             os.chdir(original_cwd)
+        
+        # Initialize Dex3 hand controller (direct joint control, DDS already initialized)
+        logger.info("Initializing Dex3 hand controller (direct joint mode)...")
+        if DEX3_AVAILABLE:
+            self.hand_ctrl = Dex3DirectController(dds_already_initialized=True)
+            logger.info("Hand controller ready")
+        else:
+            self.hand_ctrl = None
+            logger.warning("Hand controller not available")
         
         # Initialize locomotion client for hybrid control
         if self.motion_mode and LOCO_AVAILABLE:
@@ -230,35 +424,6 @@ class G1RemoteClient:
         # Frame counter for performance monitoring
         self.frame_count = 0
         self.session_start_time = time.time()
-        
-        # Recording state
-        self.is_recording = False
-        self.episode_writer = None
-        
-        # Track last hand command for state construction
-        self.last_hand_command = np.zeros(14, dtype=np.float32)  # 7 per hand for Dex3
-
-    def _init_hand_controller(self):
-        """Initialize Dex3 hand controller"""
-        # Create shared arrays for hand data
-        self.left_hand_array = Array('d', 26, lock=True)
-        self.right_hand_array = Array('d', 26, lock=True)
-        self.dual_hand_data_lock = Lock()
-        self.dual_hand_state_array = Array('d', 14, lock=True)  # 7 joints per hand
-        self.dual_hand_action_array = Array('d', 14, lock=True)
-        
-        # Initialize the hand controller (uses DDS, already initialized by arm controller)
-        self.hand_ctrl = Dex3_1_Controller(
-            left_hand_array_in=self.left_hand_array,
-            right_hand_array_in=self.right_hand_array,
-            dual_hand_data_lock=self.dual_hand_data_lock,
-            dual_hand_state_array_out=self.dual_hand_state_array,
-            dual_hand_action_array_out=self.dual_hand_action_array,
-            fps=self.control_fps,
-            Unit_Test=False,
-            simulation_mode=False,
-            dds_already_initialized=True  # DDS was initialized by arm controller
-        )
 
     def _init_head_camera(self):
         """Initialize client to receive head camera from robot"""
@@ -349,8 +514,10 @@ class G1RemoteClient:
         current_arm_q = self.robot.get_current_dual_arm_q()
         
         # Get current hand joint positions (14 DOF)
-        with self.dual_hand_data_lock:
-            current_hand_q = np.array(self.dual_hand_state_array[:], dtype=np.float32)
+        if self.hand_ctrl is not None:
+            current_hand_q = self.hand_ctrl.get_hand_state()
+        else:
+            current_hand_q = np.zeros(14, dtype=np.float32)
         
         # Build qpos: [arm(14), hand(14)] = 28 dims
         qpos = np.concatenate([current_arm_q, current_hand_q])
@@ -408,21 +575,17 @@ class G1RemoteClient:
         
         Action format (32 dims):
             [0:14]  left_arm    - left arm joint targets
-            [14:28] right_arm   - right arm + hand joint targets
+            [14:28] hands       - hand joint targets (left 7 + right 7)
             [28]    vx          - forward/backward velocity
             [29]    vy          - strafe left/right velocity
             [30]    vyaw        - turn (yaw angular velocity)
             [31]    padding     - ignored
         
-        Hybrid Locomotion Control:
-        - If vx/vy/vyaw are non-zero (> 0.01), use policy locomotion commands
-        - Otherwise, forward wireless controller joystick input for locomotion
-        
         Args:
-            policy_actions: (N, 32) array of actions
+            policy_actions: (N, 28), (N, 31), or (N, 32) array of actions
         """
         action_dim = policy_actions.shape[1]
-        has_loco = action_dim >= 31  # Need at least 31 dims for loco commands
+        has_loco = action_dim >= 31
         
         loco_mode = "hybrid" if has_loco else "controller"
         if self.loco_client is None:
@@ -435,8 +598,11 @@ class G1RemoteClient:
             # Extract arm joints (14 DOF)
             arm_joints = action[:14]
             
-            # Extract hand joints (14 DOF)
-            hand_joints = action[14:28]
+            # Extract hand joints (14 DOF): left (7) + right (7)
+            if action_dim >= 28:
+                hand_joints = action[14:28]
+            else:
+                hand_joints = np.zeros(14, dtype=np.float32)
             
             # Send arm command
             self.robot.ctrl_dual_arm(
@@ -444,15 +610,11 @@ class G1RemoteClient:
                 tauff_target=np.zeros(14)
             )
             
-            # Send hand command via shared arrays
-            # Dex3 expects radians directly, no scaling needed
-            left_hand = hand_joints[:7]
-            right_hand = hand_joints[7:14]
-            
-            with self.dual_hand_data_lock:
-                for j in range(7):
-                    self.dual_hand_action_array[j] = left_hand[j]
-                    self.dual_hand_action_array[7 + j] = right_hand[j]
+            # Send hand command (direct joint angles)
+            if self.hand_ctrl is not None:
+                left_hand = hand_joints[:7]
+                right_hand = hand_joints[7:14]
+                self.hand_ctrl.ctrl_dual_hand(left_hand, right_hand)
             
             # Handle locomotion control (hybrid mode)
             if self.loco_client is not None and has_loco:
@@ -505,9 +667,9 @@ class G1RemoteClient:
                 # Match teleop convention: negate values
                 # Ly controls forward/backward, Lx controls strafe, Rx controls turn
                 self.loco_client.Move(
-                    -Ly * self.loco_velocity_scale,  # Forward/back (negate so push forward = move forward)
-                    -Lx * self.loco_velocity_scale,  # Strafe (negate for intuitive control)
-                    -Rx * self.loco_velocity_scale   # Turn (negate for intuitive control)
+                    -Ly * self.loco_velocity_scale,  # Forward/back
+                    -Lx * self.loco_velocity_scale,  # Strafe
+                    -Rx * self.loco_velocity_scale   # Turn
                 )
         except Exception as e:
             logger.debug(f"Failed to forward controller locomotion: {e}")
@@ -565,18 +727,18 @@ class G1RemoteClient:
                                 await asyncio.sleep(1.0 / 250)
                             
                             # Set hand target if provided (indices 14-28)
-                            if len(target) >= 28:
+                            if len(target) >= 28 and self.hand_ctrl is not None:
                                 hand_target = target[14:28]
-                                with self.dual_hand_data_lock:
-                                    for j in range(14):
-                                        self.dual_hand_action_array[j] = hand_target[j]
+                                self.hand_ctrl.ctrl_dual_hand(hand_target[:7], hand_target[7:])
                             
                             response = {"status": "success", "message": "Reset complete"}
                         
                         elif cmd == "get_state":
                             arm_state = self.robot.get_current_dual_arm_q()
-                            with self.dual_hand_data_lock:
-                                hand_state = np.array(self.dual_hand_state_array[:], dtype=np.float32)
+                            if self.hand_ctrl is not None:
+                                hand_state = self.hand_ctrl.get_hand_state()
+                            else:
+                                hand_state = np.zeros(14, dtype=np.float32)
                             full_state = np.concatenate([arm_state, hand_state])
                             response = {
                                 "status": "success",
@@ -656,7 +818,7 @@ class G1RemoteClient:
                     logger.error(f"Error cleaning up shared memory: {e}")
         
         # Stop hand controller
-        if hasattr(self, 'hand_ctrl'):
+        if self.hand_ctrl is not None:
             try:
                 self.hand_ctrl.stop()
             except Exception as e:

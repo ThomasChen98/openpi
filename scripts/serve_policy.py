@@ -100,8 +100,9 @@ def create_policy(args: Args) -> _policy.Policy:
             config = _config.get_config(args.policy.config)
             
             # If data_dir or action_dim is provided, override in the config
+            # Support both H1 and G1 local data configs
             if args.policy.data_dir is not None or args.policy.action_dim is not None:
-                if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+                if isinstance(config.data, (_config.LeRobotH1LocalDataConfig, _config.LeRobotG1LocalDataConfig)):
                     data_updates = {}
                     if args.policy.data_dir is not None:
                         data_updates['data_dir'] = args.policy.data_dir
