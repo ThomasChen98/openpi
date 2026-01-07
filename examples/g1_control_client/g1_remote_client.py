@@ -153,26 +153,20 @@ class G1RemoteClient:
         
         logger.info(f"Control frequency: {self.control_fps}Hz")
         
-        # xr_teleoperate code uses relative paths (../assets/), so we need to change to teleop dir
-        # for all initialization that uses those paths
+        # IK solver and hand retargeting use relative paths (../assets/), so we need to 
+        # change to a directory where ../assets/ resolves to our local assets folder
         original_cwd = os.getcwd()
-        teleop_dir = os.path.realpath(os.path.join(xr_teleoperate_path, 'teleop'))
-        urdf_check_path = os.path.join(teleop_dir, '..', 'assets', 'g1', 'g1_body29_hand14.urdf')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        robot_control_dir = os.path.join(script_dir, 'robot_control')
+        urdf_check_path = os.path.join(script_dir, 'assets', 'g1', 'g1_body29_hand14.urdf')
         
-        logger.info(f"Setting up paths for xr_teleoperate...")
-        logger.info(f"  Original dir: {original_cwd}")
-        logger.info(f"  Teleop dir: {teleop_dir}")
-        logger.info(f"  URDF path: {os.path.realpath(urdf_check_path)}")
-        
-        if not os.path.exists(teleop_dir):
-            raise RuntimeError(f"Teleop directory not found: {teleop_dir}")
         if not os.path.exists(urdf_check_path):
-            raise RuntimeError(f"URDF not found at {os.path.realpath(urdf_check_path)}. "
-                             f"Make sure xr_teleoperate is properly set up at {xr_teleoperate_path}")
+            raise RuntimeError(f"URDF not found at {urdf_check_path}. "
+                             f"Make sure assets/g1/ folder exists in g1_control_client/")
         
-        # Change to teleop directory for all initializations that use relative paths
-        os.chdir(teleop_dir)
-        logger.info(f"  Changed to: {os.getcwd()}")
+        # Change to robot_control dir so ../assets/ resolves correctly
+        os.chdir(robot_control_dir)
+        logger.info(f"Changed to {os.getcwd()} for asset path resolution")
         
         try:
             # Initialize IK solver (uses ../assets/g1/)
@@ -196,7 +190,6 @@ class G1RemoteClient:
         finally:
             # Always restore original directory
             os.chdir(original_cwd)
-            logger.info(f"  Restored dir: {os.getcwd()}")
         
         # Initialize locomotion client for hybrid control
         if self.motion_mode and LOCO_AVAILABLE:
