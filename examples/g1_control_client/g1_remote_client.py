@@ -11,12 +11,20 @@ Architecture:
     - Locomotion: LocoClient for Move commands (hybrid control)
     - Camera: Head camera from robot via ZMQ (image_server)
 
-Action Space:
-    - 28 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7)]
-    - 31 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7), Lx, Ly, Rx]
-    
-Hybrid Locomotion:
-    - If policy outputs 31 dims and Lx/Ly/Rx are non-zero, use policy locomotion
+State Space (32 dims):
+    [0:28]  qpos        - arm (14) + hand (14) joint positions
+    [28:31] rpy         - roll, pitch, yaw from IMU (radians)
+    [31]    yaw_rate    - yaw angular velocity from gyroscope
+
+Action Space (32 dims):
+    [0:28]  upper_body  - arm (14) + hand (14) joint targets
+    [28]    vx          - forward/backward velocity command
+    [29]    vy          - strafe left/right velocity command
+    [30]    vyaw        - turn (yaw angular velocity) command
+    [31]    padding     - zero (ignored)
+
+Hybrid Locomotion Control:
+    - If policy outputs non-zero vx/vy/vyaw (threshold 0.01), use policy commands
     - Otherwise, forward wireless controller joystick input for locomotion
     - Velocity scaling: 0.3 (same as teleop)
 
@@ -25,7 +33,7 @@ Usage:
     python3 image_server.py --camera-id 0
 
     # On GPU server: Start OpenPi policy server
-    uv run scripts/serve_policy.py policy:checkpoint --policy.config=g1_config
+    uv run scripts/serve_policy.py policy:checkpoint --policy.config=pi05_g1_auto
 
     # On laptop: Run this client
     python g1_remote_client.py --server-host <gpu-ip> --server-port 8000
@@ -325,7 +333,18 @@ class G1RemoteClient:
             return False
 
     def get_observation(self) -> dict:
-        """Construct observation for policy inference"""
+        """
+        Construct 32-dim observation for policy inference.
+        
+        State format (32 dims):
+            [0:14]  left_arm    - left arm joint positions
+            [14:28] right_arm   - right arm + hand joint positions  
+            [28:31] rpy         - roll, pitch, yaw from IMU
+            [31]    yaw_rate    - yaw angular velocity from gyroscope
+        
+        Returns:
+            dict with "image", "state" (32 dims), and "prompt"
+        """
         # Get current arm joint positions (14 DOF)
         current_arm_q = self.robot.get_current_dual_arm_q()
         
@@ -333,8 +352,28 @@ class G1RemoteClient:
         with self.dual_hand_data_lock:
             current_hand_q = np.array(self.dual_hand_state_array[:], dtype=np.float32)
         
-        # Build 28-dim state: [arm_qpos(14), hand_qpos(14)]
-        state_28 = np.concatenate([current_arm_q, current_hand_q])
+        # Build qpos: [arm(14), hand(14)] = 28 dims
+        qpos = np.concatenate([current_arm_q, current_hand_q])
+        
+        # Get IMU data for state
+        rpy = np.zeros(3, dtype=np.float32)
+        yaw_rate = np.zeros(1, dtype=np.float32)
+        
+        try:
+            lowstate = self.robot.get_lowstate_raw()
+            if lowstate is not None:
+                imu = lowstate.imu_state
+                rpy = np.array([
+                    imu.rpy[0],  # roll
+                    imu.rpy[1],  # pitch
+                    imu.rpy[2],  # yaw
+                ], dtype=np.float32)
+                yaw_rate = np.array([imu.gyroscope[2]], dtype=np.float32)  # wz
+        except Exception as e:
+            logger.debug(f"Could not get IMU data: {e}")
+        
+        # Build 32-dim state: [qpos(28), rpy(3), yaw_rate(1)]
+        state = np.concatenate([qpos, rpy, yaw_rate])
         
         # Create dummy image (224x224 RGB, gray)
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -353,56 +392,39 @@ class G1RemoteClient:
         else:
             base_image = dummy_image
         
-        # Get locomotion state from lowstate (for policy context)
-        loco_state = None
-        try:
-            lowstate = self.robot.get_lowstate_raw()
-            if lowstate is not None:
-                imu = lowstate.imu_state
-                # 4-dim loco_state: [mode_machine, roll, pitch, yaw]
-                loco_state = np.array([
-                    float(lowstate.mode_machine),
-                    imu.rpy[0],  # roll
-                    imu.rpy[1],  # pitch
-                    imu.rpy[2],  # yaw
-                ], dtype=np.float32)
-        except Exception as e:
-            logger.debug(f"Could not get loco_state: {e}")
-        
         self.frame_count += 1
         
-        observation = {
+        return {
             "image": {
                 "cam_head": base_image,
             },
-            "state": state_28,
+            "state": state,  # 32 dims
             "prompt": self.prompt,
         }
-        
-        # Add loco_state if available
-        if loco_state is not None:
-            observation["loco_state"] = loco_state
-        
-        return observation
 
     def execute_action_chunk(self, policy_actions: np.ndarray):
         """
         Execute a chunk of policy actions on the robot.
         
-        Supports hybrid locomotion control:
-        - If policy outputs 31 dims and loco commands (Lx, Ly, Rx) are non-zero,
-          use policy locomotion commands
-        - Otherwise, forward wireless controller input for locomotion
+        Action format (32 dims):
+            [0:14]  left_arm    - left arm joint targets
+            [14:28] right_arm   - right arm + hand joint targets
+            [28]    vx          - forward/backward velocity
+            [29]    vy          - strafe left/right velocity
+            [30]    vyaw        - turn (yaw angular velocity)
+            [31]    padding     - ignored
+        
+        Hybrid Locomotion Control:
+        - If vx/vy/vyaw are non-zero (> 0.01), use policy locomotion commands
+        - Otherwise, forward wireless controller joystick input for locomotion
         
         Args:
-            policy_actions: (N, 28) or (N, 31) array of joint actions
-                28 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7)]
-                31 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7), Lx, Ly, Rx]
+            policy_actions: (N, 32) array of actions
         """
         action_dim = policy_actions.shape[1]
-        has_loco = action_dim >= 31
+        has_loco = action_dim >= 31  # Need at least 31 dims for loco commands
         
-        loco_mode = "policy" if has_loco else "controller"
+        loco_mode = "hybrid" if has_loco else "controller"
         if self.loco_client is None:
             loco_mode = "disabled"
         
@@ -410,8 +432,10 @@ class G1RemoteClient:
         
         # Execute at control_fps
         for i, action in enumerate(policy_actions):
-            # Extract arm and hand joints
+            # Extract arm joints (14 DOF)
             arm_joints = action[:14]
+            
+            # Extract hand joints (14 DOF)
             hand_joints = action[14:28]
             
             # Send arm command
@@ -430,37 +454,36 @@ class G1RemoteClient:
                     self.dual_hand_action_array[j] = left_hand[j]
                     self.dual_hand_action_array[7 + j] = right_hand[j]
             
-            # Handle locomotion control
-            if self.loco_client is not None:
-                if has_loco:
-                    # Policy provides loco commands
-                    policy_lx = action[28]  # Forward/backward
-                    policy_ly = action[29]  # Strafe left/right
-                    policy_rx = action[30]  # Turn (yaw)
-                    
-                    # Check if policy wants to override controller
-                    # Threshold of 0.01 to filter noise
-                    policy_loco_active = (
-                        abs(policy_lx) > 0.01 or 
-                        abs(policy_ly) > 0.01 or 
-                        abs(policy_rx) > 0.01
+            # Handle locomotion control (hybrid mode)
+            if self.loco_client is not None and has_loco:
+                # Extract locomotion commands
+                vx = action[28]    # Forward/backward velocity
+                vy = action[29]    # Strafe left/right velocity
+                vyaw = action[30]  # Turn (yaw angular velocity)
+                
+                # Check if policy wants to control locomotion
+                # Threshold of 0.01 to filter noise
+                policy_loco_active = (
+                    abs(vx) > 0.01 or 
+                    abs(vy) > 0.01 or 
+                    abs(vyaw) > 0.01
+                )
+                
+                if policy_loco_active:
+                    # Use policy locomotion commands
+                    self.loco_client.Move(
+                        vx * self.loco_velocity_scale,
+                        vy * self.loco_velocity_scale,
+                        vyaw * self.loco_velocity_scale
                     )
-                    
-                    if policy_loco_active:
-                        # Use policy locomotion commands
-                        self.loco_client.Move(
-                            policy_lx * self.loco_velocity_scale,
-                            policy_ly * self.loco_velocity_scale,
-                            policy_rx * self.loco_velocity_scale
-                        )
-                        if i % 30 == 0:
-                            logger.debug(f"  Loco (policy): vx={policy_lx:.2f}, vy={policy_ly:.2f}, vyaw={policy_rx:.2f}")
-                    else:
-                        # Fall back to wireless controller
-                        self._forward_controller_locomotion()
+                    if i % 30 == 0:
+                        logger.debug(f"  Loco (policy): vx={vx:.2f}, vy={vy:.2f}, vyaw={vyaw:.2f}")
                 else:
-                    # No loco in action space, always use wireless controller
+                    # Fall back to wireless controller
                     self._forward_controller_locomotion()
+            elif self.loco_client is not None:
+                # No loco in action space, always use wireless controller
+                self._forward_controller_locomotion()
             
             # Log every 10th action
             if i % 10 == 0:
