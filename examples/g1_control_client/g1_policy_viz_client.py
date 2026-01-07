@@ -578,6 +578,41 @@ def main(args: Args) -> None:
                 hint="Stop and save episode"
             )
             
+            server.gui.add_markdown("### 🚶 Locomotion Test")
+            
+            loco_test_enabled = server.gui.add_checkbox(
+                "🔄 Enable Vyaw Test",
+                initial_value=False,
+                hint="When enabled, inject vyaw command into executed actions"
+            )
+            
+            loco_vyaw_slider = server.gui.add_slider(
+                "Vyaw Value",
+                min=-1.0,
+                max=1.0,
+                step=0.1,
+                initial_value=0.5,
+                hint="Turn velocity to inject (-1=right, +1=left)"
+            )
+            
+            loco_test_status = server.gui.add_text(
+                "Loco Test",
+                initial_value="Disabled",
+                disabled=True,
+            )
+            
+            @loco_test_enabled.on_update
+            def _(_):
+                if loco_test_enabled.value:
+                    loco_test_status.value = f"✓ Active: vyaw={loco_vyaw_slider.value:.1f}"
+                else:
+                    loco_test_status.value = "Disabled"
+            
+            @loco_vyaw_slider.on_update
+            def _(_):
+                if loco_test_enabled.value:
+                    loco_test_status.value = f"✓ Active: vyaw={loco_vyaw_slider.value:.1f}"
+            
             server.gui.add_markdown("### ⚠️ Safety")
             estop_button = server.gui.add_button(
                 "🛑 EMERGENCY STOP",
@@ -785,10 +820,24 @@ def main(args: Args) -> None:
                         infer_button.disabled = True
                         
                         try:
+                            # Prepare actions - inject locomotion test if enabled
+                            actions_to_send = predicted_actions.copy()
+                            if loco_test_enabled.value:
+                                # Ensure actions have locomotion dimensions (32 dim)
+                                if actions_to_send.shape[1] < 32:
+                                    # Pad to 32 dims
+                                    padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                                    padded[:, :actions_to_send.shape[1]] = actions_to_send
+                                    actions_to_send = padded
+                                # Inject vyaw at index 30
+                                vyaw_value = loco_vyaw_slider.value
+                                actions_to_send[:, 30] = vyaw_value
+                                robot_status.value = f"🚀 Executing with vyaw={vyaw_value:.1f}..."
+                            
                             result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "execute", "actions": predicted_actions.tolist()}
+                                {"command": "execute", "actions": actions_to_send.tolist()}
                             )
                             
                             if result["status"] == "success":
@@ -923,15 +972,24 @@ def main(args: Args) -> None:
                     show_gt_cb.value = False
                     update_visualization()
                     
-                    # Execute on robot
+                    # Execute on robot - inject locomotion test if enabled
+                    actions_to_send = predicted_actions.copy()
+                    if loco_test_enabled.value:
+                        if actions_to_send.shape[1] < 32:
+                            padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                            padded[:, :actions_to_send.shape[1]] = actions_to_send
+                            actions_to_send = padded
+                        actions_to_send[:, 30] = loco_vyaw_slider.value
+                    
                     result = await send_robot_command(
                         args.robot_host,
                         args.robot_port,
-                        {"command": "execute", "actions": predicted_actions.tolist()}
+                        {"command": "execute", "actions": actions_to_send.tolist()}
                     )
                     
+                    loco_info = f" (vyaw={loco_vyaw_slider.value:.1f})" if loco_test_enabled.value else ""
                     if result["status"] == "success":
-                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms inference)"
+                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms){loco_info}"
                     else:
                         robot_status.value = f"❌ Error: {result.get('message')}"
                     
@@ -1038,16 +1096,25 @@ def main(args: Args) -> None:
                             show_gt_cb.value = False
                             update_visualization()
                             
-                            # Execute on robot (this now handles recording internally)
-                            robot_status.value = f"🚀 Continuous #{loop_count}: Executing actions..."
+                            # Execute on robot - inject locomotion test if enabled
+                            actions_to_send = predicted_actions.copy()
+                            if loco_test_enabled.value:
+                                if actions_to_send.shape[1] < 32:
+                                    padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                                    padded[:, :actions_to_send.shape[1]] = actions_to_send
+                                    actions_to_send = padded
+                                actions_to_send[:, 30] = loco_vyaw_slider.value
+                            
+                            loco_info = f" vyaw={loco_vyaw_slider.value:.1f}" if loco_test_enabled.value else ""
+                            robot_status.value = f"🚀 Continuous #{loop_count}: Executing{loco_info}..."
                             exec_result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "execute", "actions": predicted_actions.tolist()}
+                                {"command": "execute", "actions": actions_to_send.tolist()}
                             )
                             
                             if exec_result["status"] == "success":
-                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms)"
+                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms){loco_info}"
                             else:
                                 robot_status.value = f"❌ Error in loop #{loop_count}: {exec_result.get('message')}"
                                 is_continuous_running = False
