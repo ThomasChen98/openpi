@@ -39,7 +39,7 @@ Usage:
     python g1_remote_client.py --server-host <gpu-ip> --server-port 8000
 
     # Or in listen mode for viz client control:
-    python g1_remote_client.py --listen-mode --listen-port 5007
+    python g1_remote_client.py --listen-mode --listen-port 5008
 """
 
 import argparse
@@ -674,7 +674,7 @@ class G1RemoteClient:
         except Exception as e:
             logger.debug(f"Failed to forward controller locomotion: {e}")
 
-    async def command_server(self, port: int = 5007):
+    async def command_server(self, port: int = 5008):
         """
         WebSocket server that listens for commands from viz client.
         
@@ -848,7 +848,7 @@ def main():
                        help="Task prompt for the policy")
     parser.add_argument("--listen-mode", action="store_true",
                        help="Listen for commands from viz client")
-    parser.add_argument("--listen-port", type=int, default=5007,
+    parser.add_argument("--listen-port", type=int, default=5008,
                        help="Port to listen on in listen mode")
     parser.add_argument("--control-fps", type=int, default=30,
                        help="Control loop frequency in Hz")

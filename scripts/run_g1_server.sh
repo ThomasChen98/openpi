@@ -38,7 +38,7 @@ PORT="${PORT:-8001}"
 if [[ "$POLICY_CONFIG" == "pi05_g1_auto" ]]; then
     # G1 specific paths
     POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/cabinet_bottle/1199}"
-    DATA_DIR="${DATA_DIR:-/mnt/ssd1/yuxin/g1_data/cabinetbottle}"
+    DATA_DIR="${DATA_DIR:-${OPENPI_DIR}/examples/g1_control_client/g1_data_lerobot/cabinet_bottle}"
 else
     # H1 paths (for testing)
     POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_towel_reward_2/epoch_0/1499}"

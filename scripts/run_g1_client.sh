@@ -41,8 +41,13 @@ set -e
 
 export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 
+# Script directory (define first so other paths can use OPENPI_DIR)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OPENPI_DIR="$(dirname "$SCRIPT_DIR")"
+G1_CLIENT_DIR="${OPENPI_DIR}/examples/g1_control_client"
+
 # Default values
-DATA_PATH="${DATA_PATH:-/mnt/ssd1/yuxin/g1_data/cabinetbottle/episode_2.hdf5}"
+DATA_PATH="${DATA_PATH:-${G1_CLIENT_DIR}/g1_data_raw/cabinet_bottle/episode_2.hdf5}"
 HOST="${HOST:-localhost}"
 PORT="${PORT:-8001}"
 PROMPT="${PROMPT:-pick up the bottle, put it in the cabinet, and then push to close the cabinet drawer}"
@@ -51,11 +56,6 @@ ROBOT_IP="${ROBOT_IP:-192.168.123.164}"
 ROBOT_HOST="${ROBOT_HOST:-localhost}"
 ROBOT_PORT="${ROBOT_PORT:-5008}"
 VISER_PORT="${VISER_PORT:-8081}"
-
-# Script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OPENPI_DIR="$(dirname "$SCRIPT_DIR")"
-G1_CLIENT_DIR="${OPENPI_DIR}/examples/g1_control_client"
 
 # Color codes
 GREEN='\033[0;32m'

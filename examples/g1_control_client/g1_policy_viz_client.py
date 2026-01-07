@@ -109,7 +109,7 @@ class Args:
     robot_host: str = "localhost"
     """Robot client host (via SSH reverse tunnel)"""
     
-    robot_port: int = 5007
+    robot_port: int = 5008
     """Robot client port"""
 
 
@@ -471,6 +471,11 @@ def main(args: Args) -> None:
             loco_displays['joysticks'] = server.gui.add_text(
                 "Joysticks",
                 initial_value="Lx:-- Ly:-- Rx:-- Ry:--",
+                disabled=True,
+            )
+            loco_displays['predicted_loco'] = server.gui.add_text(
+                "Policy Loco Cmd",
+                initial_value="vx:-- vy:-- vyaw:--",
                 disabled=True,
             )
             loco_displays['buttons'] = server.gui.add_text(
@@ -1189,6 +1194,7 @@ def main(args: Args) -> None:
         nonlocal current_frame
         
         # Get joint positions based on mode
+        predicted_loco_cmd = None  # vx, vy, vyaw from policy
         if show_ground_truth:
             if use_actions_cb.value:
                 joints = data['actions'][current_frame]
@@ -1196,7 +1202,13 @@ def main(args: Args) -> None:
                 joints = data['qpos'][current_frame]
         elif predicted_actions is not None and show_predicted_cb.value:
             action_idx = int(action_index_slider.value)
-            joints = predicted_actions[action_idx]
+            full_action = predicted_actions[action_idx]
+            # Policy outputs 32 dims: [28 DOF joints, vx, vy, vyaw, padding]
+            if len(full_action) >= 32:
+                joints = full_action[:28]  # Extract only joint positions for URDF
+                predicted_loco_cmd = full_action[28:31]  # vx, vy, vyaw
+            else:
+                joints = full_action
         else:
             return
         
@@ -1208,7 +1220,7 @@ def main(args: Args) -> None:
         if data['loco_action'] is not None:
             loco_action = data['loco_action'][current_frame]
         
-        # Map joints to URDF order
+        # Map joints to URDF order (expects 28 DOF)
         urdf_joints = extract_joints_for_urdf_g1_28dof(joints, loco_state)
         
         # Update robot configuration
@@ -1266,6 +1278,16 @@ def main(args: Args) -> None:
             
             active = action_info.get('active_buttons', [])
             loco_displays['buttons'].value = ', '.join(active) if active else 'None'
+        
+        # Display predicted locomotion commands from policy
+        if predicted_loco_cmd is not None:
+            loco_displays['predicted_loco'].value = (
+                f"vx:{predicted_loco_cmd[0]:.3f} "
+                f"vy:{predicted_loco_cmd[1]:.3f} "
+                f"vyaw:{predicted_loco_cmd[2]:.3f}"
+            )
+        else:
+            loco_displays['predicted_loco'].value = "vx:-- vy:-- vyaw:--"
         
         # Update camera images
         update_camera_displays()
