@@ -98,6 +98,11 @@ def main(config_name: str, max_frames: int | None = None, data_dir: str | None =
                 config,
                 data=dataclasses.replace(config.data, data_dir=data_dir)
             )
+        elif isinstance(config.data, _config.LeRobotG1LocalDataConfig):
+            config = dataclasses.replace(
+                config,
+                data=dataclasses.replace(config.data, data_dir=data_dir)
+            )
     
     data_config = config.data.create(config.assets_dirs, config.model)
 

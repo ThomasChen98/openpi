@@ -73,7 +73,7 @@ BASE_CHECKPOINT_DIR="${BASE_CHECKPOINT_DIR:-checkpoints}"
 
 # Set GPU
 export CUDA_VISIBLE_DEVICES=$GPU_ID
-export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
+export XLA_PYTHON_CLIENT_MEM_FRACTION=0.80
 
 # Construct paths based on whether epoch is specified
 if [ -n "$EPOCH_NUM" ]; then
@@ -159,7 +159,10 @@ else
 fi
 
 # Build training command
-TRAIN_CMD="uv run scripts/train_auto.py \
+# Use .venv/bin/python directly to ensure correct dependencies (uv run resets packages)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+TRAIN_CMD="$PROJECT_ROOT/.venv/bin/python scripts/train_auto.py \
     --config-name \"$CONFIG_NAME\" \
     --exp-name \"$EXP_NAME\" \
     --data-dir \"$LEROBOT_DATA_DIR\""

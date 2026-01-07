@@ -221,7 +221,7 @@ def main(
         overwrite: Whether to overwrite existing checkpoints
         resume: Whether to resume from the latest checkpoint
         wandb_enabled: Whether to enable Weights & Biases logging
-        data_dir: Optional path to override the data_dir in the config (for LeRobotH1LocalDataConfig)
+        data_dir: Optional path to override the data_dir in the config (for LeRobotH1LocalDataConfig or LeRobotG1LocalDataConfig)
         max_epochs: Optional number of training steps (epochs) to override num_train_steps
         save_interval: Optional save interval (in steps/epochs) to override save_interval
         keep_period: Optional keep period (in steps/epochs) to override keep_period
@@ -234,7 +234,7 @@ def main(
     
     # If data_dir is provided, override in the config
     if data_dir is not None:
-        if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+        if isinstance(config.data, _config.LeRobotH1LocalDataConfig) or isinstance(config.data, _config.LeRobotG1LocalDataConfig):
             data_updates = {}
             if data_dir is not None:
                 data_updates['data_dir'] = data_dir

@@ -147,8 +147,10 @@ fi
 echo "Found $HDF5_COUNT HDF5 file(s)"
 
 # Build the convert command with optional labeling mode
-# Note: Use python directly instead of 'uv run' to ensure correct dependencies for reward labeling
-CONVERT_CMD="python examples/h1_control_client/convert_h1_data_to_lerobot.py \
+# Use .venv/bin/python directly to ensure correct dependencies (uv run resets packages)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+CONVERT_CMD="$PROJECT_ROOT/.venv/bin/python examples/h1_control_client/convert_h1_data_to_lerobot.py \
     --data_dir \"$DATA_DIR\" \
     --task_description \"$TASK_DESCRIPTION\" \
 --num_repeats $NUM_REPEATS \

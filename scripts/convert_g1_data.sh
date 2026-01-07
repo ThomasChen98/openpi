@@ -1,0 +1,185 @@
+#!/bin/bash
+# Convert G1 HDF5 data to LeRobot format with optional advantage labeling
+#
+# Usage:
+#   ./scripts/convert_g1_data.sh                                      # Use defaults
+#   ./scripts/convert_g1_data.sh --task-name my_task --epoch 0        # With epoch
+#   ./scripts/convert_g1_data.sh --labeling-mode human_labeling       # With advantage labeling
+#
+# Environment variables can also be used:
+#   TASK_NAME="my_task" EPOCH_NUM=0 ./scripts/convert_g1_data.sh
+
+set -e
+
+# Parse command line arguments
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --task-name)
+            TASK_NAME="$2"
+            shift 2
+            ;;
+        --task-description)
+            TASK_DESCRIPTION="$2"
+            shift 2
+            ;;
+        --data-dir)
+            DATA_DIR="$2"
+            shift 2
+            ;;
+        --epoch)
+            EPOCH_NUM="$2"
+            shift 2
+            ;;
+        --labeling-mode)
+            LABELING_MODE="$2"
+            shift 2
+            ;;
+        --num-repeats)
+            NUM_REPEATS="$2"
+            shift 2
+            ;;
+        --config-name)
+            CONFIG_NAME="$2"
+            shift 2
+            ;;
+        --reward-task-instruction)
+            REWARD_TASK_INSTRUCTION="$2"
+            shift 2
+            ;;
+        --reward-max-frames)
+            REWARD_MAX_FRAMES="$2"
+            shift 2
+            ;;
+        --reward-image-rotation)
+            REWARD_IMAGE_ROTATION="$2"
+            shift 2
+            ;;
+        --reward-advantage-threshold)
+            REWARD_ADVANTAGE_THRESHOLD="$2"
+            shift 2
+            ;;
+        --filter-good-only)
+            FILTER_GOOD_ONLY="true"
+            shift 1
+            ;;
+        *)
+            echo "Unknown option: $1"
+            exit 1
+            ;;
+    esac
+done
+
+# Default values (can be overridden by environment variables or command line)
+TASK_NAME="${TASK_NAME:-cabinet_bottle}"
+TASK_DESCRIPTION="${TASK_DESCRIPTION:-pick up the bottle}"
+EPOCH_NUM="${EPOCH_NUM:-}"  # Empty means no epoch suffix
+LABELING_MODE="${LABELING_MODE:-none}"  # Options: none, human_labeling, reward_labeling
+NUM_REPEATS="${NUM_REPEATS:-1}"
+CONFIG_NAME="${CONFIG_NAME:-pi05_g1_auto}"
+
+# Reward labeling parameters (only used when LABELING_MODE=reward_labeling)
+REWARD_TASK_INSTRUCTION="${REWARD_TASK_INSTRUCTION:-}"
+REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
+REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
+REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
+
+# Filter good only (for epoch 0, filter out bad rollouts)
+FILTER_GOOD_ONLY="${FILTER_GOOD_ONLY:-false}"
+
+# Base directories
+BASE_DATA_DIR="${BASE_DATA_DIR:-examples/g1_control_client/g1_data_processed}"
+BASE_LEROBOT_DIR="${BASE_LEROBOT_DIR:-examples/g1_control_client/g1_data_lerobot}"
+
+# Construct paths based on whether epoch is specified
+if [ -n "$EPOCH_NUM" ]; then
+    # Epoch-based directory structure
+    DATA_DIR="${DATA_DIR:-$BASE_DATA_DIR/$TASK_NAME/epoch_$EPOCH_NUM/raw}"
+    SAVE_DIR="${TASK_NAME}/epoch_${EPOCH_NUM}"
+    LEROBOT_DATA_DIR="$(pwd)/$BASE_LEROBOT_DIR/$SAVE_DIR"
+else
+    # Flat directory structure (backwards compatible)
+    DATA_DIR="${DATA_DIR:-$BASE_DATA_DIR/$TASK_NAME}"
+    SAVE_DIR="$TASK_NAME"
+    LEROBOT_DATA_DIR="$(pwd)/$BASE_LEROBOT_DIR/$SAVE_DIR"
+fi
+
+echo "========================================================"
+echo "  > Converting G1 data to LeRobot format..."
+echo "========================================================"
+echo "Task name: $TASK_NAME"
+echo "Task description: $TASK_DESCRIPTION"
+echo "Data directory: $DATA_DIR"
+echo "Save directory: $SAVE_DIR"
+echo "LeRobot data directory: $LEROBOT_DATA_DIR"
+echo "Number of repeats: $NUM_REPEATS"
+echo "Labeling mode: $LABELING_MODE"
+echo "Config name: $CONFIG_NAME"
+echo "Filter good only: $FILTER_GOOD_ONLY"
+if [ -n "$EPOCH_NUM" ]; then
+    echo "Epoch: $EPOCH_NUM"
+fi
+echo "========================================================"
+
+# Check if data directory exists
+if [ ! -d "$DATA_DIR" ]; then
+    echo "ERROR: Data directory does not exist: $DATA_DIR"
+    exit 1
+fi
+
+# Check if there are HDF5 files in the directory
+HDF5_COUNT=$(find "$DATA_DIR" -maxdepth 1 -name "*.hdf5" | wc -l)
+if [ "$HDF5_COUNT" -eq 0 ]; then
+    echo "ERROR: No HDF5 files found in: $DATA_DIR"
+    exit 1
+fi
+echo "Found $HDF5_COUNT HDF5 file(s)"
+
+# Build the convert command with optional labeling mode
+# Note: Use python directly instead of 'uv run' to ensure correct dependencies for reward labeling
+CONVERT_CMD="python examples/g1_control_client/convert_g1_data_to_lerobot.py \
+    --data_dir \"$DATA_DIR\" \
+    --task_description \"$TASK_DESCRIPTION\" \
+    --num_repeats $NUM_REPEATS \
+    --save_dir \"$SAVE_DIR\""
+
+if [ "$LABELING_MODE" != "none" ]; then
+    CONVERT_CMD="$CONVERT_CMD --labeling_mode $LABELING_MODE"
+    
+    # Add reward labeling parameters if in reward_labeling mode
+    if [ "$LABELING_MODE" = "reward_labeling" ]; then
+        if [ -n "$REWARD_TASK_INSTRUCTION" ]; then
+            CONVERT_CMD="$CONVERT_CMD --reward_task_instruction \"$REWARD_TASK_INSTRUCTION\""
+        fi
+        CONVERT_CMD="$CONVERT_CMD --reward_max_frames $REWARD_MAX_FRAMES"
+        CONVERT_CMD="$CONVERT_CMD --reward_image_rotation $REWARD_IMAGE_ROTATION"
+        CONVERT_CMD="$CONVERT_CMD --reward_advantage_threshold $REWARD_ADVANTAGE_THRESHOLD"
+    fi
+fi
+
+# Add filter good only flag if set
+if [ "$FILTER_GOOD_ONLY" = "true" ]; then
+    CONVERT_CMD="$CONVERT_CMD --filter_good_only"
+fi
+
+echo ""
+echo "Running conversion..."
+eval $CONVERT_CMD
+
+echo ""
+echo "========================================================"
+echo "  > Computing normalization statistics..."
+echo "========================================================"
+
+python scripts/compute_norm_stats.py \
+    --config-name "$CONFIG_NAME" \
+    --data-dir "$LEROBOT_DATA_DIR"
+
+echo ""
+echo "========================================================"
+echo "  > Done!"
+echo "========================================================"
+echo "Output:"
+echo "  LeRobot data: $LEROBOT_DATA_DIR"
+echo "  Norm stats: $LEROBOT_DATA_DIR/norm_stats.json"
+echo "========================================================"
+

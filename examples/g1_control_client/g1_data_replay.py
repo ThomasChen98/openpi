@@ -47,7 +47,7 @@ EGO_ROLL = 0.0
 
 
 def main(
-    hdf5_path: str = "/mnt/ssd1/yuxin/g1_data/cabinetbottle/episode_2.hdf5",
+    hdf5_path: str = "./g1_data_raw/cabinet_bottle/episode_9.hdf5",
     urdf_path: str | None = None,
     fps: float | None = None,
     start_frame: int = 0,

@@ -101,7 +101,9 @@ class G1Inputs(transforms.DataTransformFn):
     """
 
     model_type: _model.ModelType
-    EXPECTED_CAMERAS: ClassVar[tuple[str, ...]] = ("cam_head",)
+    # Match H1 format: accept wrist cameras (will be zero-padded in dataset)
+    # G1Inputs ignores them and creates zeros anyway
+    EXPECTED_CAMERAS: ClassVar[tuple[str, ...]] = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
     def __call__(self, data: dict) -> dict:
         in_images = data["images"]

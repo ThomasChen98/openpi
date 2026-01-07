@@ -31,13 +31,13 @@ OPENPI_DIR="$(dirname "$SCRIPT_DIR")"
 # Default values
 # Note: Using H1 checkpoint for testing until G1 checkpoints are trained
 # Set POLICY_CONFIG=pi05_g1_auto to use G1-specific config
-POLICY_CONFIG="${POLICY_CONFIG:-pi05_h1_auto}"
-PORT="${PORT:-8000}"
+POLICY_CONFIG="${POLICY_CONFIG:-pi05_g1_auto}"
+PORT="${PORT:-8001}"
 
 # Set data and checkpoint directories based on config
 if [[ "$POLICY_CONFIG" == "pi05_g1_auto" ]]; then
     # G1 specific paths
-    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/cabinetbottle/1199}"
+    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/cabinet_bottle/1199}"
     DATA_DIR="${DATA_DIR:-/mnt/ssd1/yuxin/g1_data/cabinetbottle}"
 else
     # H1 paths (for testing)

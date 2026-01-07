@@ -1,0 +1,11 @@
+19:30:23.239 [I] Initialized data loader:
+[0].images['base_0_rgb']: (32, 224, 224, 3)@float32
+[0].images['left_wrist_0_rgb']: (32, 224, 224, 3)@float32
+[0].images['right_wrist_0_rgb']: (32, 224, 224, 3)@float32
+[0].image_masks['base_0_rgb']: (32,)@bool
+[0].image_masks['left_wrist_0_rgb']: (32,)@bool
+[0].image_masks['right_wrist_0_rgb']: (32,)@bool
+[0].state: (32, 32)@float32
+[0].tokenized_prompt: (32, 200)@int32
+[0].tokenized_prompt_mask: (32, 200)@bool
+[1]: (32, 50, 32)@float32 (2310504:train_auto.py:302)

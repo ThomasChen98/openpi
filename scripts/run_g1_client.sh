@@ -44,13 +44,13 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.75
 # Default values
 DATA_PATH="${DATA_PATH:-/mnt/ssd1/yuxin/g1_data/cabinetbottle/episode_2.hdf5}"
 HOST="${HOST:-localhost}"
-PORT="${PORT:-8000}"
-PROMPT="${PROMPT:-pick up the bottle and put it in the cabinet}"
-MODE="${MODE:-viz}"
+PORT="${PORT:-8001}"
+PROMPT="${PROMPT:-pick up the bottle, put it in the cabinet, and then push to close the cabinet drawer}"
+MODE="${MODE:-viz-robot}"
 ROBOT_IP="${ROBOT_IP:-192.168.123.164}"
 ROBOT_HOST="${ROBOT_HOST:-localhost}"
-ROBOT_PORT="${ROBOT_PORT:-5007}"
-VISER_PORT="${VISER_PORT:-8080}"
+ROBOT_PORT="${ROBOT_PORT:-5008}"
+VISER_PORT="${VISER_PORT:-8081}"
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

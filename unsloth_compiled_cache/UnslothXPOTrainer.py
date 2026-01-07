@@ -1,7 +1,7 @@
 """
 2025.12.7
-2025.12.10
-5.0.0.dev0
+2026.1.2
+4.57.3
 0.24.0
 __UNSLOTH_VERSIONING__
 """
@@ -47,16 +47,31 @@ from transformers.training_args import ParallelMode
 # Also patches W&B since multiple runs must use wandb.finish()
 import functools
 from types import MethodType
+try:
+    from unsloth_zoo.gradient_checkpointing import reset_unsloth_gradient_checkpointing_buffers
+except:
+    def reset_unsloth_gradient_checkpointing_buffers(): pass
 def prepare_for_training_mode(f):
     @functools.wraps(f)
     def wrapper(self, *args, **kwargs):
         # Enable training mode
+        _was_training = None
+        if hasattr(self, 'model') and hasattr(self.model, "training"):
+            _was_training = self.model.training
         if hasattr(self, 'model') and hasattr(self.model, "for_training"):
             self.model.for_training()
         output = f(self, *args, **kwargs)
-        # Return inference mode
+        # Restore previous mode when possible
         if hasattr(self, 'model') and hasattr(self.model, "for_inference"):
-            self.model.for_inference()
+            if _was_training is False:
+                self.model.for_inference()
+            elif _was_training is True and hasattr(self.model, "for_training"):
+                self.model.for_training()
+        # Reset gradient checkpointing buffers to free memory while staying ready for next run
+        try:
+            reset_unsloth_gradient_checkpointing_buffers()
+        except:
+            pass
         # Patch W&B to enable logging on future runs, otherwise it'll overwrite the first run
         try:
             import wandb
@@ -224,6 +239,7 @@ class UnslothXPOConfig(XPOConfig):
     def __init__(
         self,
         output_dir = None,
+        overwrite_output_dir = None,
         do_train = False,
         do_eval = False,
         do_predict = False,
@@ -231,6 +247,8 @@ class UnslothXPOConfig(XPOConfig):
         prediction_loss_only = False,
         per_device_train_batch_size = 4,
         per_device_eval_batch_size = 4,
+        per_gpu_train_batch_size = None,
+        per_gpu_eval_batch_size = None,
         gradient_accumulation_steps = 2,
         eval_accumulation_steps = 2,
         eval_delay = 0,
@@ -244,7 +262,6 @@ class UnslothXPOConfig(XPOConfig):
         num_train_epochs = 3.0,
         max_steps = -1,
         lr_scheduler_type = 'linear',
-        lr_scheduler_kwargs = None,
         warmup_ratio = 0.1,
         warmup_steps = 0,
         log_level = 'passive',
@@ -258,25 +275,33 @@ class UnslothXPOConfig(XPOConfig):
         save_strategy = 'steps',
         save_steps = 500,
         save_total_limit = None,
-        enable_jit_checkpoint = False,
+        save_safetensors = True,
         save_on_each_node = False,
         save_only_model = False,
         restore_callback_states_from_checkpoint = False,
+        no_cuda = False,
         use_cpu = False,
+        use_mps_device = False,
         seed = 3407,
         data_seed = 3407,
+        jit_mode_eval = False,
         bf16 = False,
         fp16 = False,
+        fp16_opt_level = 'O1',
+        half_precision_backend = 'auto',
         bf16_full_eval = False,
         fp16_full_eval = False,
         tf32 = None,
         local_rank = -1,
         ddp_backend = None,
+        tpu_num_cores = None,
+        tpu_metrics_debug = False,
         debug = '',
         dataloader_drop_last = False,
         eval_steps = None,
         dataloader_num_workers = 0,
         dataloader_prefetch_factor = None,
+        past_index = -1,
         run_name = None,
         disable_tqdm = None,
         remove_unused_columns = True,
@@ -286,13 +311,16 @@ class UnslothXPOConfig(XPOConfig):
         greater_is_better = None,
         ignore_data_skip = False,
         fsdp = None,
+        fsdp_min_num_params = 0,
         fsdp_config = None,
+        fsdp_transformer_layer_cls_to_wrap = None,
         accelerator_config = None,
         parallelism_config = None,
         deepspeed = None,
         label_smoothing_factor = 0.0,
         optim = 'adamw_8bit',
         optim_args = None,
+        adafactor = False,
         group_by_length = False,
         length_column_name = 'length',
         report_to = 'none',
@@ -304,6 +332,7 @@ class UnslothXPOConfig(XPOConfig):
         dataloader_pin_memory = True,
         dataloader_persistent_workers = False,
         skip_memory_metrics = True,
+        use_legacy_prediction_loop = False,
         push_to_hub = False,
         resume_from_checkpoint = None,
         hub_model_id = None,
@@ -314,13 +343,22 @@ class UnslothXPOConfig(XPOConfig):
         hub_revision = None,
         gradient_checkpointing = True,
         gradient_checkpointing_kwargs = None,
+        include_inputs_for_metrics = False,
         eval_do_concat_batches = True,
+        fp16_backend = 'auto',
+        push_to_hub_model_id = None,
+        push_to_hub_organization = None,
+        push_to_hub_token = None,
+        mp_parameters = '',
         auto_find_batch_size = False,
         full_determinism = False,
+        torchdynamo = None,
+        ray_scope = 'last',
         ddp_timeout = 1800,
         torch_compile = False,
         torch_compile_backend = None,
         torch_compile_mode = None,
+        include_tokens_per_second = False,
         include_num_input_tokens_seen = False,
         neftune_noise_alpha = None,
         optim_target_modules = None,
@@ -330,7 +368,6 @@ class UnslothXPOConfig(XPOConfig):
         liger_kernel_config = None,
         eval_use_gather_object = False,
         average_tokens_across_devices = True,
-        use_cache = False,
         reward_model_path = None,
         judge = None,
         max_new_tokens = 64,
@@ -373,7 +410,7 @@ class UnslothXPOConfig(XPOConfig):
             save_strategy = 'no'
         if dataset_num_proc is None:
             import psutil
-            dataset_num_proc = min(max(psutil.cpu_count()+4, 2), 64)
+            dataset_num_proc = min(max((psutil.cpu_count() or 1)+4, 2), 64)
             memory_gb_left = psutil.virtual_memory().available / (1024**3)
             if   memory_gb_left <=  4: dataset_num_proc = 1 # Too risky, so set to 1
             elif memory_gb_left <=  6: dataset_num_proc = min(2, dataset_num_proc)
@@ -387,6 +424,7 @@ class UnslothXPOConfig(XPOConfig):
         
         super().__init__(
             output_dir = output_dir,
+            overwrite_output_dir = overwrite_output_dir,
             do_train = do_train,
             do_eval = do_eval,
             do_predict = do_predict,
@@ -394,6 +432,8 @@ class UnslothXPOConfig(XPOConfig):
             prediction_loss_only = prediction_loss_only,
             per_device_train_batch_size = per_device_train_batch_size,
             per_device_eval_batch_size = per_device_eval_batch_size,
+            per_gpu_train_batch_size = per_gpu_train_batch_size,
+            per_gpu_eval_batch_size = per_gpu_eval_batch_size,
             gradient_accumulation_steps = gradient_accumulation_steps,
             eval_accumulation_steps = eval_accumulation_steps,
             eval_delay = eval_delay,
@@ -407,7 +447,6 @@ class UnslothXPOConfig(XPOConfig):
             num_train_epochs = num_train_epochs,
             max_steps = max_steps,
             lr_scheduler_type = lr_scheduler_type,
-            lr_scheduler_kwargs = lr_scheduler_kwargs,
             warmup_ratio = warmup_ratio,
             warmup_steps = warmup_steps,
             log_level = log_level,
@@ -421,25 +460,33 @@ class UnslothXPOConfig(XPOConfig):
             save_strategy = save_strategy,
             save_steps = save_steps,
             save_total_limit = save_total_limit,
-            enable_jit_checkpoint = enable_jit_checkpoint,
+            save_safetensors = save_safetensors,
             save_on_each_node = save_on_each_node,
             save_only_model = save_only_model,
             restore_callback_states_from_checkpoint = restore_callback_states_from_checkpoint,
+            no_cuda = no_cuda,
             use_cpu = use_cpu,
+            use_mps_device = use_mps_device,
             seed = seed,
             data_seed = data_seed,
+            jit_mode_eval = jit_mode_eval,
             bf16 = bf16,
             fp16 = fp16,
+            fp16_opt_level = fp16_opt_level,
+            half_precision_backend = half_precision_backend,
             bf16_full_eval = bf16_full_eval,
             fp16_full_eval = fp16_full_eval,
             tf32 = tf32,
             local_rank = local_rank,
             ddp_backend = ddp_backend,
+            tpu_num_cores = tpu_num_cores,
+            tpu_metrics_debug = tpu_metrics_debug,
             debug = debug,
             dataloader_drop_last = dataloader_drop_last,
             eval_steps = eval_steps,
             dataloader_num_workers = dataloader_num_workers,
             dataloader_prefetch_factor = dataloader_prefetch_factor,
+            past_index = past_index,
             run_name = run_name,
             disable_tqdm = disable_tqdm,
             remove_unused_columns = remove_unused_columns,
@@ -449,13 +496,16 @@ class UnslothXPOConfig(XPOConfig):
             greater_is_better = greater_is_better,
             ignore_data_skip = ignore_data_skip,
             fsdp = fsdp,
+            fsdp_min_num_params = fsdp_min_num_params,
             fsdp_config = fsdp_config,
+            fsdp_transformer_layer_cls_to_wrap = fsdp_transformer_layer_cls_to_wrap,
             accelerator_config = accelerator_config,
             parallelism_config = parallelism_config,
             deepspeed = deepspeed,
             label_smoothing_factor = label_smoothing_factor,
             optim = optim,
             optim_args = optim_args,
+            adafactor = adafactor,
             group_by_length = group_by_length,
             length_column_name = length_column_name,
             report_to = report_to,
@@ -467,6 +517,7 @@ class UnslothXPOConfig(XPOConfig):
             dataloader_pin_memory = dataloader_pin_memory,
             dataloader_persistent_workers = dataloader_persistent_workers,
             skip_memory_metrics = skip_memory_metrics,
+            use_legacy_prediction_loop = use_legacy_prediction_loop,
             push_to_hub = push_to_hub,
             resume_from_checkpoint = resume_from_checkpoint,
             hub_model_id = hub_model_id,
@@ -477,13 +528,22 @@ class UnslothXPOConfig(XPOConfig):
             hub_revision = hub_revision,
             gradient_checkpointing = gradient_checkpointing,
             gradient_checkpointing_kwargs = gradient_checkpointing_kwargs,
+            include_inputs_for_metrics = include_inputs_for_metrics,
             eval_do_concat_batches = eval_do_concat_batches,
+            fp16_backend = fp16_backend,
+            push_to_hub_model_id = push_to_hub_model_id,
+            push_to_hub_organization = push_to_hub_organization,
+            push_to_hub_token = push_to_hub_token,
+            mp_parameters = mp_parameters,
             auto_find_batch_size = auto_find_batch_size,
             full_determinism = full_determinism,
+            torchdynamo = torchdynamo,
+            ray_scope = ray_scope,
             ddp_timeout = ddp_timeout,
             torch_compile = torch_compile,
             torch_compile_backend = torch_compile_backend,
             torch_compile_mode = torch_compile_mode,
+            include_tokens_per_second = include_tokens_per_second,
             include_num_input_tokens_seen = include_num_input_tokens_seen,
             neftune_noise_alpha = neftune_noise_alpha,
             optim_target_modules = optim_target_modules,
@@ -493,7 +553,6 @@ class UnslothXPOConfig(XPOConfig):
             liger_kernel_config = liger_kernel_config,
             eval_use_gather_object = eval_use_gather_object,
             average_tokens_across_devices = average_tokens_across_devices,
-            use_cache = use_cache,
             reward_model_path = reward_model_path,
             judge = judge,
             max_new_tokens = max_new_tokens,
@@ -1217,6 +1276,12 @@ class UnslothXPOTrainer(_UnslothXPOTrainer):
         pass
         if hasattr(self, 'train'):
             self.train = MethodType(prepare_for_training_mode(self.__class__.train), self)
+        pass
+        if hasattr(self, 'llm') and self.llm is not None and hasattr(self.llm, 'get_tokenizer'):
+            _vllm_tok = self.llm.get_tokenizer()
+            _pc = getattr(self, 'processing_class', None) or getattr(self, 'tokenizer', None)
+            if _vllm_tok is not None and _pc is not None and getattr(_pc, 'chat_template', None) is not None and getattr(_vllm_tok, 'chat_template', None) is None:
+                _vllm_tok.chat_template = _pc.chat_template
         pass
         
 pass

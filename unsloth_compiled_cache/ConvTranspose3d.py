@@ -1,7 +1,7 @@
 """
 2025.12.7
-2025.12.10
-5.0.0.dev0
+2026.1.2
+4.57.3
 0.24.0
 __UNSLOTH_VERSIONING__
 """
@@ -64,16 +64,15 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from transformers.models.qwen3_vl.modeling_qwen3_vl import (F, nn)
+from transformers.models.qwen3_vl.modeling_qwen3_vl import (F, Optional, nn)
 
-def forward(self, input: Tensor, output_size: list[int] | None = None) -> Tensor:
+def forward(self, input: Tensor, output_size: Optional[list[int]] = None) -> Tensor:
     if self.padding_mode != "zeros":
         raise ValueError(
             "Only `zeros` padding mode is supported for ConvTranspose3d"
         )
 
-    if not isinstance(self.padding, tuple):
-        raise AssertionError("self.padding must be a tuple")
+    assert isinstance(self.padding, tuple)
     # One cannot replace List by Tuple or Sequence in "_output_padding" because
     # TorchScript does not support `Sequence[T]` or `Tuple[T, ...]`.
     num_spatial_dims = 3

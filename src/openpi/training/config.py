@@ -458,12 +458,15 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
         # Repack transform: map HDF5 keys to policy input format
+        # Match H1 format exactly: include wrist cameras (zero-padded in dataset)
         repack_transforms = _transforms.Group(
             inputs=[
                 _transforms.RepackTransform(
                     {
                         "images": {
-                            "cam_head": "ego_cam",  # G1 only has head camera
+                            "cam_head": "ego_cam",
+                            "cam_left_wrist": "cam_left_wrist",  # Zero-padded in dataset
+                            "cam_right_wrist": "cam_right_wrist",  # Zero-padded in dataset
                         },
                         "state": "qpos",           # 28 dims
                         "loco_state": "loco_state", # 17 dims (for rpy and gyro)
