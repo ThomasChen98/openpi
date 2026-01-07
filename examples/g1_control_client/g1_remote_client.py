@@ -153,31 +153,50 @@ class G1RemoteClient:
         
         logger.info(f"Control frequency: {self.control_fps}Hz")
         
-        # Initialize IK solver
-        # The IK solver uses relative paths, so we need to change to xr_teleoperate/teleop dir
-        logger.info("Initializing IK solver...")
+        # xr_teleoperate code uses relative paths (../assets/), so we need to change to teleop dir
+        # for all initialization that uses those paths
         original_cwd = os.getcwd()
-        teleop_dir = os.path.join(xr_teleoperate_path, 'teleop')
+        teleop_dir = os.path.realpath(os.path.join(xr_teleoperate_path, 'teleop'))
+        urdf_check_path = os.path.join(teleop_dir, '..', 'assets', 'g1', 'g1_body29_hand14.urdf')
+        
+        logger.info(f"Setting up paths for xr_teleoperate...")
+        logger.info(f"  Original dir: {original_cwd}")
+        logger.info(f"  Teleop dir: {teleop_dir}")
+        logger.info(f"  URDF path: {os.path.realpath(urdf_check_path)}")
+        
+        if not os.path.exists(teleop_dir):
+            raise RuntimeError(f"Teleop directory not found: {teleop_dir}")
+        if not os.path.exists(urdf_check_path):
+            raise RuntimeError(f"URDF not found at {os.path.realpath(urdf_check_path)}. "
+                             f"Make sure xr_teleoperate is properly set up at {xr_teleoperate_path}")
+        
+        # Change to teleop directory for all initializations that use relative paths
+        os.chdir(teleop_dir)
+        logger.info(f"  Changed to: {os.getcwd()}")
+        
         try:
-            os.chdir(teleop_dir)
+            # Initialize IK solver (uses ../assets/g1/)
+            logger.info("Initializing IK solver...")
             self.ik_solver = G1_29_ArmIK(Unit_Test=False, Visualization=False)
+            logger.info("IK solver ready")
+            
+            # Initialize robot arm controller (this initializes DDS)
+            logger.info("Initializing arm controller...")
+            self.robot = G1_29_ArmController(
+                motion_mode=motion_mode,
+                simulation_mode=False,
+                dds_already_initialized=False
+            )
+            logger.info("Arm controller ready")
+            
+            # Initialize Dex3 hand controller (uses ../assets/unitree_hand/)
+            logger.info("Initializing Dex3 hand controller...")
+            self._init_hand_controller()
+            logger.info("Hand controller ready")
         finally:
+            # Always restore original directory
             os.chdir(original_cwd)
-        logger.info("IK solver ready")
-        
-        # Initialize robot arm controller (this initializes DDS)
-        logger.info("Initializing arm controller...")
-        self.robot = G1_29_ArmController(
-            motion_mode=motion_mode,
-            simulation_mode=False,
-            dds_already_initialized=False
-        )
-        logger.info("Arm controller ready")
-        
-        # Initialize Dex3 hand controller
-        logger.info("Initializing Dex3 hand controller...")
-        self._init_hand_controller()
-        logger.info("Hand controller ready")
+            logger.info(f"  Restored dir: {os.getcwd()}")
         
         # Initialize locomotion client for hybrid control
         if self.motion_mode and LOCO_AVAILABLE:
