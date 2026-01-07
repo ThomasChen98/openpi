@@ -324,7 +324,7 @@ def extract_hand_joints_for_urdf(joint_positions: np.ndarray) -> np.ndarray:
 
 
 def main(
-    hdf5_path: str = "h1_data_processed/fold_cloth_with_both_hands/episode_03.hdf5",
+    hdf5_path: str = "h1_data_raw/fold_towel_jan6/episode_1.hdf5",
     urdf_path: str = "assets/h1_2/h1_2.urdf",
     fps: float = 30.0,
     start_frame: int = 0,
