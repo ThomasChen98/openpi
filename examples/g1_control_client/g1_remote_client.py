@@ -1,13 +1,24 @@
 #!/usr/bin/env python3
 """
-G1 Remote Policy Client - Dex3 Hand Mode
+G1 Remote Policy Client - Dex3 Hand Mode with Hybrid Locomotion
 
 Connects to OpenPi policy server and executes actions on G1 robot with Dex3 hands.
+Supports hybrid locomotion control where policy can override wireless controller.
 
 Architecture:
     - Arms: Controlled via DDS (unitree_sdk2py)
     - Hands: Dex3 hands controlled via DDS
+    - Locomotion: LocoClient for Move commands (hybrid control)
     - Camera: Head camera from robot via ZMQ (image_server)
+
+Action Space:
+    - 28 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7)]
+    - 31 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7), Lx, Ly, Rx]
+    
+Hybrid Locomotion:
+    - If policy outputs 31 dims and Lx/Ly/Rx are non-zero, use policy locomotion
+    - Otherwise, forward wireless controller joystick input for locomotion
+    - Velocity scaling: 0.3 (same as teleop)
 
 Usage:
     # On robot: Start image_server
@@ -30,6 +41,7 @@ import json
 import logging
 import os
 import signal
+import struct
 import sys
 import threading
 import time
@@ -72,8 +84,31 @@ except ImportError as e:
     logger.error("Make sure xr_teleoperate is cloned next to openpi/")
     sys.exit(1)
 
+# Try to import LocoClient for locomotion control
+try:
+    from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
+    LOCO_AVAILABLE = True
+except ImportError:
+    logger.warning("LocoClient not available - locomotion control disabled")
+    LOCO_AVAILABLE = False
+
 # Global for signal handler
 controller = None
+
+
+def parse_wireless_remote(wireless_remote):
+    """
+    Parse wireless_remote bytes (40 bytes) into joystick values.
+    Based on Unitree SDK wireless_controller.py
+    
+    Returns:
+        (Lx, Ly, Rx, Ry) joystick values in range [-1, 1]
+    """
+    Lx = struct.unpack('<f', bytes(wireless_remote[4:8]))[0]
+    Rx = struct.unpack('<f', bytes(wireless_remote[8:12]))[0]
+    Ry = struct.unpack('<f', bytes(wireless_remote[12:16]))[0]
+    Ly = struct.unpack('<f', bytes(wireless_remote[20:24]))[0]
+    return Lx, Ly, Rx, Ry
 
 
 def signal_handler(sig, frame):
@@ -110,12 +145,24 @@ class G1RemoteClient:
         self.policy_client = None
         self.prompt = prompt
         self.control_fps = control_fps
+        self.motion_mode = motion_mode
+        
+        # Locomotion velocity scaling (same as teleop)
+        self.loco_velocity_scale = 0.3
+        self.loco_client = None
         
         logger.info(f"Control frequency: {self.control_fps}Hz")
         
         # Initialize IK solver
+        # The IK solver uses relative paths, so we need to change to xr_teleoperate/teleop dir
         logger.info("Initializing IK solver...")
-        self.ik_solver = G1_29_ArmIK(Unit_Test=False, Visualization=False)
+        original_cwd = os.getcwd()
+        teleop_dir = os.path.join(xr_teleoperate_path, 'teleop')
+        try:
+            os.chdir(teleop_dir)
+            self.ik_solver = G1_29_ArmIK(Unit_Test=False, Visualization=False)
+        finally:
+            os.chdir(original_cwd)
         logger.info("IK solver ready")
         
         # Initialize robot arm controller (this initializes DDS)
@@ -131,6 +178,23 @@ class G1RemoteClient:
         logger.info("Initializing Dex3 hand controller...")
         self._init_hand_controller()
         logger.info("Hand controller ready")
+        
+        # Initialize locomotion client for hybrid control
+        if self.motion_mode and LOCO_AVAILABLE:
+            logger.info("Initializing locomotion client...")
+            try:
+                self.loco_client = LocoClient()
+                self.loco_client.SetTimeout(0.0001)
+                self.loco_client.Init()
+                logger.info("Locomotion client ready")
+            except Exception as e:
+                logger.error(f"Failed to initialize LocoClient: {e}")
+                self.loco_client = None
+        else:
+            if not self.motion_mode:
+                logger.info("Motion mode disabled - locomotion control not available")
+            elif not LOCO_AVAILABLE:
+                logger.warning("LocoClient not available - locomotion control disabled")
         
         # Initialize camera in background
         logger.info("Initializing cameras (in background)...")
@@ -277,6 +341,22 @@ class G1RemoteClient:
         else:
             base_image = dummy_image
         
+        # Get locomotion state from lowstate (for policy context)
+        loco_state = None
+        try:
+            lowstate = self.robot.get_lowstate_raw()
+            if lowstate is not None:
+                imu = lowstate.imu_state
+                # 4-dim loco_state: [mode_machine, roll, pitch, yaw]
+                loco_state = np.array([
+                    float(lowstate.mode_machine),
+                    imu.rpy[0],  # roll
+                    imu.rpy[1],  # pitch
+                    imu.rpy[2],  # yaw
+                ], dtype=np.float32)
+        except Exception as e:
+            logger.debug(f"Could not get loco_state: {e}")
+        
         self.frame_count += 1
         
         observation = {
@@ -287,21 +367,34 @@ class G1RemoteClient:
             "prompt": self.prompt,
         }
         
+        # Add loco_state if available
+        if loco_state is not None:
+            observation["loco_state"] = loco_state
+        
         return observation
 
     def execute_action_chunk(self, policy_actions: np.ndarray):
         """
         Execute a chunk of policy actions on the robot.
         
+        Supports hybrid locomotion control:
+        - If policy outputs 31 dims and loco commands (Lx, Ly, Rx) are non-zero,
+          use policy locomotion commands
+        - Otherwise, forward wireless controller input for locomotion
+        
         Args:
-            policy_actions: (N, 28) array of joint actions
-                Format: [left_arm(7), right_arm(7), left_hand(7), right_hand(7)]
+            policy_actions: (N, 28) or (N, 31) array of joint actions
+                28 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7)]
+                31 DOF: [left_arm(7), right_arm(7), left_hand(7), right_hand(7), Lx, Ly, Rx]
         """
         action_dim = policy_actions.shape[1]
-        logger.info(f"Executing {len(policy_actions)} actions ({action_dim} DOF)...")
+        has_loco = action_dim >= 31
         
-        if action_dim != 28:
-            logger.warning(f"Expected 28 DOF, got {action_dim}")
+        loco_mode = "policy" if has_loco else "controller"
+        if self.loco_client is None:
+            loco_mode = "disabled"
+        
+        logger.info(f"Executing {len(policy_actions)} actions ({action_dim} DOF, loco={loco_mode})")
         
         # Execute at control_fps
         for i, action in enumerate(policy_actions):
@@ -325,6 +418,38 @@ class G1RemoteClient:
                     self.dual_hand_action_array[j] = left_hand[j]
                     self.dual_hand_action_array[7 + j] = right_hand[j]
             
+            # Handle locomotion control
+            if self.loco_client is not None:
+                if has_loco:
+                    # Policy provides loco commands
+                    policy_lx = action[28]  # Forward/backward
+                    policy_ly = action[29]  # Strafe left/right
+                    policy_rx = action[30]  # Turn (yaw)
+                    
+                    # Check if policy wants to override controller
+                    # Threshold of 0.01 to filter noise
+                    policy_loco_active = (
+                        abs(policy_lx) > 0.01 or 
+                        abs(policy_ly) > 0.01 or 
+                        abs(policy_rx) > 0.01
+                    )
+                    
+                    if policy_loco_active:
+                        # Use policy locomotion commands
+                        self.loco_client.Move(
+                            policy_lx * self.loco_velocity_scale,
+                            policy_ly * self.loco_velocity_scale,
+                            policy_rx * self.loco_velocity_scale
+                        )
+                        if i % 30 == 0:
+                            logger.debug(f"  Loco (policy): vx={policy_lx:.2f}, vy={policy_ly:.2f}, vyaw={policy_rx:.2f}")
+                    else:
+                        # Fall back to wireless controller
+                        self._forward_controller_locomotion()
+                else:
+                    # No loco in action space, always use wireless controller
+                    self._forward_controller_locomotion()
+            
             # Log every 10th action
             if i % 10 == 0:
                 logger.info(f"  Step {i}/{len(policy_actions)}")
@@ -332,6 +457,25 @@ class G1RemoteClient:
             time.sleep(1.0 / self.control_fps)
         
         logger.info("Action chunk execution complete")
+
+    def _forward_controller_locomotion(self):
+        """Forward wireless controller joystick input to locomotion."""
+        if self.loco_client is None:
+            return
+        
+        try:
+            lowstate = self.robot.get_lowstate_raw()
+            if lowstate is not None:
+                Lx, Ly, Rx, Ry = parse_wireless_remote(lowstate.wireless_remote)
+                # Match teleop convention: negate values
+                # Ly controls forward/backward, Lx controls strafe, Rx controls turn
+                self.loco_client.Move(
+                    -Ly * self.loco_velocity_scale,  # Forward/back (negate so push forward = move forward)
+                    -Lx * self.loco_velocity_scale,  # Strafe (negate for intuitive control)
+                    -Rx * self.loco_velocity_scale   # Turn (negate for intuitive control)
+                )
+        except Exception as e:
+            logger.debug(f"Failed to forward controller locomotion: {e}")
 
     async def command_server(self, port: int = 5007):
         """
@@ -424,11 +568,18 @@ class G1RemoteClient:
                         
                         elif cmd == "emergency_stop":
                             logger.warning("EMERGENCY STOP")
+                            # Stop arm movement
                             current = self.robot.get_current_dual_arm_q()
                             self.robot.ctrl_dual_arm(
                                 q_target=current,
                                 tauff_target=np.zeros(14)
                             )
+                            # Stop locomotion
+                            if self.loco_client is not None:
+                                try:
+                                    self.loco_client.Damp()
+                                except Exception as e:
+                                    logger.error(f"Failed to damp locomotion: {e}")
                             response = {"status": "success", "message": "Emergency stop"}
                         
                         else:
