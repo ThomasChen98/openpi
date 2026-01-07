@@ -58,13 +58,14 @@ class G1_29_ArmController:
         self.tauff_target = np.zeros(14)
         self.motion_mode = motion_mode
         self.simulation_mode = simulation_mode
-        # Increased gains for firmer position tracking (matches H1 approach)
-        self.kp_high = 450.0  # Was 300.0
-        self.kd_high = 5.0    # Was 3.0
-        self.kp_low = 180.0   # Was 80.0 - significantly increased for gravity resistance
-        self.kd_low = 4.0     # Was 3.0
-        self.kp_wrist = 70.0  # Was 40.0
-        self.kd_wrist = 2.5   # Was 1.5
+        # Moderately increased gains for firmer position tracking
+        # Original: kp_high=300, kd_high=3, kp_low=80, kd_low=3, kp_wrist=40, kd_wrist=1.5
+        self.kp_high = 300.0
+        self.kd_high = 3.0
+        self.kp_low = 120.0   # Was 80.0 - moderately increased for gravity resistance
+        self.kd_low = 3.5     # Was 3.0
+        self.kp_wrist = 55.0  # Was 40.0
+        self.kd_wrist = 2.0   # Was 1.5
 
         self.all_motor_q = None
         self.arm_velocity_limit = 20.0
@@ -220,8 +221,13 @@ class G1_29_ArmController:
         Returns None if no message has been received yet.'''
         return self.lowstate_subscriber.Read()
 
-    def ctrl_dual_arm_go_home(self):
-        '''Move both the left and right arms of the robot to their home position.'''
+    def ctrl_dual_arm_go_home(self, release_control: bool = False):
+        '''Move both the left and right arms of the robot to their home position.
+        
+        Args:
+            release_control: If True, release SDK control to internal controller after reaching home.
+                           If False (default), maintain SDK control for continued arm commands.
+        '''
         logger.info("[G1_29_ArmController] ctrl_dual_arm_go_home start...")
         max_attempts = 100
         current_attempts = 0
@@ -231,7 +237,9 @@ class G1_29_ArmController:
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
             if np.all(np.abs(current_q) < tolerance):
-                if self.motion_mode:
+                if self.motion_mode and release_control:
+                    # Only ramp down if explicitly releasing control
+                    logger.info("[G1_29_ArmController] Releasing SDK arm control to internal controller...")
                     for weight in np.linspace(1, 0, num=101):
                         self.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = weight
                         time.sleep(0.02)

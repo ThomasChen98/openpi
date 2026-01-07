@@ -508,23 +508,28 @@ class G1RemoteClient:
         Returns:
             gravity_torques: (14,) array of feedforward torques for gravity compensation
         """
-        if self.ik_solver is None:
-            return np.zeros(14, dtype=np.float32)
+        # TEMPORARILY DISABLED - returning zeros until gravity comp is debugged
+        # The increased PD gains should provide sufficient gravity resistance
+        return np.zeros(14, dtype=np.float32)
         
-        # Use Pinocchio RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
-        # With zero velocity and zero acceleration, this gives us pure gravity compensation
-        zero_velocity = np.zeros(self.ik_solver.reduced_robot.model.nv)
-        zero_acceleration = np.zeros(self.ik_solver.reduced_robot.model.nv)
-        
-        gravity_torques = pin.rnea(
-            self.ik_solver.reduced_robot.model,
-            self.ik_solver.reduced_robot.data,
-            joint_positions,
-            zero_velocity,
-            zero_acceleration
-        )
-        
-        return gravity_torques
+        # TODO: Re-enable after debugging
+        # if self.ik_solver is None:
+        #     return np.zeros(14, dtype=np.float32)
+        # 
+        # # Use Pinocchio RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
+        # # With zero velocity and zero acceleration, this gives us pure gravity compensation
+        # zero_velocity = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        # zero_acceleration = np.zeros(self.ik_solver.reduced_robot.model.nv)
+        # 
+        # gravity_torques = pin.rnea(
+        #     self.ik_solver.reduced_robot.model,
+        #     self.ik_solver.reduced_robot.data,
+        #     joint_positions,
+        #     zero_velocity,
+        #     zero_acceleration
+        # )
+        # 
+        # return gravity_torques
 
     def get_observation(self) -> dict:
         """
