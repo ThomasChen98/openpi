@@ -566,6 +566,11 @@ class G1TrainingClient:
         data_config = self.config.get('data', {})
         base_save_dir = data_config.get('save_dir', './g1_data_auto')
         
+        # Convert to absolute path if relative
+        if not os.path.isabs(base_save_dir):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            base_save_dir = os.path.join(script_dir, base_save_dir)
+        
         task_config = self.config.get('task', {})
         task_name = task_config.get('name', 'training_session')
         
