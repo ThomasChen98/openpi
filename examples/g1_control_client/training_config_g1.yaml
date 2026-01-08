@@ -93,7 +93,7 @@ robot:
 # DATA CONFIGURATION - Where to save/load data
 # =============================================================================
 data:
-  save_dir: "./g1_data_auto"
+  save_dir: "g1_data_auto"
   
   rsync:
     enabled: true

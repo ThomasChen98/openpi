@@ -564,18 +564,25 @@ class G1TrainingClient:
         fps = self.control_freq
         
         data_config = self.config.get('data', {})
-        base_save_dir = data_config.get('save_dir', './g1_data_auto')
+        base_save_dir = data_config.get('save_dir', 'g1_data_auto')
         
         # Convert to absolute path if relative
         if not os.path.isabs(base_save_dir):
             script_dir = os.path.dirname(os.path.abspath(__file__))
             base_save_dir = os.path.join(script_dir, base_save_dir)
         
+        # Normalize the path to remove any ./ or extra slashes
+        base_save_dir = os.path.normpath(base_save_dir)
+        
         task_config = self.config.get('task', {})
         task_name = task_config.get('name', 'training_session')
         
         # Epoch-based directory: {base_dir}/{task_name}/epoch_{N}/raw/
         epoch_dir = os.path.join(base_save_dir, task_name, f"epoch_{self.epoch_num}", "raw")
+        
+        # Create the directory explicitly before initializing writer
+        os.makedirs(epoch_dir, exist_ok=True)
+        logger.info(f"Created save directory: {epoch_dir}")
         
         self.episode_writer = EpisodeWriterHDF5(
             save_dir=epoch_dir,
