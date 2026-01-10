@@ -68,6 +68,217 @@ except ImportError as e:
     CAMERAS_AVAILABLE = False
 
 
+class PingLatencyMonitor:
+    """
+    Monitor ping latency to detect packet loss/freezes during hand movements.
+    
+    Runs continuous ping in a background thread and detects pauses in responses
+    which indicate network latency issues (often caused by hand motor interference).
+    
+    Supports two modes:
+    1. Detection only: Just records latency events for later reporting
+    2. Pause mode: Signals execution to pause when latency detected, resume when stable
+    """
+    
+    def __init__(self, ip_address: str, ping_interval: float = 0.01, pause_threshold: float = 0.25,
+                 auto_pause: bool = False, resume_after_pings: int = 5):
+        """
+        Args:
+            ip_address: IP to ping (e.g., left hand controller)
+            ping_interval: Interval between pings in seconds (default: 10ms)
+            pause_threshold: Gap in seconds to consider as a latency event (default: 250ms)
+            auto_pause: If True, signal execution to pause when latency detected
+            resume_after_pings: Number of consecutive good pings before resuming (default: 5)
+        """
+        self.ip_address = ip_address
+        self.ping_interval = ping_interval
+        self.pause_threshold = pause_threshold
+        self.auto_pause = auto_pause
+        self.resume_after_pings = resume_after_pings
+        
+        self.running = False
+        self.monitoring = False  # Whether to record events (during execution)
+        self.thread = None
+        self.process = None
+        
+        # Statistics (reset per episode)
+        self.latency_events = []  # List of (timestamp, gap_ms) tuples
+        self.total_pings = 0
+        self.last_ping_time = None
+        
+        # Pause/resume state
+        self.should_pause = False  # Signal to execution loop to pause
+        self.consecutive_good_pings = 0  # Counter for stable connection
+        self.pause_count = 0  # Number of times we paused this episode
+        self.total_pause_duration = 0.0  # Total time spent paused
+        self._pause_start_time = None
+        
+        # Lock for thread-safe access
+        self.lock = threading.Lock()
+    
+    def start(self):
+        """Start the ping monitor background thread."""
+        if self.running:
+            return
+        
+        self.running = True
+        self.thread = threading.Thread(target=self._ping_loop, daemon=True)
+        self.thread.start()
+        logger.info(f"Ping latency monitor started for {self.ip_address}")
+    
+    def stop(self):
+        """Stop the ping monitor."""
+        self.running = False
+        if self.process:
+            try:
+                self.process.terminate()
+                self.process.wait(timeout=2.0)
+            except Exception:
+                pass
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        logger.info("Ping latency monitor stopped")
+    
+    def start_monitoring(self):
+        """Start recording latency events (call at start of episode execution)."""
+        with self.lock:
+            self.monitoring = True
+            self.latency_events = []
+            self.total_pings = 0
+            self.last_ping_time = None
+            self.should_pause = False
+            self.consecutive_good_pings = 0
+            self.pause_count = 0
+            self.total_pause_duration = 0.0
+            self._pause_start_time = None
+        logger.debug("Ping monitoring: started recording events")
+    
+    def stop_monitoring(self):
+        """Stop recording latency events (call at end of episode execution)."""
+        with self.lock:
+            self.monitoring = False
+            # If we were paused, end the pause
+            if self._pause_start_time is not None:
+                self.total_pause_duration += time.time() - self._pause_start_time
+                self._pause_start_time = None
+        logger.debug("Ping monitoring: stopped recording events")
+    
+    def check_should_pause(self) -> bool:
+        """Check if execution should pause (thread-safe)."""
+        with self.lock:
+            return self.should_pause
+    
+    def signal_resumed(self):
+        """Signal that execution has resumed after a pause."""
+        with self.lock:
+            if self._pause_start_time is not None:
+                self.total_pause_duration += time.time() - self._pause_start_time
+                self._pause_start_time = None
+    
+    def get_latency_report(self) -> dict:
+        """
+        Get a report of latency events detected during the episode.
+        
+        Returns:
+            Dict with:
+                - 'event_count': Number of latency events detected
+                - 'max_gap_ms': Maximum gap in milliseconds
+                - 'total_pings': Total pings during monitoring
+                - 'events': List of (timestamp, gap_ms) tuples
+                - 'has_issues': Boolean indicating if latency issues were detected
+                - 'pause_count': Number of times execution was paused (if auto_pause enabled)
+                - 'total_pause_duration': Total time spent paused in seconds
+        """
+        with self.lock:
+            events = self.latency_events.copy()
+            total = self.total_pings
+            pauses = self.pause_count
+            pause_duration = self.total_pause_duration
+        
+        if not events:
+            return {
+                'event_count': 0,
+                'max_gap_ms': 0,
+                'total_pings': total,
+                'events': [],
+                'has_issues': False,
+                'pause_count': pauses,
+                'total_pause_duration': pause_duration
+            }
+        
+        max_gap = max(e[1] for e in events)
+        return {
+            'event_count': len(events),
+            'max_gap_ms': max_gap,
+            'total_pings': total,
+            'events': events,
+            'has_issues': True,
+            'pause_count': pauses,
+            'total_pause_duration': pause_duration
+        }
+    
+    def _ping_loop(self):
+        """Background thread that runs continuous ping and monitors for pauses."""
+        cmd = ['ping', '-i', str(self.ping_interval), self.ip_address]
+        
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                bufsize=1
+            )
+            
+            for line in iter(self.process.stdout.readline, ''):
+                if not self.running:
+                    break
+                
+                current_time = time.time()
+                
+                # Parse ping output - look for successful ping responses
+                if 'time=' in line:
+                    with self.lock:
+                        if self.monitoring:
+                            self.total_pings += 1
+                            
+                            # Check for pause (gap between pings)
+                            if self.last_ping_time is not None:
+                                gap = current_time - self.last_ping_time
+                                if gap > self.pause_threshold:
+                                    gap_ms = gap * 1000
+                                    self.latency_events.append((current_time, gap_ms))
+                                    logger.warning(f"⚠️ Latency detected: {gap_ms:.0f}ms gap in ping responses")
+                                    
+                                    # If auto_pause enabled, signal pause
+                                    if self.auto_pause:
+                                        if not self.should_pause:
+                                            self.should_pause = True
+                                            self.pause_count += 1
+                                            self._pause_start_time = current_time
+                                            logger.warning("⏸️  PAUSING execution - waiting for hand to stabilize...")
+                                        self.consecutive_good_pings = 0
+                                else:
+                                    # Good ping - count consecutive good pings
+                                    self.consecutive_good_pings += 1
+                                    
+                                    # If we were paused and have enough good pings, resume
+                                    if self.should_pause and self.consecutive_good_pings >= self.resume_after_pings:
+                                        self.should_pause = False
+                                        logger.info(f"▶️  RESUMING execution - hand connection stable ({self.consecutive_good_pings} good pings)")
+                            else:
+                                # First ping after monitoring started
+                                self.consecutive_good_pings = 1
+                            
+                            self.last_ping_time = current_time
+                
+        except Exception as e:
+            logger.error(f"Ping monitor error: {e}")
+        finally:
+            if self.process:
+                self.process.terminate()
+
+
 class TrainingState(Enum):
     """Training pipeline states"""
     WAITING = auto()      # Waiting for policy server to have new weights
@@ -154,16 +365,20 @@ class H1TrainingClient:
     and hand control matching h1_remote_client.py.
     """
     
-    def __init__(self, config_path: str):
+    def __init__(self, config_path: str, auto_pause_on_latency: bool = False):
         """
         Initialize training client.
         
         Args:
             config_path: Path to training_config.yaml
+            auto_pause_on_latency: If True, automatically pause execution when hand latency detected
         """
         # Load configuration
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
+        
+        # Store auto-pause setting
+        self.auto_pause_on_latency = auto_pause_on_latency
         
         logger.info(f"Loaded config from {config_path}")
         
@@ -200,6 +415,10 @@ class H1TrainingClient:
         self.left_wrist_camera = None
         self.right_wrist_camera = None
         self.cameras_ready = False
+        
+        # Ping latency monitor (for detecting hand motor interference)
+        self.ping_monitor = None
+        self.last_latency_report = None  # Store report from last episode
         
         # Recording state
         self.recording_active = False
@@ -269,15 +488,30 @@ class H1TrainingClient:
             logger.info("  IK solver ready")
             
             # Initialize robot controller (includes hand bridges if enabled)
-            logger.info(f"  Initializing robot controller (hand_control={self.include_hands})...")
+            # NOTE: Right hand is broken - only connect to left hand
+            logger.info(f"  Initializing robot controller (hand_control={self.include_hands}, right_hand=DISABLED)...")
             self.robot = H1_2_ArmController(
                 simulation_mode=False,
                 hand_control=self.include_hands,
                 left_hand_ip=robot_config.get('left_hand_ip', '192.168.123.211') if self.include_hands else None,
-                right_hand_ip=robot_config.get('right_hand_ip', '192.168.123.210') if self.include_hands else None,
+                right_hand_ip=None,  # Right hand broken - disabled
                 network_interface=robot_config.get('network_interface', 'eno1')
             )
             logger.info("  Robot controller ready")
+            
+            # Initialize ping latency monitor for left hand (if hands enabled)
+            if self.include_hands:
+                left_hand_ip = robot_config.get('left_hand_ip', '192.168.123.211')
+                mode_str = "AUTO-PAUSE" if self.auto_pause_on_latency else "DETECT-ONLY"
+                logger.info(f"  Initializing ping latency monitor for {left_hand_ip} (mode: {mode_str})...")
+                self.ping_monitor = PingLatencyMonitor(
+                    ip_address=left_hand_ip,
+                    ping_interval=0.01,  # 10ms ping interval
+                    pause_threshold=0.25,  # 250ms gap = latency event
+                    auto_pause=self.auto_pause_on_latency,
+                    resume_after_pings=5  # Resume after 5 consecutive good pings (~50ms)
+                )
+                self.ping_monitor.start()
             
             # Initialize cameras in background
             logger.info("  Initializing cameras (in background)...")
@@ -534,10 +768,11 @@ class H1TrainingClient:
         if self.include_hands:
             # Append current hand command values (we don't have hand position feedback)
             # Note: These are the commanded positions, not measured positions
+            # Right hand is broken - always report 1000 (fully open) for each finger
             return np.concatenate([
                 arm_q,
                 self.robot.left_hand_gesture,
-                self.robot.right_hand_gesture
+                np.full(6, 950.0)  # Right hand broken - always 1000
             ])
         else:
             return arm_q
@@ -782,6 +1017,43 @@ class H1TrainingClient:
                 logger.info(f"Stop signal received at action {i}/{len(action_chunk)}")
                 return actions_executed
             
+            # Check if we should pause due to latency (auto-pause mode)
+            if self.ping_monitor and self.ping_monitor.check_should_pause():
+                print(f"\n⏸️  PAUSED at action {i}/{len(action_chunk)} - waiting for hand connection to stabilize...")
+                
+                # Hold current position while paused
+                current_q = self.robot.get_current_dual_arm_q()
+                
+                while self.ping_monitor.check_should_pause() and self.running:
+                    # Keep robot at current position with gravity compensation
+                    gravity_torques = self.compute_gravity_compensation(current_q)
+                    if self.include_hands:
+                        self.robot.ctrl_dual_arm(
+                            q_target=current_q,
+                            tauff_target=gravity_torques,
+                            left_hand_gesture=self.robot.left_hand_gesture,
+                            right_hand_gesture=np.full(6, 950.0)
+                        )
+                    else:
+                        self.robot.ctrl_dual_arm(
+                            q_target=current_q,
+                            tauff_target=gravity_torques
+                        )
+                    
+                    # Check for stop key during pause
+                    key = self.keyboard.get_key(timeout=0.01)
+                    if key and key.lower() == 's':
+                        logger.info(f"Stop signal received during pause at action {i}/{len(action_chunk)}")
+                        self.ping_monitor.signal_resumed()
+                        return actions_executed
+                    
+                    time.sleep(0.01)  # 10ms check interval
+                
+                # Signal that we've resumed
+                self.ping_monitor.signal_resumed()
+                print(f"▶️  RESUMED at action {i}/{len(action_chunk)}")
+                loop_start = time.time()  # Reset loop timer after pause
+            
             # Extract arm joints (first 14)
             arm_joints = action[:14]
             
@@ -790,7 +1062,8 @@ class H1TrainingClient:
                 # Format: [left_arm(7), right_arm(7), left_hand(6), right_hand(6)]
                 # Scale from 0-1 to 0-1000 range for Inspire hands
                 left_hand = self.scale_hand_values(action[14:20])    # Indices 14-19
-                right_hand = self.scale_hand_values(action[20:26])   # Indices 20-25
+                # Right hand is broken - always use 1000 (fully open)
+                right_hand = np.full(6, 950.0)
             else:
                 # Default to fully open hands
                 left_hand = np.full(6, 1000.0)
@@ -979,11 +1252,24 @@ class H1TrainingClient:
         print(f"[EXECUTING] Running policy (epoch {self.epoch_num}, episode {self.episode_num})")
         print("  Press 's' to stop execution and enter labeling mode")
         print(f"  Each policy query returns 50 actions executed at {self.control_freq}Hz (~{50/self.control_freq:.1f} seconds)")
+        if self.ping_monitor:
+            if self.auto_pause_on_latency:
+                print("  🔍 Latency monitoring active (AUTO-PAUSE enabled)")
+            else:
+                print("  🔍 Latency monitoring active (detect-only)")
         print("=" * 60)
+        
+        # Reset latency report from previous episode
+        self.last_latency_report = None
         
         # Reset robot to starting pose before execution
         print("  Resetting robot to starting pose...")
         self.reset_to_pose(duration=2.0)
+        
+        # Start latency monitoring for this episode
+        if self.ping_monitor:
+            self.ping_monitor.start_monitoring()
+            logger.info("Ping latency monitoring started for this episode")
         
         self.current_phase = "policy"
         self.robot.speed_instant_max()
@@ -1026,6 +1312,13 @@ class H1TrainingClient:
         logger.info(f"Execution complete: {chunk_count} chunks, {total_actions} total actions")
         if self.recording_active and self.episode_writer:
             logger.info(f"Recorded {self.episode_writer.get_current_length()} frames")
+        
+        # Stop latency monitoring and get report
+        if self.ping_monitor:
+            self.ping_monitor.stop_monitoring()
+            self.last_latency_report = self.ping_monitor.get_latency_report()
+            if self.last_latency_report['has_issues']:
+                logger.warning(f"⚠️ Latency issues detected: {self.last_latency_report['event_count']} events, max gap: {self.last_latency_report['max_gap_ms']:.0f}ms")
     
     def run_labeling_state(self):
         """LABELING state: Stop recording, prompt for advantage label, then choose reset or damping"""
@@ -1036,6 +1329,29 @@ class H1TrainingClient:
         print("\n" + "=" * 60)
         print(f"[LABELING] Episode {self.episode_num} execution complete")
         print(f"  Recorded {frame_count} frames ({frame_count/self.control_freq:.1f} seconds)")
+        
+        # Display latency guidance if available
+        if self.last_latency_report:
+            if self.last_latency_report['has_issues']:
+                print()
+                print("  " + "!" * 56)
+                print("  ⚠️  LATENCY ISSUES DETECTED - CONSIDER REJECTING (x)")
+                print("  " + "!" * 56)
+                print(f"    Latency events: {self.last_latency_report['event_count']}")
+                print(f"    Maximum gap: {self.last_latency_report['max_gap_ms']:.0f}ms")
+                
+                # Show pause statistics if auto-pause was used
+                if self.last_latency_report.get('pause_count', 0) > 0:
+                    pause_count = self.last_latency_report['pause_count']
+                    pause_duration = self.last_latency_report['total_pause_duration']
+                    print(f"    Auto-paused {pause_count} time(s), total pause: {pause_duration:.1f}s")
+                    print(f"    (Execution was paused during latency, may still be usable)")
+                else:
+                    print(f"    (Hand motor interference may have caused frozen movements)")
+                print()
+            else:
+                print("  ✓ No latency issues detected during execution")
+        
         print("  Was this execution successful?")
         print("    'g' - GOOD (Advantage=True) - Task completed successfully")
         print("    'b' - BAD (Advantage=False) - Needs improvement")
@@ -1342,13 +1658,22 @@ class H1TrainingClient:
         print("  Controls:")
         print("    's' - Stop policy execution")
         print("    'g' - Label episode as GOOD (Advantage=True)")
-        print("    'b' - Label episode as BAD (Advantage=False)")
+        print("    'b' - BAD (Advantage=False)")
+        print("    'x' - REJECT (discard episode)")
         print("    'r' - Reset robot to starting pose (after labeling)")
         print("    'd' - Enter damping mode for manual adjustment")
         print("    'e' - End damping mode, save episode")
         print("    'y' - Yes/confirm")
         print("    'n' - No/decline")
         print("    Ctrl+C - Emergency exit")
+        if self.ping_monitor:
+            print()
+            if self.auto_pause_on_latency:
+                print("  ✓ Latency monitoring ACTIVE with AUTO-PAUSE")
+                print("    (execution will pause when latency detected, resume when stable)")
+            else:
+                print("  ✓ Latency monitoring ACTIVE (detect-only mode)")
+                print("    (use --auto-pause-on-latency to enable auto-pause)")
         print("=" * 70)
         
         # If start_immediately, skip WAITING and go to READY
@@ -1397,6 +1722,13 @@ class H1TrainingClient:
     def cleanup(self):
         """Cleanup resources"""
         logger.info("Cleaning up...")
+        
+        # Stop ping latency monitor
+        if self.ping_monitor:
+            try:
+                self.ping_monitor.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping ping monitor: {e}")
         
         # Save any remaining recording
         if self.recording_active and self.episode_writer:
@@ -1466,6 +1798,11 @@ def main():
         action="store_true",
         help="Skip WAITING state and start collecting data immediately"
     )
+    parser.add_argument(
+        "--auto-pause-on-latency",
+        action="store_true",
+        help="Automatically pause execution when hand latency is detected, resume when stable"
+    )
     
     args = parser.parse_args()
     
@@ -1474,7 +1811,7 @@ def main():
         logger.error(f"Config file not found: {args.config}")
         return 1
     
-    client = H1TrainingClient(args.config)
+    client = H1TrainingClient(args.config, auto_pause_on_latency=args.auto_pause_on_latency)
     return client.run(start_immediately=args.start_immediately)
 
 
