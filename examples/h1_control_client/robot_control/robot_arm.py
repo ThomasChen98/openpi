@@ -172,12 +172,18 @@ class H1_2_ArmController:
         try:
             logger_mp.info("Initializing hand control...")
             
-            # Create hand DDS publishers
-            self.left_hand_pub = ChannelPublisher("rt/inspire_hand/ctrl/l", inspire_hand_ctrl)
-            self.left_hand_pub.Init()
+            # Create hand DDS publishers (only for hands that are enabled)
+            if self.left_hand_ip is not None:
+                self.left_hand_pub = ChannelPublisher("rt/inspire_hand/ctrl/l", inspire_hand_ctrl)
+                self.left_hand_pub.Init()
+            else:
+                logger_mp.info("Left hand disabled (IP is None)")
             
-            self.right_hand_pub = ChannelPublisher("rt/inspire_hand/ctrl/r", inspire_hand_ctrl)
-            self.right_hand_pub.Init()
+            if self.right_hand_ip is not None:
+                self.right_hand_pub = ChannelPublisher("rt/inspire_hand/ctrl/r", inspire_hand_ctrl)
+                self.right_hand_pub.Init()
+            else:
+                logger_mp.info("Right hand disabled (IP is None)")
             
             logger_mp.info("Hand DDS communication initialized")
             
@@ -193,24 +199,32 @@ class H1_2_ArmController:
         try:
             logger_mp.info("Initializing hand bridges...")
             
-            # Create bridge handlers
-            self.left_bridge_handler = inspire_sdk.ModbusDataHandler(
-                ip=self.left_hand_ip,
-                LR='l',
-                device_id=1,
-                initDDS=False,  # We already initialized DDS
-                network=self.network_interface
-            )
-            logger_mp.info(f"Left hand bridge created (IP: {self.left_hand_ip})")
+            # Create bridge handlers (only for hands that are enabled)
+            if self.left_hand_ip is not None:
+                self.left_bridge_handler = inspire_sdk.ModbusDataHandler(
+                    ip=self.left_hand_ip,
+                    LR='l',
+                    device_id=1,
+                    initDDS=False,  # We already initialized DDS
+                    network=self.network_interface
+                )
+                logger_mp.info(f"Left hand bridge created (IP: {self.left_hand_ip})")
+            else:
+                self.left_bridge_handler = None
+                logger_mp.info("Left hand bridge skipped (IP is None)")
             
-            self.right_bridge_handler = inspire_sdk.ModbusDataHandler(
-                ip=self.right_hand_ip,
-                LR='r',
-                device_id=1,
-                initDDS=False,  # We already initialized DDS
-                network=self.network_interface
-            )
-            logger_mp.info(f"Right hand bridge created (IP: {self.right_hand_ip})")
+            if self.right_hand_ip is not None:
+                self.right_bridge_handler = inspire_sdk.ModbusDataHandler(
+                    ip=self.right_hand_ip,
+                    LR='r',
+                    device_id=1,
+                    initDDS=False,  # We already initialized DDS
+                    network=self.network_interface
+                )
+                logger_mp.info(f"Right hand bridge created (IP: {self.right_hand_ip})")
+            else:
+                self.right_bridge_handler = None
+                logger_mp.info("Right hand bridge skipped (IP is None)")
             
             # Start bridge threads
             self.start_hand_bridge_threads()
@@ -220,28 +234,37 @@ class H1_2_ArmController:
             logger_mp.warning("Hands will not be controlled - check hand IPs and network")
     
     def start_hand_bridge_threads(self):
-        """Start bridge threads for both hands"""
+        """Start bridge threads for hands that are enabled"""
         self.bridge_running = True
         
-        # Left hand bridge thread
-        left_thread = threading.Thread(
-            target=self.run_hand_bridge,
-            args=(self.left_bridge_handler, "Left Hand"),
-            daemon=True
-        )
-        left_thread.start()
-        self.bridge_threads.append(left_thread)
+        bridges_started = []
         
-        # Right hand bridge thread
-        right_thread = threading.Thread(
-            target=self.run_hand_bridge,
-            args=(self.right_bridge_handler, "Right Hand"),
-            daemon=True
-        )
-        right_thread.start()
-        self.bridge_threads.append(right_thread)
+        # Left hand bridge thread (only if handler exists)
+        if self.left_bridge_handler is not None:
+            left_thread = threading.Thread(
+                target=self.run_hand_bridge,
+                args=(self.left_bridge_handler, "Left Hand"),
+                daemon=True
+            )
+            left_thread.start()
+            self.bridge_threads.append(left_thread)
+            bridges_started.append("Left")
         
-        logger_mp.info("Both hand bridges started")
+        # Right hand bridge thread (only if handler exists)
+        if self.right_bridge_handler is not None:
+            right_thread = threading.Thread(
+                target=self.run_hand_bridge,
+                args=(self.right_bridge_handler, "Right Hand"),
+                daemon=True
+            )
+            right_thread.start()
+            self.bridge_threads.append(right_thread)
+            bridges_started.append("Right")
+        
+        if bridges_started:
+            logger_mp.info(f"Hand bridges started: {', '.join(bridges_started)}")
+        else:
+            logger_mp.info("No hand bridges started (both disabled)")
         time.sleep(1)  # Let bridges initialize
 
     def run_hand_bridge(self, handler, name):
@@ -349,11 +372,12 @@ class H1_2_ArmController:
     
     def send_hand_commands(self):
         """Send hand commands at 250Hz - same as robot control frequency"""
-        if self.left_hand_pub is None or self.right_hand_pub is None:
-            # Debug: warn if publishers not initialized
+        # Check if at least one hand is enabled
+        if self.left_hand_pub is None and self.right_hand_pub is None:
+            # Debug: warn if no publishers initialized
             if not hasattr(self, '_pub_warning_logged'):
                 self._pub_warning_logged = True
-                logger_mp.warning("[send_hand_commands] Hand publishers not initialized - commands not being sent!")
+                logger_mp.warning("[send_hand_commands] No hand publishers initialized - commands not being sent!")
             return
             
         # Copy target hand angles (under implicit lock from numpy)
@@ -367,25 +391,25 @@ class H1_2_ArmController:
         if self._send_hand_log_counter % 125 == 1:
             logger_mp.debug(f"[send_hand_commands] Sending: L={[int(a) for a in left_hand_angle]}, R={[int(a) for a in right_hand_angle]}")
         
-        # Create left hand command (angle mode)
-        left_cmd = inspire_hand_defaut.get_inspire_hand_ctrl()
-        left_cmd.angle_set = [int(angle) for angle in left_hand_angle]
-        left_cmd.pos_set = [0] * INSPIRE_HAND_DOF_PER_HAND    # Not used in angle mode
-        left_cmd.force_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No force control
-        left_cmd.speed_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No speed control
-        left_cmd.mode = 0b0001  # Angle mode (Mode 1)
+        # Send left hand command (if enabled)
+        if self.left_hand_pub is not None:
+            left_cmd = inspire_hand_defaut.get_inspire_hand_ctrl()
+            left_cmd.angle_set = [int(angle) for angle in left_hand_angle]
+            left_cmd.pos_set = [0] * INSPIRE_HAND_DOF_PER_HAND    # Not used in angle mode
+            left_cmd.force_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No force control
+            left_cmd.speed_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No speed control
+            left_cmd.mode = 0b0001  # Angle mode (Mode 1)
+            self.left_hand_pub.Write(left_cmd)
         
-        # Create right hand command (angle mode)
-        right_cmd = inspire_hand_defaut.get_inspire_hand_ctrl()
-        right_cmd.angle_set = [int(angle) for angle in right_hand_angle]
-        right_cmd.pos_set = [0] * INSPIRE_HAND_DOF_PER_HAND    # Not used in angle mode
-        right_cmd.force_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No force control
-        right_cmd.speed_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No speed control
-        right_cmd.mode = 0b0001  # Angle mode (Mode 1)
-        
-        # Send commands
-        self.left_hand_pub.Write(left_cmd)
-        self.right_hand_pub.Write(right_cmd)
+        # Send right hand command (if enabled)
+        if self.right_hand_pub is not None:
+            right_cmd = inspire_hand_defaut.get_inspire_hand_ctrl()
+            right_cmd.angle_set = [int(angle) for angle in right_hand_angle]
+            right_cmd.pos_set = [0] * INSPIRE_HAND_DOF_PER_HAND    # Not used in angle mode
+            right_cmd.force_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No force control
+            right_cmd.speed_set = [0] * INSPIRE_HAND_DOF_PER_HAND  # No speed control
+            right_cmd.mode = 0b0001  # Angle mode (Mode 1)
+            self.right_hand_pub.Write(right_cmd)
 
     def get_mode_machine(self):
         '''Return current dds mode machine.'''
