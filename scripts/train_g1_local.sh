@@ -5,7 +5,7 @@
 #   ./scripts/train_g1_local.sh                                    # Use defaults
 #   ./scripts/train_g1_local.sh --task-name my_task --epoch 0      # With epoch
 #   ./scripts/train_g1_local.sh --base-checkpoint checkpoints/...  # Start from base checkpoint
-#
+#   ./scripts/train_g1_local.sh --task-name cabinet_bottle --gpu 0
 # Environment variables can also be used:
 #   TASK_NAME="my_task" EPOCH_NUM=0 ./scripts/train_g1_local.sh
 

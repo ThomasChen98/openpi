@@ -1,0 +1,11 @@
+{
+  "task_name": "cabinet_bottle",
+  "task_description": "pick up the bottle and put it in the cabinet",
+  "config_name": "pi05_g1_auto",
+  "robot": "G1",
+  "epoch": 0,
+  "last_checkpoint": "",
+  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_g1_auto/cabinet_bottle/1199",
+  "status": "interrupted",
+  "updated_at": "2026-01-07T17:10:29-08:00"
+}

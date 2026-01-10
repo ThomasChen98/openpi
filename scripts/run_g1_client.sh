@@ -47,10 +47,10 @@ OPENPI_DIR="$(dirname "$SCRIPT_DIR")"
 G1_CLIENT_DIR="${OPENPI_DIR}/examples/g1_control_client"
 
 # Default values
-DATA_PATH="${DATA_PATH:-${G1_CLIENT_DIR}/g1_data_processed/cabinet_bottle/episode_02.hdf5}"
+DATA_PATH="${DATA_PATH:-${G1_CLIENT_DIR}/g1_data_processed/loco_place_bottle_overfit/episode_02.hdf5}"
 HOST="${HOST:-localhost}"
 PORT="${PORT:-8001}"
-PROMPT="${PROMPT:-pick up the bottle, put it in the cabinet, and then push to close the cabinet drawer}"
+PROMPT="${PROMPT:-Walk to the table, grab the bottle, put the bottle into the cabinet, and close the drawer}"
 MODE="${MODE:-viz-robot}"
 ROBOT_IP="${ROBOT_IP:-192.168.123.164}"
 ROBOT_HOST="${ROBOT_HOST:-localhost}"

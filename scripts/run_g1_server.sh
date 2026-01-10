@@ -37,8 +37,8 @@ PORT="${PORT:-8001}"
 # Set data and checkpoint directories based on config
 if [[ "$POLICY_CONFIG" == "pi05_g1_auto" ]]; then
     # G1 specific paths
-    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/cabinet_bottle/1199}"
-    DATA_DIR="${DATA_DIR:-${OPENPI_DIR}/examples/g1_control_client/g1_data_lerobot/cabinet_bottle}"
+    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/loco_place_bottle_overfit/1199}"
+    DATA_DIR="${DATA_DIR:-${OPENPI_DIR}/examples/g1_control_client/g1_data_lerobot/loco_place_bottle_overfit}"
 else
     # H1 paths (for testing)
     POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_towel_reward_2/epoch_0/1499}"

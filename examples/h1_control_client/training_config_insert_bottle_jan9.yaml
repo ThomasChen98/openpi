@@ -1,0 +1,101 @@
+# =============================================================================
+# H1 Integrated Training Pipeline Configuration - DEFAULT/TEMPLATE
+# =============================================================================
+# 
+# RECOMMENDED: Use task-specific configs instead:
+#   - training_config_place_kettle.yaml  (with hands, 26 DOF)
+#   - training_config_lift_lid.yaml      (no hands, 14 DOF)
+#
+# Usage:
+#   ./scripts/integrated_training.sh --config-file training_config_place_kettle.yaml
+#   ./scripts/integrated_training.sh --config-file training_config_lift_lid.yaml
+#
+# This file serves as a template. Copy and modify for new tasks.
+# =============================================================================
+
+# =============================================================================
+# TASK CONFIGURATION - What task are we training?
+# =============================================================================
+task:
+  name: "insert_bottle"                                    # Short name for directories/checkpoints
+  description: "Insert the bottle into the cupholder"
+
+# =============================================================================
+# POLICY CONFIGURATION - Model and checkpoints
+# =============================================================================
+policy:
+  config_name: "pi05_h1_auto"
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan9/1199"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
+
+# =============================================================================
+# TRAINING CONFIGURATION - How to train
+# =============================================================================
+training:
+  max_epochs: 1200
+  save_interval: 1200
+  keep_period: 1200
+  num_repeats: 1
+  labeling_mode: "human_labeling"                   # none, human_labeling, reward_labeling
+  gpu_id: 0
+
+# =============================================================================
+# REWARD LABELING CONFIGURATION - For reward_labeling mode
+# =============================================================================
+reward:
+  # Path to Qwen reward model checkpoint (required for reward_labeling mode)
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-1240"
+  
+  task_instruction: |
+    Insert the bottle into the cupholder.
+  
+  max_frames: 30
+  image_rotation: 0
+  advantage_threshold: 0.3
+
+# =============================================================================
+# SERVER CONFIGURATION - Policy server settings
+# =============================================================================
+policy_server:
+  host: "localhost"
+  port: 8000
+  poll_interval_sec: 5
+
+# =============================================================================
+# ROBOT CONFIGURATION - H1-2 robot settings
+# =============================================================================
+robot:
+  # Hand control: true for 26 DOF (14 arm + 12 hand), false for 14 DOF (arms only)
+  include_hands: true
+  
+  network_interface: "eno1"
+  left_hand_ip: "192.168.123.211"
+  right_hand_ip: "192.168.123.210"
+  head_camera_server_ip: "192.168.123.163"
+  head_camera_server_port: 5555
+
+# =============================================================================
+# DATA CONFIGURATION - Where to save/load data
+# =============================================================================
+data:
+  save_dir: "./h1_data_auto"
+  
+  rsync:
+    enabled: true
+    target: "P6000:/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_auto"
+    options: "-avz --progress"
+    ssh_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# RECORDING CONFIGURATION - Episode recording settings
+# =============================================================================
+recording:
+  fps: 30
+  image_quality: 85
+
+# =============================================================================
+# PIPELINE CONFIGURATION - Integrated training settings
+# =============================================================================
+pipeline:
+  start_phase: "data_collection"
+  start_epoch: 0
+  auto_sync: true

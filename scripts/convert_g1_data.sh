@@ -5,7 +5,7 @@
 #   ./scripts/convert_g1_data.sh                                      # Use defaults
 #   ./scripts/convert_g1_data.sh --task-name my_task --epoch 0        # With epoch
 #   ./scripts/convert_g1_data.sh --labeling-mode human_labeling       # With advantage labeling
-#
+#   ./scripts/convert_g1_data.sh --task-name cabinet_bottle --task-description "Put the bottle into the cabinet and close the drawer" --num-repeats 1
 # Environment variables can also be used:
 #   TASK_NAME="my_task" EPOCH_NUM=0 ./scripts/convert_g1_data.sh
 

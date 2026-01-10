@@ -1233,6 +1233,12 @@ _CONFIGS = [
         ),
         weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
         pytorch_weight_path="/home/yuxin/.cache/openpi/openpi-assets/checkpoints/pi05_base_pytorch",
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=1_000,
+            peak_lr=2.5e-5,
+            decay_steps=30_000,
+            decay_lr=2.5e-6,
+        ),
         log_interval=10,
         num_train_steps=1_200,
         batch_size=32,
