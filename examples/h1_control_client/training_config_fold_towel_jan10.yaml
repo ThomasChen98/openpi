@@ -17,15 +17,15 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "insert_bottle_jan9"                                    # Short name for directories/checkpoints
-  description: "Insert the bottle into the cupholder"
+  name: "fold_towel_jan10"                                    # Short name for directories/checkpoints
+  description: "Fold the towel in half with both hands"
 
 # =============================================================================
 # POLICY CONFIGURATION - Model and checkpoints
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan9/1199"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_jan10/1199"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
@@ -36,7 +36,7 @@ training:
   keep_period: 1200
   num_repeats: 1
   labeling_mode: "human_labeling"                   # none, human_labeling, reward_labeling
-  gpu_id: 0
+  gpu_id: 1
 
 # =============================================================================
 # REWARD LABELING CONFIGURATION - For reward_labeling mode
