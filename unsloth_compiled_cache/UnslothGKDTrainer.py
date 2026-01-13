@@ -1,8 +1,8 @@
 """
-2025.12.7
 2026.1.2
-4.57.3
-0.24.0
+2026.1.2
+4.57.1
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.gkd_trainer import (Any, AutoModelForCausalLM, BaseImageProcessor, Callable, DataCollator, DataCollatorForChatML, Dataset, EvalPrediction, F, FeatureExtractionMixin, GKDConfig, GKDTrainer, GenerationConfig, Optional, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, SFTTrainer, TrainerCallback, Union, disable_dropout_in_model, empty_cache, nn, os, prepare_deepspeed, random, textwrap, torch, unwrap_model_for_generation, warnings)
+from trl.trainer.gkd_trainer import (Any, AutoModelForCausalLM, BaseImageProcessor, Callable, DataCollator, DataCollatorForChatML, Dataset, EvalPrediction, F, FeatureExtractionMixin, GKDConfig, GKDTrainer, GenerationConfig, Optional, PeftConfig, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, SFTTrainer, TrainerCallback, Union, disable_dropout_in_model, empty_cache, generate_model_card, get_comet_experiment_url, is_wandb_available, nn, os, prepare_deepspeed, random, textwrap, torch, unwrap_model_for_generation)
 
 
 import os
@@ -214,34 +214,34 @@ def align_logprobs_with_mask(
 class UnslothGKDConfig(GKDConfig):
     """
     
-    Configuration class for [`GKDTrainer`].
+Configuration class for [`GKDTrainer`].
 
-    This class includes only the parameters that are specific to GKD training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
+This class includes only the parameters that are specific to GKD training. For a full list of training arguments,
+please refer to the [`~transformers.TrainingArguments`] and [`SFTConfig`] documentation.
 
-    Args:
-        temperature (`float`, *optional*, defaults to `0.9`):
-            Temperature for sampling. The higher the temperature, the more random the completions.
-        lmbda (`float`, *optional*, defaults to `0.5`):
-            Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
-            student-generated outputs).
-        beta (`float`, *optional*, defaults to `0.5`):
-            Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
-            beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
-        max_new_tokens (`int`, *optional*, defaults to `128`):
-            Maximum number of tokens to generate per completion.
-        teacher_model_name_or_path (`str`, *optional*):
-            Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
-            trained.
-        teacher_model_init_kwargs (`dict[str, Any]]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
-            from a string.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model.
-        seq_kd (`bool`, *optional*, defaults to `False`):
-            Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
-            teacher-generated output).
-    
+Args:
+    temperature (`float`, *optional*, defaults to `0.9`):
+        Temperature for sampling. The higher the temperature, the more random the completions.
+    lmbda (`float`, *optional*, defaults to `0.5`):
+        Lambda parameter that controls the student data fraction (i.e., the proportion of on-policy
+        student-generated outputs).
+    beta (`float`, *optional*, defaults to `0.5`):
+        Interpolation coefficient between `0.0` and `1.0` of the Generalized Jensen-Shannon Divergence loss. When
+        beta is `0.0`, the loss is the KL divergence. When beta is `1.0`, the loss is the Inverse KL Divergence.
+    max_new_tokens (`int`, *optional*, defaults to `128`):
+        Maximum number of tokens to generate per completion.
+    teacher_model_name_or_path (`str` or `None`, *optional*, defaults to `None`):
+        Model name or path of the teacher model. If `None`, the teacher model will be the same as the model being
+        trained.
+    teacher_model_init_kwargs (`dict[str, Any]]` or `None`, *optional*, defaults to `None`):
+        Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the teacher model
+        from a string.
+    disable_dropout (`bool`, *optional*, defaults to `True`):
+        Whether to disable dropout in the model.
+    seq_kd (`bool`, *optional*, defaults to `False`):
+        Seq_kd parameter that controls whether to perform Sequence-Level KD (can be viewed as supervised FT on
+        teacher-generated output).
+
     """
     vllm_sampling_params: Optional[Any] = field(
         default = None,
@@ -402,7 +402,6 @@ class UnslothGKDConfig(GKDConfig):
         eval_packing = None,
         completion_only_loss = None,
         assistant_only_loss = False,
-        loss_type = 'nll',
         activation_offloading = False,
         temperature = 0.9,
         lmbda = 0.5,
@@ -588,7 +587,6 @@ class UnslothGKDConfig(GKDConfig):
             eval_packing = eval_packing,
             completion_only_loss = completion_only_loss,
             assistant_only_loss = assistant_only_loss,
-            loss_type = loss_type,
             activation_offloading = activation_offloading,
             temperature = temperature,
             lmbda = lmbda,
@@ -604,24 +602,7 @@ class UnslothGKDConfig(GKDConfig):
 pass
 
 class _UnslothGKDTrainer(SFTTrainer):
-    """"""
-
     _tag_names = ["trl", "gkd"]
-    _name = "GKD"
-    _paper = {
-        "title": "On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
-        "id": "2306.13649",
-        # docstyle-ignore
-        "citation": textwrap.dedent("""\
-            @inproceedings{agarwal2024on-policy,
-                title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
-                author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
-                year         = 2024,
-                booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
-                publisher    = {OpenReview.net},
-                url          = {https://openreview.net/forum?id=3zKtaqxLhW},
-            }"""),
-    }
 
     def __init__(
         self,
@@ -641,13 +622,6 @@ class _UnslothGKDTrainer(SFTTrainer):
         peft_config: Optional["PeftConfig"] = None,
         formatting_func: Optional[Callable] = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         # Ensure Trainer does not drop non-signature columns used by the collator [e.g., "prompts"]
         args.remove_unused_columns = False
         # Respect a user-provided data_collator; otherwise, provide a ChatML collator that
@@ -695,10 +669,10 @@ class _UnslothGKDTrainer(SFTTrainer):
             )
         else:
             teacher_model_init_kwargs = args.teacher_model_init_kwargs
-            teacher_model_init_kwargs["dtype"] = (
-                teacher_model_init_kwargs["dtype"]
-                if teacher_model_init_kwargs["dtype"] in ["auto", None]
-                else getattr(torch, teacher_model_init_kwargs["dtype"])
+            teacher_model_init_kwargs["torch_dtype"] = (
+                teacher_model_init_kwargs["torch_dtype"]
+                if teacher_model_init_kwargs["torch_dtype"] in ["auto", None]
+                else getattr(torch, teacher_model_init_kwargs["torch_dtype"])
             )
 
         if isinstance(teacher_model, str):
@@ -799,7 +773,7 @@ class _UnslothGKDTrainer(SFTTrainer):
 
         # Apply reduction
         if reduction == "batchmean":
-            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / jsd.size(0)
+            return jsd.sum() / mask.sum() if labels is not None else jsd.sum() / (jsd.size(0) * jsd.size(1))
         elif reduction == "sum":
             return jsd.sum()
         elif reduction == "mean":
@@ -953,45 +927,76 @@ class _UnslothGKDTrainer(SFTTrainer):
 
         loss = super().training_step(model, inputs, num_items_in_batch)
         return loss
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, list[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
+        citation = textwrap.dedent("""\
+        @inproceedings{agarwal2024on-policy,
+            title        = {{On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes}},
+            author       = {Rishabh Agarwal and Nino Vieillard and Yongchao Zhou and Piotr Stanczyk and Sabela Ramos Garea and Matthieu Geist and Olivier Bachem},
+            year         = 2024,
+            booktitle    = {The Twelfth International Conference on Learning Representations, {ICLR} 2024, Vienna, Austria, May 7-11, 2024},
+            publisher    = {OpenReview.net},
+            url          = {https://openreview.net/forum?id=3zKtaqxLhW},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
+            trainer_name="GKD",
+            trainer_citation=citation,
+            paper_title="On-Policy Distillation of Language Models: Learning from Self-Generated Mistakes",
+            paper_id="2306.13649",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
 class UnslothGKDTrainer(_UnslothGKDTrainer):
     """
-    Trainer for Generalized Knowledge Distillation (GKD) of language models.
-
-    For details on GKD, see the paper: [On-Policy Distillation of Language Models: Learning from Self-Generated
-    Mistakes](https://huggingface.co/papers/2306.13649).
-
-    Args:
-        model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
-            Model to be trained, or the string identifier of the model to be instantiated from a pretrained model.
-        teacher_model ([`~transformers.PreTrainedModel`] or `torch.nn.Module` or `str`, *optional*):
-            Teacher model for knowledge distillation, or the string identifier of the model to be instantiated from a
-            pretrained model.
-        args ([`GKDConfig`], *optional*):
-            Training arguments.
-        data_collator ([`~transformers.DataCollator`], *optional*):
-            Data collator to batch samples from the dataset. It defaults to a [`DataCollatorForChatML`] using the
-            `processing_class`.
-        train_dataset ([`~datasets.Dataset`], *optional*):
-            Dataset for training.
-        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
-            Dataset for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
-           Class to process the data.
-        compute_metrics (`Callable`, *optional*):
-            Function to compute metrics at evaluation. Must take in an [`~transformers.EvalPrediction`] and return a
-            dictionary string to float.
-        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
-            Callbacks to use during training.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
-            Tuple containing the optimizer and the learning rate scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable`, *optional*):
-            Function to preprocess the logits before computing the metrics. Must take in the `logits` and `labels` and
-            return the logits to be used for metrics computation.
-        peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the `model` will be
-            wrapped with the specified PEFT adapter.
-        formatting_func (`Callable`, *optional*):
-            Function to format the dataset. Must take in an example and return an example.
     
     """
     def __init__(

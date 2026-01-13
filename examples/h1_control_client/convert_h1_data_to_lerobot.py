@@ -27,6 +27,7 @@ The resulting dataset will be saved to the $HF_LEROBOT_HOME directory.
 import shutil
 from pathlib import Path
 from typing import Literal
+import pickle
 
 import os
 import cv2
@@ -36,7 +37,7 @@ import tyro
 from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME, LeRobotDataset
 
 # Supported labeling modes
-LabelingMode = Literal["none", "human_labeling", "reward_labeling"]
+LabelingMode = Literal["none", "human_labeling", "reward_labeling", "action_chunk_advantage"]
 
 
 def resize_image(image: np.ndarray, target_height: int = 224, target_width: int = 224) -> np.ndarray:
@@ -175,7 +176,8 @@ def main(
         labeling_mode: How to handle advantage labeling:
             - "none": No advantage labeling (task description only)
             - "human_labeling": Read advantage from HDF5 metadata
-            - "reward_labeling": Use embodied reward model to label advantage
+            - "reward_labeling": Use embodied reward model to label advantage (episode-level)
+            - "action_chunk_advantage": Fine-grained advantage labeling per action chunk
         reward_task_instruction: Detailed task instruction for reward model (required for reward_labeling)
         reward_max_frames: Maximum frames to sample for reward labeling
         reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
@@ -191,10 +193,18 @@ def main(
         if not reward_task_instruction:
             print("Warning: reward_task_instruction not provided, using task_description")
             reward_task_instruction = task_description
+    elif labeling_mode == "action_chunk_advantage":
+        if not reward_task_instruction:
+            print("Warning: reward_task_instruction not provided, using task_description")
+            reward_task_instruction = task_description
     
-    use_advantage = labeling_mode in ["human_labeling", "reward_labeling"]
+    use_advantage = labeling_mode in ["human_labeling", "reward_labeling", "action_chunk_advantage"]
     if use_advantage:
         print(f"Using advantage labeling mode: {labeling_mode}")
+        if labeling_mode == "action_chunk_advantage":
+            print("  Using fine-grained action chunk advantages (per-frame labels)")
+        else:
+            print("  Using episode-level advantages (all frames in episode share same label)")
         print("  Prompts will be formatted as: '{task_description}, Advantage=True/False'")
     
     # If filter_good_only is enabled, force reading advantage labels
@@ -314,38 +324,51 @@ def main(
     # Create LeRobot dataset, define features to store
     # OpenPi assumes that proprio is stored in `state` and actions in `action`
     # Dimensions are auto-detected: 14 DoF (arms) or 26 DoF (arms + hands)
+    
+    # Define base features
+    features = {
+        "ego_cam": {
+            "dtype": "image",
+            "shape": (224, 224, 3),
+            "names": ["height", "width", "channel"],
+        },
+        "cam_left_wrist": {
+            "dtype": "image",
+            "shape": (224, 224, 3),
+            "names": ["height", "width", "channel"],
+        },
+        "cam_right_wrist": {
+            "dtype": "image",
+            "shape": (224, 224, 3),
+            "names": ["height", "width", "channel"],
+        },
+        "qpos": {
+            "dtype": "float32",
+            "shape": (state_dim,),
+            "names": ["qpos"],
+        },
+        "action": {
+            "dtype": "float32",
+            "shape": (action_dim,),
+            "names": ["action"],
+        },
+    }
+    
+    # Add advantage feature for action_chunk_advantage mode
+    if labeling_mode == "action_chunk_advantage":
+        features["advantage"] = {
+            "dtype": "bool",
+            "shape": (1,),
+            "names": ["advantage"],
+        }
+        print("Added 'advantage' feature for per-frame advantage labels")
+    
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=output_path,
         robot_type="h1",
         fps=fps,
-        features={
-            "ego_cam": {
-                "dtype": "image",
-                "shape": (224, 224, 3),
-                "names": ["height", "width", "channel"],
-            },
-            "cam_left_wrist": {
-                "dtype": "image",
-                "shape": (224, 224, 3),
-                "names": ["height", "width", "channel"],
-            },
-            "cam_right_wrist": {
-                "dtype": "image",
-                "shape": (224, 224, 3),
-                "names": ["height", "width", "channel"],
-            },
-            "qpos": {
-                "dtype": "float32",
-                "shape": (state_dim,),
-                "names": ["qpos"],
-            },
-            "action": {
-                "dtype": "float32",
-                "shape": (action_dim,),
-                "names": ["action"],
-            },
-        },
+        features=features,
         image_writer_threads=10,
         image_writer_processes=5,
     )
@@ -354,6 +377,7 @@ def main(
     print("\nLoading episodes from HDF5 files...")
     episodes_data = []
     advantage_stats = {"true": 0, "false": 0}
+    action_chunk_advantages = {}  # For action chunk advantage mode
     
     for hdf5_file in hdf5_files:
         print(f"Loading {hdf5_file.name}...")
@@ -370,11 +394,44 @@ def main(
             else:
                 print(f"  Warning: No reward label found, defaulting to False")
                 episode_data["advantage"] = False
+        elif labeling_mode == "action_chunk_advantage":
+            # Load per-frame advantages from parquet cache
+            episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=False)
+            
+            # Try to find corresponding parquet file with action chunk advantages
+            # Format: data_dir/epoch_X/data/chunk-000/episode_XXXXXX_action_chunk_advantages.pkl
+            parquet_pattern = str(hdf5_file).replace(".hdf5", "_action_chunk_advantages.pkl")
+            # Also check in data-dir if HDF5 is in raw/ subdirectory
+            if not Path(parquet_pattern).exists():
+                # Try parent directory patterns
+                alt_pattern = str(hdf5_file.parent.parent / "data" / "chunk-000" / hdf5_file.name).replace(".hdf5", "_action_chunk_advantages.pkl")
+                if Path(alt_pattern).exists():
+                    parquet_pattern = alt_pattern
+            
+            if Path(parquet_pattern).exists():
+                frame_advantages = pickle.load(open(parquet_pattern, 'rb'))
+                action_chunk_advantages[hdf5_file.name] = frame_advantages
+                true_count = frame_advantages.sum() if hasattr(frame_advantages, 'sum') else sum(frame_advantages)
+                total_frames = len(frame_advantages)
+                print(f"  Loaded action chunk advantages: {true_count}/{total_frames} frames ({100*true_count/total_frames:.1f}%)")
+                # Episode advantage is aggregate (for filtering)
+                episode_data["advantage"] = (true_count / total_frames) > 0.5
+            else:
+                print(f"  Warning: No action chunk advantages found at {parquet_pattern}")
+                print(f"  Run compute_action_chunk_advantages.py first!")
+                episode_data["advantage"] = False
+                action_chunk_advantages[hdf5_file.name] = None
         else:
             episode_data = load_episode_from_hdf5(str(hdf5_file), read_advantage=use_advantage)
         
-        # Track advantage statistics
-        if use_advantage:
+        # Track advantage statistics (episode-level for backward compatibility)
+        if use_advantage and labeling_mode != "action_chunk_advantage":
+            if episode_data["advantage"]:
+                advantage_stats["true"] += 1
+            else:
+                advantage_stats["false"] += 1
+        elif use_advantage and labeling_mode == "action_chunk_advantage":
+            # For action chunk mode, count based on majority
             if episode_data["advantage"]:
                 advantage_stats["true"] += 1
             else:
@@ -430,13 +487,21 @@ def main(
             cam_left_wrist = episode_data["cam_left_wrist"]
             cam_right_wrist = episode_data["cam_right_wrist"]
             
-            # Format task description with advantage label if using advantage labeling
-            if use_advantage:
-                advantage = episode_data["advantage"]
-                advantage_str = "True" if advantage else "False"
-                episode_task = f"{task_description}, Advantage={advantage_str}"
-            else:
-                episode_task = task_description
+            # Get per-frame advantages if using action chunk mode
+            frame_advantages = None
+            if labeling_mode == "action_chunk_advantage":
+                hdf5_name = Path(hdf5_files[file_idx]).name
+                frame_advantages = action_chunk_advantages.get(hdf5_name)
+                
+                # Debug: Show advantage distribution for this episode
+                if frame_advantages is not None:
+                    true_count = sum(frame_advantages) if isinstance(frame_advantages, (list, np.ndarray)) else 0
+                    total_count = len(frame_advantages) if frame_advantages is not None else 0
+                    hdf5_frames = len(actions)
+                    print(f"  [DEBUG] Episode advantages: {true_count}/{total_count} frames True ({100*true_count/total_count:.1f}%)")
+                    if total_count != hdf5_frames:
+                        print(f"  [WARNING] Length mismatch: HDF5 has {hdf5_frames} frames but advantages has {total_count} labels")
+                        print(f"            Will use first {hdf5_frames} advantage labels")
             
             # Iterate through each timestep in the episode
             for step_idx in range(len(actions)):
@@ -454,17 +519,36 @@ def main(
                 else:
                     cam_right_wrist_resized = zero_image.copy()
 
-                # Add frame to dataset (all frames in episode get same task/advantage)
-                dataset.add_frame(
-                    {
-                        "ego_cam": ego_cam_resized,
-                        "cam_left_wrist": cam_left_wrist_resized,
-                        "cam_right_wrist": cam_right_wrist_resized,
-                        "qpos": qpos[step_idx].astype(np.float32),
-                        "action": actions[step_idx].astype(np.float32),
-                        "task": episode_task,
-                    }
-                )
+                # Build frame data
+                frame_data = {
+                    "ego_cam": ego_cam_resized,
+                    "cam_left_wrist": cam_left_wrist_resized,
+                    "cam_right_wrist": cam_right_wrist_resized,
+                    "qpos": qpos[step_idx].astype(np.float32),
+                    "action": actions[step_idx].astype(np.float32),
+                }
+                
+                # Handle advantage labels based on mode
+                if labeling_mode == "action_chunk_advantage":
+                    # Store per-frame advantage as a separate feature
+                    # Task field remains clean (no advantage suffix)
+                    if frame_advantages is not None and step_idx < len(frame_advantages):
+                        frame_data["advantage"] = np.array([bool(frame_advantages[step_idx])], dtype=bool)
+                    else:
+                        # Default to False if index out of bounds or no advantages
+                        frame_data["advantage"] = np.array([False], dtype=bool)
+                    frame_data["task"] = task_description
+                elif use_advantage:
+                    # Episode-level advantage: append to task string
+                    advantage = episode_data["advantage"]
+                    advantage_str = "True" if advantage else "False"
+                    frame_data["task"] = f"{task_description}, Advantage={advantage_str}"
+                else:
+                    # No advantage labeling
+                    frame_data["task"] = task_description
+                
+                # Add frame to dataset
+                dataset.add_frame(frame_data)
             
             # Save the episode
             dataset.save_episode()

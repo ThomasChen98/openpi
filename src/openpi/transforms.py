@@ -325,6 +325,81 @@ class PromptFromLeRobotTask(DataTransformFn):
 
 
 @dataclasses.dataclass(frozen=True)
+class ActionChunkAdvantagePrompt(DataTransformFn):
+    """Augments prompt with action chunk advantage based on chunk start frame.
+    
+    This transform:
+    1. Reads the 'advantage' feature from the START frame of the chunk
+    2. Appends ", Advantage=True/False" to the prompt
+    3. All frames in the chunk share the same augmented prompt
+    
+    Used for fine-grained action chunk advantage labeling where each chunk
+    gets its own advantage label based on whether actions from that state
+    lead to good outcomes.
+    """
+    
+    # Debug counter for logging (class variable)
+    _debug_counter: int = 0
+    _debug_true_count: int = 0
+    _debug_false_count: int = 0
+
+    def __call__(self, data: DataDict) -> DataDict:
+        if "advantage" not in data:
+            # No advantage feature in dataset, return unchanged
+            return data
+        
+        if "prompt" not in data:
+            raise ValueError("ActionChunkAdvantagePrompt requires 'prompt' field")
+        
+        # Get advantage for the START frame of this chunk
+        # data["advantage"] has shape (chunk_length, 1) for action chunks
+        # We only care about the first frame (chunk start)
+        advantage_values = data["advantage"]
+        
+        # Handle both single frame and multi-frame cases
+        if hasattr(advantage_values, 'shape'):
+            # Array-like (numpy/jax/torch)
+            if len(advantage_values.shape) == 0:
+                # 0-dimensional tensor (scalar) - use .item()
+                if hasattr(advantage_values, 'item'):
+                    start_advantage = bool(advantage_values.item())
+                else:
+                    start_advantage = bool(advantage_values)
+            elif len(advantage_values.shape) > 1:
+                # Multi-frame chunk: use first frame
+                start_advantage = bool(advantage_values[0, 0])
+            else:
+                # Single frame or flat array (1D)
+                # Use indexing that works for both numpy and torch
+                start_advantage = bool(advantage_values[0])
+        else:
+            # Scalar or list
+            start_advantage = bool(advantage_values)
+        
+        # Augment prompt with advantage
+        base_prompt = data["prompt"]
+        advantage_str = "True" if start_advantage else "False"
+        augmented_prompt = f"{base_prompt}, Advantage={advantage_str}"
+        
+        # Debug logging (every 100 chunks)
+        ActionChunkAdvantagePrompt._debug_counter += 1
+        if start_advantage:
+            ActionChunkAdvantagePrompt._debug_true_count += 1
+        else:
+            ActionChunkAdvantagePrompt._debug_false_count += 1
+            
+        if ActionChunkAdvantagePrompt._debug_counter % 100 == 0:
+            total = ActionChunkAdvantagePrompt._debug_counter
+            true_pct = 100 * ActionChunkAdvantagePrompt._debug_true_count / total
+            false_pct = 100 * ActionChunkAdvantagePrompt._debug_false_count / total
+            print(f"[ActionChunkAdvantage] Processed {total} chunks: "
+                  f"True={ActionChunkAdvantagePrompt._debug_true_count} ({true_pct:.1f}%), "
+                  f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%)")
+        
+        return {**data, "prompt": augmented_prompt}
+
+
+@dataclasses.dataclass(frozen=True)
 class PadStatesAndActions(DataTransformFn):
     """Zero-pads states and actions to the model action dimension."""
 

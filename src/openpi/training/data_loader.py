@@ -137,16 +137,49 @@ def create_torch_dataset(
     if repo_id == "fake":
         return FakeDataset(model_config, num_samples=1024)
 
-    dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
-    dataset = lerobot_dataset.LeRobotDataset(
-        data_config.repo_id,
-        delta_timestamps={
-            key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
-        },
-    )
+    # Check if repo_id is a local path
+    import pathlib
+    repo_path = pathlib.Path(repo_id)
+    if repo_path.exists() and repo_path.is_dir():
+        # Local dataset - use root parameter
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id, root=repo_id)
+        dataset = lerobot_dataset.LeRobotDataset(
+            repo_id,
+            root=repo_id,
+            delta_timestamps={
+                key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
+            },
+        )
+    else:
+        # HuggingFace Hub dataset
+        dataset_meta = lerobot_dataset.LeRobotDatasetMetadata(repo_id)
+        dataset = lerobot_dataset.LeRobotDataset(
+            repo_id,
+            delta_timestamps={
+                key: [t / dataset_meta.fps for t in range(action_horizon)] for key in data_config.action_sequence_keys
+            },
+        )
 
+    # Apply transforms for prompt generation
+    transforms = []
     if data_config.prompt_from_task:
-        dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
+        transforms.append(_transforms.PromptFromLeRobotTask(dataset_meta.tasks))
+    
+    # Check if dataset has 'advantage' feature for action chunk advantages
+    # If so, apply ActionChunkAdvantagePrompt transform
+    has_advantage = hasattr(dataset_meta, 'features') and 'advantage' in dataset_meta.features
+    if has_advantage:
+        transforms.append(_transforms.ActionChunkAdvantagePrompt())
+        logging.info("=" * 80)
+        logging.info("ACTION CHUNK ADVANTAGE MODE DETECTED")
+        logging.info("=" * 80)
+        logging.info("Dataset has 'advantage' feature - applying ActionChunkAdvantagePrompt transform")
+        logging.info("Each chunk will be labeled with Advantage=True/False based on its start frame")
+        logging.info("Monitor the debug output to verify advantage distribution during training")
+        logging.info("=" * 80)
+    
+    if transforms:
+        dataset = TransformedDataset(dataset, transforms)
 
     return dataset
 

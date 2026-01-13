@@ -17,7 +17,7 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "fold_towel_jan10"                                    # Short name for directories/checkpoints
+  name: "fold_towel_jan12"                                    # Short name for directories/checkpoints
   description: "Fold the towel in half with both hands"
 
 # =============================================================================
@@ -25,7 +25,7 @@ task:
 # =============================================================================
 policy:
   config_name: "pi05_h1_auto"
-  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_jan10/1199"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_jan12/1199"                          # Checkpoint for epoch 0 data collection only (trained on teleoperation data)
 
 # =============================================================================
 # TRAINING CONFIGURATION - How to train

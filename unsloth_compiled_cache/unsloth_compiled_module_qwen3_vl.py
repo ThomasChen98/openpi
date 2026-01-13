@@ -1,8 +1,8 @@
 """
-2025.12.7
 2026.1.2
-4.57.3
-0.24.0
+2026.1.2
+4.57.1
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -611,7 +611,6 @@ class Qwen3VLTextMLP(nn.Module):
 
 
 @torch.compiler.disable(recursive = False)
-
 def Qwen3VLModel_forward(
     self,
     input_ids: torch.LongTensor = None,
@@ -986,7 +985,6 @@ class Qwen3VLModel(Qwen3VLPreTrainedModel):
 
 
 @torch.compiler.disable(recursive = False)
-
 def Qwen3VLForConditionalGeneration_forward(
     self,
     input_ids: torch.LongTensor = None,

@@ -1,8 +1,8 @@
 """
-2025.12.7
 2026.1.2
-4.57.3
-0.24.0
+2026.1.2
+4.57.1
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.ppo_trainer import (Accelerator, BaseImageProcessor, BaseTrainer, CallbackHandler, DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK, DataCollatorWithPadding, DataLoader, Dataset, ExportableState, FeatureExtractionMixin, GenerationConfig, INVALID_LOGPROB, OnlineTrainerState, Optional, PPOConfig, PPOTrainer, Path, PeftConfig, PeftModel, PolicyAndValueWrapper, PreTrainedTokenizerBase, PrinterCallback, ProcessorMixin, TrainerCallback, TrainerControl, Union, batch_generation, broadcast, contextmanager, create_reference_model, defaultdict, disable_dropout_in_model, empty_cache, exact_div, first_true_indices, forward, gather_object, gc, get_peft_model, get_reporting_integration_callbacks, get_reward, is_peft_available, is_rich_available, log_table_to_comet_experiment, masked_mean, masked_whiten, math, nn, np, nullcontext, os, pd, peft_module_casting_to_bf16, prepare_deepspeed, print_rich_table, selective_log_softmax, textwrap, time, torch, truncate_response, unwrap_model_for_generation, warnings, Optional, PeftModel, is_peft_available, os, torch)
+from trl.trainer.ppo_trainer import (Accelerator, BaseImageProcessor, CallbackHandler, DEFAULT_CALLBACKS, DEFAULT_PROGRESS_CALLBACK, DataCollatorWithPadding, DataLoader, Dataset, ExportableState, FeatureExtractionMixin, GenerationConfig, INVALID_LOGPROB, OnlineTrainerState, Optional, PPOConfig, PPOTrainer, Path, PeftConfig, PeftModel, PolicyAndValueWrapper, PreTrainedTokenizerBase, PrinterCallback, ProcessorMixin, Trainer, TrainerCallback, TrainerControl, Union, batch_generation, broadcast, contextmanager, create_reference_model, defaultdict, disable_dropout_in_model, empty_cache, exact_div, first_true_indices, forward, gather_object, gc, generate_model_card, get_comet_experiment_url, get_peft_model, get_reporting_integration_callbacks, get_reward, is_peft_available, is_rich_available, is_wandb_available, log_table_to_comet_experiment, masked_mean, masked_whiten, math, nn, np, nullcontext, os, pd, peft_module_casting_to_bf16, prepare_deepspeed, print_rich_table, selective_log_softmax, textwrap, time, torch, truncate_response, unwrap_model_for_generation, Optional, PeftModel, Trainer, is_peft_available, os, torch)
 
 
 import os
@@ -214,51 +214,51 @@ def align_logprobs_with_mask(
 class UnslothPPOConfig(PPOConfig):
     """
     
-    Configuration class for the [`PPOTrainer`].
+Configuration class for the [`PPOTrainer`].
 
-    This class includes only the parameters that are specific to PPO training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] and [`OnPolicyConfig`] documentation. Note that default
-    values in this class may differ from those in [`~transformers.TrainingArguments`].
+This class includes only the parameters that are specific to PPO training. For a full list of training arguments,
+please refer to the [`~transformers.TrainingArguments`] and [`OnPolicyConfig`] documentation. Note that default
+values in this class may differ from those in [`~transformers.TrainingArguments`].
 
-    Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
+Using [`~transformers.HfArgumentParser`] we can turn this class into
+[argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+command line.
 
-    Parameters:
-        exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
-            Name of this experiment.
-        reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
-            Path to the reward model.
-        model_adapter_name (`str`, *optional*):
-            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`str`, *optional*):
-            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
-        num_ppo_epochs (`int`, *optional*, defaults to `4`):
-            Number of epochs to train.
-        whiten_rewards (`bool`, *optional*, defaults to `False`):
-            Whether to whiten the rewards.
-        kl_coef (`float`, *optional*, defaults to `0.05`):
-            KL coefficient.
-        kl_estimator (`Literal["k1", "k3"]`, *optional*, defaults to `"k1"`):
-            Which estimator for KL-Divergence to use from [Approximating KL
-            Divergence](http://joschu.net/blog/kl-approx.html). Defaults to "k1", a straightforward, unbiased
-            estimator. Can be set to "k3", an unbiased estimator with lower variance which "appears to be a strictly
-            better estimator". Cannot be set to "k2", as it is used for logging purposes.
-        cliprange (`float`, *optional*, defaults to `0.2`):
-            Clip range.
-        vf_coef (`float`, *optional*, defaults to `0.1`):
-            Value function coefficient.
-        cliprange_value (`float`, *optional*, defaults to `0.2`):
-            Clip range for the value function.
-        gamma (`float`, *optional*, defaults to `1.0`):
-            Discount factor.
-        lam (`float`, *optional*, defaults to `0.95`):
-            Lambda value for GAE.
-        ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
-            This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
-            improving generation speed. However, disabling this option allows training models that exceed the VRAM
-            capacity of a single GPU, albeit at the cost of slower generation.
-    
+Parameters:
+    exp_name (`str`, *optional*, defaults to `os.path.basename(__file__)[:-3]`):
+        Name of this experiment.
+    reward_model_path (`str`, *optional*, defaults to `"EleutherAI/pythia-160m"`):
+        Path to the reward model.
+    model_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+        Name of the train target PEFT adapter, when using LoRA with multiple adapters.
+    ref_adapter_name (`str` or `None`, *optional*, defaults to `None`):
+        Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+    num_ppo_epochs (`int`, *optional*, defaults to `4`):
+        Number of epochs to train.
+    whiten_rewards (`bool`, *optional*, defaults to `False`):
+        Whether to whiten the rewards.
+    kl_coef (`float`, *optional*, defaults to `0.05`):
+        KL coefficient.
+    kl_estimator (`Literal["k1", "k3"]`, *optional*, defaults to `"k1"`):
+        Which estimator for KL-Divergence to use from [Approximating KL
+        Divergence](http://joschu.net/blog/kl-approx.html). Defaults to "k1", a straightforward, unbiased
+        estimator. Can be set to "k3", an unbiased estimator with lower variance which "appears to be a strictly
+        better estimator". Cannot be set to "k2", as it is used for logging purposes.
+    cliprange (`float`, *optional*, defaults to `0.2`):
+        Clip range.
+    vf_coef (`float`, *optional*, defaults to `0.1`):
+        Value function coefficient.
+    cliprange_value (`float`, *optional*, defaults to `0.2`):
+        Clip range for the value function.
+    gamma (`float`, *optional*, defaults to `1.0`):
+        Discount factor.
+    lam (`float`, *optional*, defaults to `0.95`):
+        Lambda value for GAE.
+    ds3_gather_for_generation (`bool`, *optional*, defaults to `True`):
+        This setting applies to DeepSpeed ZeRO-3. If enabled, the policy model weights are gathered for generation,
+        improving generation speed. However, disabling this option allows training models that exceed the VRAM
+        capacity of a single GPU, albeit at the cost of slower generation.
+
     """
     vllm_sampling_params: Optional[Any] = field(
         default = None,
@@ -625,28 +625,15 @@ class UnslothPPOConfig(PPOConfig):
         
 pass
 
-class _UnslothPPOTrainer(BaseTrainer):
-    """"""
-
+class _UnslothPPOTrainer(Trainer):
     _tag_names = ["trl", "ppo"]
-    _name = "PPO"
-    _paper = {
-        "title": "Fine-Tuning Language Models from Human Preferences",
-        "id": "1909.08593",
-        # docstyle-ignore
-        "citation": textwrap.dedent("""\
-            @article{mziegler2019fine-tuning,
-                title        = {{Fine-Tuning Language Models from Human Preferences}},
-                author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
-                year         = 2019,
-                eprint       = {arXiv:1909.08593}
-            }"""),
-    }
 
     def __init__(
         self,
         args: PPOConfig,
-        processing_class: Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin],
+        processing_class: Optional[
+            Union[PreTrainedTokenizerBase, BaseImageProcessor, FeatureExtractionMixin, ProcessorMixin]
+        ],
         model: nn.Module,
         ref_model: Optional[nn.Module],
         reward_model: nn.Module,
@@ -659,13 +646,6 @@ class _UnslothPPOTrainer(BaseTrainer):
         callbacks: Optional[list[TrainerCallback]] = None,
         peft_config: Optional["PeftConfig"] = None,
     ) -> None:
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         if ref_model is model:
             raise ValueError(
                 "`model` and `ref_model` cannot be the same object. If you want `ref_model` to be the "
@@ -783,7 +763,7 @@ class _UnslothPPOTrainer(BaseTrainer):
         )  # note that we are calling `self.lr_scheduler.step[]` manually only at the batch level
 
         #########
-        # trainer specifics
+        ### trainer specifics
         #########
         default_callbacks = DEFAULT_CALLBACKS + get_reporting_integration_callbacks(self.args.report_to)
         self.callbacks = default_callbacks if callbacks is None else default_callbacks + callbacks
@@ -815,7 +795,7 @@ class _UnslothPPOTrainer(BaseTrainer):
             self.model.add_model_tags(self._tag_names)
 
         #########
-        # setup dataloader
+        ### setup dataloader
         #########
         self.dataloader = DataLoader(
             self.train_dataset,
@@ -1230,7 +1210,7 @@ class _UnslothPPOTrainer(BaseTrainer):
         # HF trainer specifics
         self.control = self.callback_handler.on_train_end(args, self.state, self.control)
         if self.control.should_save:
-            self._save_checkpoint(model, trial=None)
+            self._save_checkpoint(model, trial=None, metrics=None)
             self.control = self.callback_handler.on_save(self.args, self.state, self.control)
 
     def generate_completions(self, sampling: bool = False):
@@ -1305,42 +1285,74 @@ class _UnslothPPOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, list[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
+        citation = textwrap.dedent("""\
+        @article{mziegler2019fine-tuning,
+            title        = {{Fine-Tuning Language Models from Human Preferences}},
+            author       = {Daniel M. Ziegler and Nisan Stiennon and Jeffrey Wu and Tom B. Brown and Alec Radford and Dario Amodei and Paul F. Christiano and Geoffrey Irving},
+            year         = 2019,
+            eprint       = {arXiv:1909.08593}
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
+            trainer_name="PPO",
+            trainer_citation=citation,
+            paper_title="Fine-Tuning Language Models from Human Preferences",
+            paper_id="1909.08593",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
 class UnslothPPOTrainer(_UnslothPPOTrainer):
     """
-    Trainer for Proximal Policy Optimization (PPO).
-
-    For details on PPO, see the paper: [Proximal Policy Optimization
-    Algorithms](https://huggingface.co/papers/1707.06347).
-
-    Args:
-        args ([`PPOConfig`]):
-            Training arguments.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`]):
-            Class to process the data.
-        model (`torch.nn.Module`):
-            Model to be trained. This is the policy model.
-        ref_model (`torch.nn.Module`, *optional*):
-            Reference model used to compute the KL divergence. If `None`, a copy of the policy model is created.
-        reward_model (`torch.nn.Module`):
-            Reward model used to compute the rewards.
-        train_dataset ([`~datasets.Dataset`]):
-            Dataset for training.
-        value_model (`torch.nn.Module`):
-            Value model used to predict the value of a state.
-        data_collator ([`~transformers.DataCollatorWithPadding`], *optional*):
-            Data collator to batch and pad samples from the dataset. If `None`, a default data collator is created
-            using the `processing_class`.
-        eval_dataset ([`~datasets.Dataset`] or `dict` of [`~datasets.Dataset`], *optional*):
-            Dataset for evaluation.
-        optimizers (`tuple` of `torch.optim.Optimizer` and `torch.optim.lr_scheduler.LambdaLR`, *optional*, defaults to `(None, None)`):
-            Tuple containing the optimizer and the learning rate scheduler to use for training. If `None`, the
-            optimizer and the learning rate scheduler are created using the
-            [`~transformers.Trainer.create_optimizer_and_scheduler`] method.
-        callbacks (`list` of [`~transformers.TrainerCallback`], *optional*):
-            Callbacks to use during training.
-        peft_config ([`~peft.PeftConfig`], *optional*):
-            PEFT configuration to use PEFT for training. If `None`, PEFT is not used. If provided, the policy `model`
-            will be wrapped with the specified PEFT adapter.
     
     """
     def __init__(

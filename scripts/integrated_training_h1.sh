@@ -10,6 +10,12 @@
 #   ./scripts/integrated_training.sh                    # Use default config
 #   ./scripts/integrated_training.sh --config my.yaml   # Use custom config
 #
+# Environment Notes:
+#   - Qwen reward computations use conda base environment (/home/yuxin/miniconda/bin/python)
+#     This environment has the correct transformers/unsloth versions for Qwen3VL
+#   - Policy training uses project .venv environment
+#   - The script automatically switches between environments as needed
+#
 # =============================================================================
 
 set -e
@@ -90,11 +96,12 @@ NUM_REPEATS=$(yq -r '.training.num_repeats // 1' "$CONFIG_FILE")
 LABELING_MODE=$(yq -r '.training.labeling_mode // "human_labeling"' "$CONFIG_FILE")
 GPU_ID=$(yq -r '.training.gpu_id // 0' "$CONFIG_FILE")
 
-# Reward labeling (only used if labeling_mode is "reward_labeling")
+# Reward labeling (used for reward_labeling and action_chunk_advantage modes)
 REWARD_TASK_INSTRUCTION=$(yq -r '.reward.task_instruction // ""' "$CONFIG_FILE")
 REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
 REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
 REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
+REWARD_LOOK_AHEAD_WINDOW=$(yq -r '.reward.look_ahead_window // 80' "$CONFIG_FILE")
 REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
 
 # Server
@@ -234,8 +241,7 @@ start_server() {
     
     log_info "Starting server..."
     log_info "Action dim: $ACTION_DIM (include_hands=$INCLUDE_HANDS)"
-    # Use .venv/bin/python directly to ensure correct dependencies
-    nohup "$PROJECT_ROOT/.venv/bin/python" scripts/serve_policy.py \
+    nohup uv run scripts/serve_policy.py \
         --training-epoch "$EPOCH" \
         policy:checkpoint \
         --policy.config="$CONFIG_NAME" \
@@ -492,17 +498,56 @@ convert_epoch_data() {
     log_info "Labeling mode: $LABELING_MODE"
     log_info "Action dim: $ACTION_DIM (include_hands=$INCLUDE_HANDS)"
     
-    # For epoch 0, only keep good rollouts (collected via warmup checkpoint trained on teleoperation data)
+    # Determine effective labeling mode
+    local effective_labeling_mode="$LABELING_MODE"
+    
+    # For epoch 0, use human_labeling (warmup epoch - all good episodes)
     if [ "$EPOCH" -eq 0 ]; then
-        log_info "Epoch 0: Filtering to keep only good rollouts (Advantage=True)"
+        log_info "Epoch 0 (Warmup): Using human_labeling mode (all episodes are baseline data)"
+        log_info "  Action chunk advantages will be applied from epoch 1 onwards"
+        effective_labeling_mode="human_labeling"
     fi
     
-    # Build convert command
+    # Special handling for action_chunk_advantage mode (only for epoch 1+)
+    # Need parquet files to compute advantages, so do two-phase conversion if needed
+    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+        local lerobot_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
+        local parquet_dir="$lerobot_dir/data/chunk-000"
+        
+        # Check if parquet files exist (from previous run or phase 1)
+        if [ ! -d "$parquet_dir" ] || [ -z "$(ls -A "$parquet_dir"/*.parquet 2>/dev/null)" ]; then
+            log_info "ACTION CHUNK ADVANTAGE: First-time conversion"
+            log_info "  Phase 1: Creating parquet files (without advantages)..."
+            
+            # Do initial conversion without advantages
+            local initial_convert_cmd="./scripts/convert_h1_data.sh \
+                --task-name \"$TASK_NAME\" \
+                --task-description \"$TASK_DESCRIPTION\" \
+                --epoch \"$EPOCH\" \
+                --labeling-mode \"none\" \
+                --num-repeats \"$NUM_REPEATS\" \
+                --config-name \"$CONFIG_NAME\" \
+                --data-dir \"$raw_dir\" \
+                --action-dim \"$ACTION_DIM\""
+            
+            if [ "$EPOCH" -eq 0 ]; then
+                initial_convert_cmd="$initial_convert_cmd --filter-good-only"
+            fi
+            
+            eval "$initial_convert_cmd"
+            
+            log_info "  Phase 1 complete: Parquet files created"
+        else
+            log_info "ACTION CHUNK ADVANTAGE: Parquet files already exist"
+        fi
+    fi
+    
+    # Build convert command (use convert_h1_data.sh for H1 robot)
     local convert_cmd="./scripts/convert_h1_data.sh \
         --task-name \"$TASK_NAME\" \
         --task-description \"$TASK_DESCRIPTION\" \
         --epoch \"$EPOCH\" \
-        --labeling-mode \"$LABELING_MODE\" \
+        --labeling-mode \"$effective_labeling_mode\" \
         --num-repeats \"$NUM_REPEATS\" \
         --config-name \"$CONFIG_NAME\" \
         --data-dir \"$raw_dir\" \
@@ -513,8 +558,87 @@ convert_epoch_data() {
         convert_cmd="$convert_cmd --filter-good-only"
     fi
     
-    # Add reward labeling parameters if in reward_labeling mode
-    if [ "$LABELING_MODE" = "reward_labeling" ]; then
+    # Compute action chunk advantages if needed (after parquet files exist)
+    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+        local parquet_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH/data/chunk-000"
+        
+        if [ -d "$parquet_dir" ]; then
+            log_info "  Phase 2: Computing action chunk advantages..."
+            
+            # Check if checkpoint path is set
+            if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
+                log_error "reward.checkpoint_path not set in config file!"
+                return 1
+            fi
+            
+            if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
+                log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+                return 1
+            fi
+            
+            # Use the miniconda base environment Python that has Qwen dependencies
+            # (your notebooks use this environment with proper transformers/unsloth versions)
+            QWEN_PYTHON="/home/yuxin/miniconda/bin/python"
+            log_info "Switching to conda base environment for Qwen reward computation"
+            log_info "  Python: $QWEN_PYTHON"
+            
+            # Export environment variables
+            export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
+            export CUDA_VISIBLE_DEVICES=$GPU_ID
+            
+            # Run advantage computation (will use cache if already computed)
+            log_info "  Running compute_action_chunk_advantages.py with conda base..."
+            $QWEN_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
+                --data-dir "$parquet_dir" \
+                --task-instruction "$REWARD_TASK_INSTRUCTION" \
+                --checkpoint-path "$REWARD_CHECKPOINT_PATH" \
+                --max-frames "$REWARD_MAX_FRAMES" \
+                --look-ahead-window "$REWARD_LOOK_AHEAD_WINDOW" \
+                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD"
+            
+            log_info "  Switching back to project .venv for training"
+            
+            log_info "  Phase 2 complete: Advantages computed"
+            
+            # Copy advantages to raw/ directory with HDF5-compatible names
+            # Parquet uses episode_000000, HDF5 uses episode_0
+            log_info "  Copying advantages to raw/ directory..."
+            for adv_file in "$parquet_dir"/episode_*_action_chunk_advantages.pkl; do
+                if [ -f "$adv_file" ]; then
+                    # Convert episode_000000_action_chunk_advantages.pkl -> episode_0_action_chunk_advantages.pkl
+                    basename_file=$(basename "$adv_file")
+                    # Extract the number (e.g., 000000 from episode_000000_action_chunk_advantages.pkl)
+                    if [[ $basename_file =~ episode_([0-9]+)_action_chunk_advantages\.pkl ]]; then
+                        episode_num="${BASH_REMATCH[1]}"
+                        # Remove leading zeros
+                        episode_num_stripped=$((10#$episode_num))
+                        new_name="episode_${episode_num_stripped}_action_chunk_advantages.pkl"
+                        cp "$adv_file" "$raw_dir/$new_name"
+                        log_info "    Copied $basename_file -> $new_name"
+                    fi
+                fi
+            done
+            
+            # Save norm_stats.json to temp before deleting directory
+            local norm_stats_file="$lerobot_dir/norm_stats.json"
+            local temp_norm_stats="/tmp/openpi_norm_stats_epoch${EPOCH}.json"
+            if [ -f "$norm_stats_file" ]; then
+                log_info "  Saving norm_stats.json to temp location..."
+                cp "$norm_stats_file" "$temp_norm_stats"
+            fi
+            
+            # Clean up old parquet dataset to re-convert with advantages
+            log_info "  Phase 3: Re-converting with advantages..."
+            rm -rf "$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
+        else
+            log_error "Parquet directory not found: $parquet_dir"
+            log_error "Phase 1 conversion may have failed"
+            return 1
+        fi
+    fi
+    
+    # Add reward labeling parameters if in reward_labeling or action_chunk_advantage mode
+    if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
         # Check if QWEN_REWARD_CHECKPOINT_PATH is set
         if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
             log_error "reward.checkpoint_path not set in config file!"
@@ -528,33 +652,33 @@ convert_epoch_data() {
             return 1
         fi
         
-        # Run setup script to ensure Qwen dependencies are installed
-        # (only runs once per session, checks are inside the script)
-        log_info "Ensuring Qwen reward dependencies are installed..."
-        if [ -f "$PROJECT_ROOT/scripts/setup_qwen_reward.sh" ]; then
-            bash "$PROJECT_ROOT/scripts/setup_qwen_reward.sh"
-        else
-            log_warn "Setup script not found, assuming dependencies are already installed"
-        fi
-        
-        # Apply unsloth patch if needed
-        log_info "Checking for unsloth_zoo bug and applying patch if needed..."
-        if [ -f "$PROJECT_ROOT/scripts/patch_unsloth.py" ]; then
-            uv run python "$PROJECT_ROOT/scripts/patch_unsloth.py" || log_warn "Failed to apply unsloth patch, but continuing..."
-        fi
+        # Note: We use miniconda Python for Qwen operations
+        # No need to install Qwen dependencies to .venv
         
         # Export checkpoint path for the convert script
         export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
+        export REWARD_LOOK_AHEAD_WINDOW="$REWARD_LOOK_AHEAD_WINDOW"
         
         # Set CUDA_VISIBLE_DEVICES for reward labeling (use same GPU as training)
         export CUDA_VISIBLE_DEVICES=$GPU_ID
         
-        log_info "Using Qwen-based reward labeling with:"
-        log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
-        log_info "  Max frames: $REWARD_MAX_FRAMES"
-        log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
-        log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
-        log_info "  GPU: $GPU_ID"
+        if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+            log_info "Using action chunk advantage labeling with:"
+            log_info "  Mode: Fine-grained per-frame advantages"
+            log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            log_info "  Max frames: $REWARD_MAX_FRAMES"
+            log_info "  Look-ahead window: $REWARD_LOOK_AHEAD_WINDOW frames"
+            log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (top ${REWARD_ADVANTAGE_THRESHOLD} percentile)"
+            log_info "  GPU: $GPU_ID"
+        else
+            log_info "Using Qwen-based reward labeling with:"
+            log_info "  Mode: Episode-level advantages"
+            log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            log_info "  Max frames: $REWARD_MAX_FRAMES"
+            log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
+            log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
+            log_info "  GPU: $GPU_ID"
+        fi
         
         convert_cmd="$convert_cmd \
             --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \
@@ -565,6 +689,33 @@ convert_epoch_data() {
     
     # Execute conversion
     eval "$convert_cmd"
+    
+    # Restore norm_stats.json from temp if it was saved (for action_chunk_advantage mode)
+    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+        local lerobot_data_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
+        local temp_norm_stats="/tmp/openpi_norm_stats_epoch${EPOCH}.json"
+        local norm_stats_file="$lerobot_data_dir/norm_stats.json"
+        
+        if [ -f "$temp_norm_stats" ]; then
+            log_info "  Restoring norm_stats.json from temp..."
+            cp "$temp_norm_stats" "$norm_stats_file"
+            rm -f "$temp_norm_stats"
+            log_info "    Restored to: $norm_stats_file"
+        fi
+    fi
+    
+    # Final message for action_chunk_advantage mode
+    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+        # Clean up temporary advantage files from raw/ directory
+        rm -f "$raw_dir"/*_action_chunk_advantages.pkl 2>/dev/null || true
+        
+        log_info "  Phase 3 complete: Dataset created with action chunk advantages"
+        log_info ""
+        log_info "  ✓ Three-phase conversion complete!"
+        log_info "    1. Parquet files created from HDF5"
+        log_info "    2. Action chunk advantages computed"
+        log_info "    3. Dataset re-created with advantages"
+    fi
 }
 
 train_epoch() {

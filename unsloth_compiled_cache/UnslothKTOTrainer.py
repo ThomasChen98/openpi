@@ -1,8 +1,8 @@
 """
-2025.12.7
 2026.1.2
-4.57.3
-0.24.0
+2026.1.2
+4.57.1
+0.22.2
 __UNSLOTH_VERSIONING__
 """
 
@@ -27,7 +27,7 @@ import torch
 import torch.nn as nn
 from torch.nn import functional as F
 from typing import Any, List, Optional, Tuple, Union, Dict, Set, Callable
-from trl.trainer.kto_trainer import (Any, AutoModelForCausalLM, BaseImageProcessor, BaseTrainer, Callable, DPODataCollatorWithPadding, DataCollator, DataLoader, Dataset, EvalLoopOutput, F, FeatureExtractionMixin, KTOConfig, KTOTrainer, Literal, Optional, PartialState, Path, PeftModel, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, SequentialSampler, TrainerCallback, TrainingArguments, Union, _get_kl_dataset, _process_tokens, _tokenize, autocast, concatenate_datasets, contextmanager, create_reference_model, defaultdict, disable_dropout_in_model, has_length, inspect, is_comet_available, is_liger_kernel_available, is_peft_available, is_wandb_available, itemgetter, log_table_to_comet_experiment, logger, logging, maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset, nn, np, nullcontext, os, pad_to_length, pd, peft_module_casting_to_bf16, prepare_deepspeed, prepare_model_for_kbit_training, random, selective_log_softmax, textwrap, torch, tqdm, wandb, warnings, F, Optional, PeftModel, PreTrainedModel, is_peft_available, logger, os, torch)
+from trl.trainer.kto_trainer import (Any, AutoModelForCausalLM, BaseImageProcessor, Callable, DPODataCollatorWithPadding, DataCollator, DataLoader, Dataset, EvalLoopOutput, F, FeatureExtractionMixin, KTOConfig, KTOTrainer, Literal, Optional, PartialState, Path, PeftModel, PreTrainedModel, PreTrainedTokenizerBase, ProcessorMixin, SequentialSampler, Trainer, TrainerCallback, TrainingArguments, Union, _get_kl_dataset, _process_tokens, _tokenize, autocast, concatenate_datasets, contextmanager, create_reference_model, defaultdict, disable_dropout_in_model, generate_model_card, get_comet_experiment_url, has_length, inspect, is_comet_available, is_liger_kernel_available, is_peft_available, is_wandb_available, itemgetter, log_table_to_comet_experiment, logger, logging, maybe_apply_chat_template, maybe_extract_prompt, maybe_unpair_preference_dataset, nn, np, nullcontext, os, pad_to_length, pd, peft_module_casting_to_bf16, prepare_deepspeed, prepare_model_for_kbit_training, random, selective_log_softmax, textwrap, torch, tqdm, F, Optional, PeftModel, PreTrainedModel, Trainer, is_peft_available, logger, os, torch)
 
 
 import os
@@ -214,71 +214,71 @@ def align_logprobs_with_mask(
 class UnslothKTOConfig(KTOConfig):
     """
     
-    Configuration class for the [`KTOTrainer`].
+Configuration class for the [`KTOTrainer`].
 
-    This class includes only the parameters that are specific to KTO training. For a full list of training arguments,
-    please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
-    differ from those in [`~transformers.TrainingArguments`].
+This class includes only the parameters that are specific to KTO training. For a full list of training arguments,
+please refer to the [`~transformers.TrainingArguments`] documentation. Note that default values in this class may
+differ from those in [`~transformers.TrainingArguments`].
 
-    Using [`~transformers.HfArgumentParser`] we can turn this class into
-    [argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
-    command line.
+Using [`~transformers.HfArgumentParser`] we can turn this class into
+[argparse](https://docs.python.org/3/library/argparse#module-argparse) arguments that can be specified on the
+command line.
 
-    Parameters:
-        max_length (`int` or `None`, *optional*, defaults to `1024`):
-            Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
-            to use the default data collator.
-        max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
-            Maximum length of the prompt. This argument is required if you want to use the default data collator.
-        max_completion_length (`int`, *optional*):
-            Maximum length of the completion. This argument is required if you want to use the default data collator
-            and your model is an encoder-decoder.
-        beta (`float`, *optional*, defaults to `0.1`):
-            Parameter controlling the deviation from the reference model. Higher β means less deviation from the
-            reference model.
-        loss_type (`str`, *optional*, defaults to `"kto"`):
-            Type of loss to use. Possible values are:
+Parameters:
+    max_length (`int` or `None`, *optional*, defaults to `1024`):
+        Maximum length of the sequences (prompt + completion) in the batch. This argument is required if you want
+        to use the default data collator.
+    max_prompt_length (`int` or `None`, *optional*, defaults to `512`):
+        Maximum length of the prompt. This argument is required if you want to use the default data collator.
+    max_completion_length (`int` or `None`, *optional*, defaults to `None`):
+        Maximum length of the completion. This argument is required if you want to use the default data collator
+        and your model is an encoder-decoder.
+    beta (`float`, *optional*, defaults to `0.1`):
+        Parameter controlling the deviation from the reference model. Higher β means less deviation from the
+        reference model.
+    loss_type (`str`, *optional*, defaults to `"kto"`):
+        Type of loss to use. Possible values are:
 
-                - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
-                - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the
-                  [APO](https://huggingface.co/papers/2408.06266) paper.
+            - `"kto"`: KTO loss from the [KTO](https://huggingface.co/papers/2402.01306) paper.
+            - `"apo_zero_unpaired"`: Unpaired variant of APO-zero loss from the
+              [APO](https://huggingface.co/papers/2408.06266) paper.
 
-        desirable_weight (`float`, *optional*, defaults to `1.0`):
-            Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
-        undesirable_weight (`float`, *optional*, defaults to `1.0`):
-            Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
-        label_pad_token_id (`int`, *optional*, defaults to `-100`):
-            Label pad token id. This argument is required if you want to use the default data collator.
-        padding_value (`int`, *optional*):
-            Padding value to use. If `None`, the padding value of the tokenizer is used.
-        truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
-            Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
-            This argument is required if you want to use the default data collator.
-        generate_during_eval (`bool`, *optional*, defaults to `False`):
-            If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
-            during evaluation.
-        is_encoder_decoder (`bool`, *optional*):
-            When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
-            you need to specify if the model returned by the callable is an encoder-decoder model.
-        precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
-            Whether to precompute reference model log probabilities for training and evaluation datasets. This is
-            useful when training without the reference model to reduce the total GPU memory needed.
-        model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
-            string.
-        ref_model_init_kwargs (`dict[str, Any]`, *optional*):
-            Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
-            from a string.
-        dataset_num_proc: (`int`, *optional*):
-            Number of processes to use for processing the dataset.
-        disable_dropout (`bool`, *optional*, defaults to `True`):
-            Whether to disable dropout in the model and reference model.
-        use_liger_loss (`bool`, *optional*, defaults to `False`):
-            Whether to use Liger loss. It requires liger-kernel to be installed.
-        base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
-            Name of the attribute in the model that contains the base model. This is used to get the base model from
-            the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
-    
+    desirable_weight (`float`, *optional*, defaults to `1.0`):
+        Desirable losses are weighed by this factor to counter unequal number of desirable and undesirable paris.
+    undesirable_weight (`float`, *optional*, defaults to `1.0`):
+        Undesirable losses are weighed by this factor to counter unequal number of desirable and undesirable pairs.
+    label_pad_token_id (`int`, *optional*, defaults to `-100`):
+        Label pad token id. This argument is required if you want to use the default data collator.
+    padding_value (`int` or `None`, *optional*, defaults to `None`):
+        Padding value to use. If `None`, the padding value of the tokenizer is used.
+    truncation_mode (`str`, *optional*, defaults to `"keep_end"`):
+        Truncation mode to use when the prompt is too long. Possible values are `"keep_end"` or `"keep_start"`.
+        This argument is required if you want to use the default data collator.
+    generate_during_eval (`bool`, *optional*, defaults to `False`):
+        If `True`, generates and logs completions from both the model and the reference model to W&B or Comet
+        during evaluation.
+    is_encoder_decoder (`bool` or `None`, *optional*, defaults to `None`):
+        When using the `model_init` argument (callable) to instantiate the model instead of the `model` argument,
+        you need to specify if the model returned by the callable is an encoder-decoder model.
+    precompute_ref_log_probs (`bool`, *optional*, defaults to `False`):
+        Whether to precompute reference model log probabilities for training and evaluation datasets. This is
+        useful when training without the reference model to reduce the total GPU memory needed.
+    model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the model from a
+        string.
+    ref_model_init_kwargs (`dict[str, Any]` or `None`, *optional*, defaults to `None`):
+        Keyword arguments to pass to `AutoModelForCausalLM.from_pretrained` when instantiating the reference model
+        from a string.
+    dataset_num_proc: (`int` or `None`, *optional*, defaults to `None`):
+        Number of processes to use for processing the dataset.
+    disable_dropout (`bool`, *optional*, defaults to `True`):
+        Whether to disable dropout in the model and reference model.
+    use_liger_loss (`bool`, *optional*, defaults to `False`):
+        Whether to use Liger loss. It requires liger-kernel to be installed.
+    base_model_attribute_name (`str`, *optional*, defaults to `"model"`):
+        Name of the attribute in the model that contains the base model. This is used to get the base model from
+        the model when the model does not have a `get_decoder` method in the case when `use_liger_loss` is `True`.
+
     """
     vllm_sampling_params: Optional[Any] = field(
         default = None,
@@ -617,23 +617,53 @@ class UnslothKTOConfig(KTOConfig):
         self.max_seq_length = max_seq_length
 pass
 
-class _UnslothKTOTrainer(BaseTrainer):
-    r""""""
+class _UnslothKTOTrainer(Trainer):
+    r"""
+    Initialize KTOTrainer.
+
+    Args:
+        model (`transformers.PreTrainedModel`):
+            The model to train, preferably an `AutoModelForSequenceClassification`.
+        ref_model (`PreTrainedModelWrapper`):
+            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+            and loss. If no reference model is provided, the trainer will create a reference model with the same
+            architecture as the model to be optimized.
+        args (`KTOConfig`):
+            The arguments to use for training.
+        train_dataset (`datasets.Dataset`):
+            The dataset to use for training.
+        eval_dataset (`datasets.Dataset`):
+            The dataset to use for evaluation.
+        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+            Processing class used to process the data. If provided, will be used to automatically process the inputs
+            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+            reuse the fine-tuned model.
+        data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
+            The data collator to use for training. If None is specified, the default data collator
+            (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+            sequences in the batch, given a dataset of paired sequences.
+        model_init (`Callable[[], transformers.PreTrainedModel]`):
+            The model initializer to use for training. If None is specified, the default model initializer will be
+            used.
+        callbacks (`list[transformers.TrainerCallback]`):
+            The callbacks to use for training.
+        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+            The optimizer and scheduler to use for training.
+        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+            The function to use to preprocess the logits before computing the metrics.
+        peft_config (`dict`, defaults to `None`):
+            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+            a PEFT model.
+        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
+            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+            metric values.
+        model_adapter_name (`str`, defaults to `None`):
+            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
+        ref_adapter_name (`str`, defaults to `None`):
+            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+    """
 
     _tag_names = ["trl", "kto"]
-    _name = "KTO"
-    _paper = {
-        "title": "KTO: Model Alignment as Prospect Theoretic Optimization",
-        "id": "2402.01306",
-        # docstyle-ignore
-        "citation": textwrap.dedent("""\
-            @article{ethayarajh2024kto,
-                title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
-                author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
-                year         = 2024,
-                eprint       = {arXiv:2402.01306},
-            }"""),
-    }
 
     def __init__(
         self,
@@ -655,13 +685,6 @@ class _UnslothKTOTrainer(BaseTrainer):
         model_adapter_name: Optional[str] = None,
         ref_adapter_name: Optional[str] = None,
     ):
-        if not os.environ.get("TRL_EXPERIMENTAL_SILENCE"):
-            warnings.warn(
-                "This trainer will soon be moved to trl.experimental and is a candidate for removal. If you rely on "
-                "it and want it to remain, please share your comments here: "
-                "https://github.com/huggingface/trl/issues/4223. Silence this warning by setting environment variable "
-                "TRL_EXPERIMENTAL_SILENCE=1."
-            )
         if type(args) is TrainingArguments:
             raise ValueError("Please use `KTOConfig` instead TrainingArguments.")
 
@@ -677,16 +700,16 @@ class _UnslothKTOTrainer(BaseTrainer):
             raise ValueError("You passed model_kwargs to the KTOTrainer. But your model is already instantiated.")
         else:
             model_init_kwargs = args.model_init_kwargs
-            dtype = model_init_kwargs.get("dtype")
-            if dtype is not None:
+            torch_dtype = model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-                model_init_kwargs["dtype"] = dtype
+                model_init_kwargs["torch_dtype"] = torch_dtype
 
         if args.ref_model_init_kwargs is None:
             ref_model_init_kwargs = {}
@@ -696,16 +719,16 @@ class _UnslothKTOTrainer(BaseTrainer):
             )
         else:
             ref_model_init_kwargs = args.ref_model_init_kwargs
-            dtype = ref_model_init_kwargs.get("dtype")
-            if dtype is not None:
+            torch_dtype = ref_model_init_kwargs.get("torch_dtype")
+            if torch_dtype is not None:
                 # Convert to `torch.dtype` if an str is passed
-                if isinstance(dtype, str) and dtype != "auto":
-                    dtype = getattr(torch, dtype)
-                if dtype != "auto" and not isinstance(dtype, torch.dtype):
+                if isinstance(torch_dtype, str) and torch_dtype != "auto":
+                    torch_dtype = getattr(torch, torch_dtype)
+                if torch_dtype != "auto" and not isinstance(torch_dtype, torch.dtype):
                     raise ValueError(
-                        f"Invalid `dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {dtype}."
+                        f"Invalid `torch_dtype` passed to the KTOConfig. Expected a string with either `torch.dtype` or 'auto', but got {torch_dtype}."
                     )
-                ref_model_init_kwargs["dtype"] = dtype
+                ref_model_init_kwargs["torch_dtype"] = torch_dtype
 
         if isinstance(model, str):
             model = AutoModelForCausalLM.from_pretrained(model, **model_init_kwargs)
@@ -1332,12 +1355,6 @@ class _UnslothKTOTrainer(BaseTrainer):
             average_log_prob:
                 If True, return the average log probability per (non-masked) token. Otherwise, return the sum of the
                 log probabilities of the (non-masked) tokens.
-            label_pad_token_id:
-                The label value to ignore when computing log probabilities.
-            is_encoder_decoder:
-                Whether the model is an encoder-decoder model. If True, the labels are not shifted and the logits are
-                assumed to already be aligned with the labels. If False, the labels are shifted to the right by one
-                position, and the logits are assumed to be aligned with the shifted labels.
 
         Returns:
             A tensor of shape (batch_size,) containing the average/sum log probabilities of the given labels under the
@@ -1960,7 +1977,7 @@ class _UnslothKTOTrainer(BaseTrainer):
         Args:
             logs (`dict[str, float]`):
                 The values to log.
-            start_time (`float`, *optional*):
+            start_time (`float` or `None`, *optional*, defaults to `None`):
                 Start time of the training.
         """
         # logs either has 'loss' or 'eval_loss'
@@ -1996,52 +2013,118 @@ class _UnslothKTOTrainer(BaseTrainer):
             model_name = self.args.hub_model_id.split("/")[-1]
         self.create_model_card(model_name=model_name)
         super()._save_checkpoint(model, trial)
+
+    def create_model_card(
+        self,
+        model_name: Optional[str] = None,
+        dataset_name: Optional[str] = None,
+        tags: Union[str, list[str], None] = None,
+    ):
+        """
+        Creates a draft of a model card using the information available to the `Trainer`.
+
+        Args:
+            model_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the model.
+            dataset_name (`str` or `None`, *optional*, defaults to `None`):
+                Name of the dataset used for training.
+            tags (`str`, `list[str]` or `None`, *optional*, defaults to `None`):
+                Tags to be associated with the model card.
+        """
+        if not self.is_world_process_zero():
+            return
+
+        if hasattr(self.model.config, "_name_or_path") and not os.path.isdir(self.model.config._name_or_path):
+            base_model = self.model.config._name_or_path
+        else:
+            base_model = None
+
+        # normalize `tags` to a mutable set
+        if tags is None:
+            tags = set()
+        elif isinstance(tags, str):
+            tags = {tags}
+        else:
+            tags = set(tags)
+
+        if hasattr(self.model.config, "unsloth_version"):
+            tags.add("unsloth")
+
+        if "JOB_ID" in os.environ:
+            tags.add("hf_jobs")
+
+        tags.update(self._tag_names)
+
+        # docstyle-ignore
+        citation = textwrap.dedent("""\
+        @article{ethayarajh2024kto,
+            title        = {{KTO: Model Alignment as Prospect Theoretic Optimization}},
+            author       = {Kawin Ethayarajh and Winnie Xu and Niklas Muennighoff and Dan Jurafsky and Douwe Kiela},
+            year         = 2024,
+            eprint       = {arXiv:2402.01306},
+        }""")
+
+        model_card = generate_model_card(
+            base_model=base_model,
+            model_name=model_name,
+            hub_model_id=self.hub_model_id,
+            dataset_name=dataset_name,
+            tags=tags,
+            wandb_url=wandb.run.url if is_wandb_available() and wandb.run is not None else None,
+            comet_url=get_comet_experiment_url(),
+            trainer_name="KTO",
+            trainer_citation=citation,
+            paper_title="KTO: Model Alignment as Prospect Theoretic Optimization",
+            paper_id="2402.01306",
+        )
+
+        model_card.save(os.path.join(self.args.output_dir, "README.md"))
 class UnslothKTOTrainer(_UnslothKTOTrainer):
     """
     
-    Initialize KTOTrainer.
+Initialize KTOTrainer.
 
-    Args:
-        model ([`~transformers.PreTrainedModel`]):
-            The model to train, preferably an [`~transformers.AutoModelForSequenceClassification`].
-        ref_model ([`PreTrainedModelWrapper`]):
-            Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
-            and loss. If no reference model is provided, the trainer will create a reference model with the same
-            architecture as the model to be optimized.
-        args ([`KTOConfig`]):
-            The arguments to use for training.
-        train_dataset ([`~datasets.Dataset`]):
-            The dataset to use for training.
-        eval_dataset ([`~datasets.Dataset`]):
-            The dataset to use for evaluation.
-        processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*):
-            Processing class used to process the data. If provided, will be used to automatically process the inputs
-            for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
-            reuse the fine-tuned model.
-        data_collator ([`~transformers.DataCollator`], *optional*):
-            The data collator to use for training. If None is specified, the default data collator
-            ([`DPODataCollatorWithPadding`]) will be used which will pad the sequences to the maximum length of the
-            sequences in the batch, given a dataset of paired sequences.
-        model_init (`Callable[[], transformers.PreTrainedModel]`):
-            The model initializer to use for training. If None is specified, the default model initializer will be
-            used.
-        callbacks (`list[transformers.TrainerCallback]`):
-            The callbacks to use for training.
-        optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
-            The optimizer and scheduler to use for training.
-        preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
-            The function to use to preprocess the logits before computing the metrics.
-        peft_config (`dict`, defaults to `None`):
-            The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
-            a PEFT model.
-        compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
-            The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
-            metric values.
-        model_adapter_name (`str`, defaults to `None`):
-            Name of the train target PEFT adapter, when using LoRA with multiple adapters.
-        ref_adapter_name (`str`, defaults to `None`):
-            Name of the reference PEFT adapter, when using LoRA with multiple adapters.
-    
+Args:
+    model (`transformers.PreTrainedModel`):
+        The model to train, preferably an `AutoModelForSequenceClassification`.
+    ref_model (`PreTrainedModelWrapper`):
+        Hugging Face transformer model with a casual language modelling head. Used for implicit reward computation
+        and loss. If no reference model is provided, the trainer will create a reference model with the same
+        architecture as the model to be optimized.
+    args (`KTOConfig`):
+        The arguments to use for training.
+    train_dataset (`datasets.Dataset`):
+        The dataset to use for training.
+    eval_dataset (`datasets.Dataset`):
+        The dataset to use for evaluation.
+    processing_class ([`~transformers.PreTrainedTokenizerBase`], [`~transformers.BaseImageProcessor`], [`~transformers.FeatureExtractionMixin`] or [`~transformers.ProcessorMixin`], *optional*, defaults to `None`):
+        Processing class used to process the data. If provided, will be used to automatically process the inputs
+        for the model, and it will be saved along the model to make it easier to rerun an interrupted training or
+        reuse the fine-tuned model.
+    data_collator (`transformers.DataCollator`, *optional*, defaults to `None`):
+        The data collator to use for training. If None is specified, the default data collator
+        (`DPODataCollatorWithPadding`) will be used which will pad the sequences to the maximum length of the
+        sequences in the batch, given a dataset of paired sequences.
+    model_init (`Callable[[], transformers.PreTrainedModel]`):
+        The model initializer to use for training. If None is specified, the default model initializer will be
+        used.
+    callbacks (`list[transformers.TrainerCallback]`):
+        The callbacks to use for training.
+    optimizers (`tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR]`):
+        The optimizer and scheduler to use for training.
+    preprocess_logits_for_metrics (`Callable[[torch.Tensor, torch.Tensor], torch.Tensor]`):
+        The function to use to preprocess the logits before computing the metrics.
+    peft_config (`dict`, defaults to `None`):
+        The PEFT configuration to use for training. If you pass a PEFT configuration, the model will be wrapped in
+        a PEFT model.
+    compute_metrics (`Callable[[EvalPrediction], dict]`, *optional*):
+        The function to use to compute the metrics. Must take a `EvalPrediction` and return a dictionary string to
+        metric values.
+    model_adapter_name (`str`, defaults to `None`):
+        Name of the train target PEFT adapter, when using LoRA with multiple adapters.
+    ref_adapter_name (`str`, defaults to `None`):
+        Name of the reference PEFT adapter, when using LoRA with multiple adapters.
+
     """
     def __init__(
         self,

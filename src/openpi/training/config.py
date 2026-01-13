@@ -411,7 +411,7 @@ class LeRobotH1LocalDataConfig(DataConfigFactory):
 
         return dataclasses.replace(
             self.base_config or DataConfig(),
-            repo_id=self.data_dir,  # Use local directory as repo_id
+            repo_id=self.data_dir,  # Use local directory path as repo_id
             asset_id=self.data_dir,  # Use data_dir as asset_id for consistency
             norm_stats=norm_stats,
             use_quantile_norm=model_config.model_type != ModelType.PI0,
