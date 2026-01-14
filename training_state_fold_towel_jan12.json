@@ -5,6 +5,6 @@
   "epoch": 4,
   "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_jan12/epoch_3/1199",
   "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/fold_towel_jan12/1199",
-  "status": "interrupted",
-  "updated_at": "2026-01-13T18:59:01-08:00"
+  "status": "collecting_data",
+  "updated_at": "2026-01-14T01:20:39-08:00"
 }
