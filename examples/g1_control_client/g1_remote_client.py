@@ -8,24 +8,21 @@ Uses DIRECT JOINT ANGLE control (no VR retargeting) for both arms and hands.
 Architecture:
     - Arms: Controlled via DDS (unitree_sdk2py) - direct joint angles
     - Hands: Dex3 hands controlled via DDS - direct joint angles
-    - Locomotion: LocoClient for Move commands (hybrid control)
+    - Waist: Direct yaw control via DDS
+    - Locomotion: LocoClient for Move commands (wireless controller forwarding only)
     - Camera: Head camera from robot via ZMQ (image_server)
 
-State Space (32 dims):
+State Space (29 dims):
     [0:28]  qpos        - arm (14) + hand (14) joint positions
-    [28:31] rpy         - roll, pitch, yaw from IMU (radians)
-    [31]    yaw_rate    - yaw angular velocity from gyroscope
+    [28]    waist_yaw   - waist yaw joint position
 
-Action Space (32 dims):
+Action Space (29 dims):
     [0:28]  upper_body  - arm (14) + hand (14) joint targets
-    [28]    vx          - forward/backward velocity command
-    [29]    vy          - strafe left/right velocity command
-    [30]    vyaw        - turn (yaw angular velocity) command
-    [31]    padding     - zero (ignored)
+    [28]    waist_yaw   - waist yaw joint target
 
-Hybrid Locomotion Control:
-    - If policy outputs non-zero vx/vy/vyaw (threshold 0.01), use policy commands
-    - Otherwise, forward wireless controller joystick input for locomotion
+Locomotion Control:
+    - Wireless controller joystick input forwarded to LocoClient
+    - Policy does NOT output locomotion commands
     - Velocity scaling: 0.3 (same as teleop)
 
 Usage:
@@ -60,7 +57,6 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pinocchio as pin
 import websockets
 from websockets.server import serve
 
@@ -316,8 +312,8 @@ class G1RemoteClient:
     - Policy inference from OpenPi server
     - WebSocket command server for viz client
     - Head camera streaming from robot
-    - Direct joint angle control for arms and Dex3 hands
-    - Hybrid locomotion control
+    - Direct joint angle control for arms, Dex3 hands, and waist yaw
+    - Wireless controller locomotion forwarding
     """
 
     def __init__(
@@ -384,9 +380,9 @@ class G1RemoteClient:
             self.hand_ctrl = None
             logger.warning("Hand controller not available")
         
-        # Initialize locomotion client for hybrid control
+        # Initialize locomotion client for wireless controller forwarding
         if self.motion_mode and LOCO_AVAILABLE:
-            logger.info("Initializing locomotion client...")
+            logger.info("Initializing locomotion client (wireless controller forwarding)...")
             try:
                 self.loco_client = LocoClient()
                 self.loco_client.SetTimeout(0.0001)
@@ -493,56 +489,17 @@ class G1RemoteClient:
             logger.error(f"Failed to connect to policy server: {e}")
             return False
 
-    def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
-        """
-        Compute gravity compensation torques for given joint positions using RNEA.
-        
-        This computes the torques needed to hold the robot at the given pose
-        (counteracting gravity), which should be added as feedforward to PD control.
-        
-        Uses the IK solver's reduced robot model (14 DOF arms only).
-        
-        Args:
-            joint_positions: (14,) array of arm joint positions
-            
-        Returns:
-            gravity_torques: (14,) array of feedforward torques for gravity compensation
-        """
-        # TEMPORARILY DISABLED - returning zeros until gravity comp is debugged
-        # The increased PD gains should provide sufficient gravity resistance
-        return np.zeros(14, dtype=np.float32)
-        
-        # TODO: Re-enable after debugging
-        # if self.ik_solver is None:
-        #     return np.zeros(14, dtype=np.float32)
-        # 
-        # # Use Pinocchio RNEA (Recursive Newton-Euler Algorithm) to compute inverse dynamics
-        # # With zero velocity and zero acceleration, this gives us pure gravity compensation
-        # zero_velocity = np.zeros(self.ik_solver.reduced_robot.model.nv)
-        # zero_acceleration = np.zeros(self.ik_solver.reduced_robot.model.nv)
-        # 
-        # gravity_torques = pin.rnea(
-        #     self.ik_solver.reduced_robot.model,
-        #     self.ik_solver.reduced_robot.data,
-        #     joint_positions,
-        #     zero_velocity,
-        #     zero_acceleration
-        # )
-        # 
-        # return gravity_torques
-
     def get_observation(self) -> dict:
         """
-        Construct 32-dim observation for policy inference.
+        Construct 29-dim observation for policy inference.
         
-        State format (32 dims):
+        State format (29 dims):
             [0:14]  left_arm    - left arm joint positions
-            [14:28] right_arm   - right arm + hand joint positions  
-            [28:31] rpy         - roll, pitch, yaw from IMU
-            [31]    yaw_rate    - yaw angular velocity from gyroscope
+            [14:28] hands       - hand joint positions (left 7 + right 7)
+            [28]    waist_yaw   - waist yaw joint position
         
         Returns:
-            dict with "image", "state" (32 dims), and "prompt"
+            dict with "image", "state" (29 dims), and "prompt"
         """
         # Get current arm joint positions (14 DOF)
         current_arm_q = self.robot.get_current_dual_arm_q()
@@ -553,28 +510,11 @@ class G1RemoteClient:
         else:
             current_hand_q = np.zeros(14, dtype=np.float32)
         
-        # Build qpos: [arm(14), hand(14)] = 28 dims
-        qpos = np.concatenate([current_arm_q, current_hand_q])
+        # Get waist yaw (1 DOF)
+        waist_yaw = self.robot.get_current_waist_yaw()
         
-        # Get IMU data for state
-        rpy = np.zeros(3, dtype=np.float32)
-        yaw_rate = np.zeros(1, dtype=np.float32)
-        
-        try:
-            lowstate = self.robot.get_lowstate_raw()
-            if lowstate is not None:
-                imu = lowstate.imu_state
-                rpy = np.array([
-                    imu.rpy[0],  # roll
-                    imu.rpy[1],  # pitch
-                    imu.rpy[2],  # yaw
-                ], dtype=np.float32)
-                yaw_rate = np.array([imu.gyroscope[2]], dtype=np.float32)  # wz
-        except Exception as e:
-            logger.debug(f"Could not get IMU data: {e}")
-        
-        # Build 32-dim state: [qpos(28), rpy(3), yaw_rate(1)]
-        state = np.concatenate([qpos, rpy, yaw_rate])
+        # Build 29-dim state: [arm(14), hand(14), waist_yaw(1)]
+        state = np.concatenate([current_arm_q, current_hand_q, [waist_yaw]])
         
         # Create dummy image (224x224 RGB, gray)
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -599,7 +539,7 @@ class G1RemoteClient:
             "image": {
                 "cam_head": base_image,
             },
-            "state": state,  # 32 dims
+            "state": state,  # 29 dims
             "prompt": self.prompt,
         }
 
@@ -607,25 +547,17 @@ class G1RemoteClient:
         """
         Execute a chunk of policy actions on the robot.
         
-        Action format (32 dims):
-            [0:14]  left_arm    - left arm joint targets
-            [14:28] hands       - hand joint targets (left 7 + right 7)
-            [28]    vx          - forward/backward velocity
-            [29]    vy          - strafe left/right velocity
-            [30]    vyaw        - turn (yaw angular velocity)
-            [31]    padding     - ignored
+        Action format (29 dims):
+            [0:14]  arm_joints  - arm joint targets
+            [14:28] hand_joints - hand joint targets (left 7 + right 7)
+            [28]    waist_yaw   - waist yaw target
         
         Args:
-            policy_actions: (N, 28), (N, 31), or (N, 32) array of actions
+            policy_actions: (N, 28) or (N, 29) array of actions
         """
         action_dim = policy_actions.shape[1]
-        has_loco = action_dim >= 31
         
-        loco_mode = "hybrid" if has_loco else "controller"
-        if self.loco_client is None:
-            loco_mode = "disabled"
-        
-        logger.info(f"Executing {len(policy_actions)} actions ({action_dim} DOF, loco={loco_mode})")
+        logger.info(f"Executing {len(policy_actions)} actions ({action_dim} DOF)")
         
         # Execute at control_fps
         for i, action in enumerate(policy_actions):
@@ -638,11 +570,13 @@ class G1RemoteClient:
             else:
                 hand_joints = np.zeros(14, dtype=np.float32)
             
-            # Send arm command with gravity compensation
-            gravity_torques = self.compute_gravity_compensation(arm_joints)
+            # Extract waist yaw (1 DOF)
+            waist_yaw = action[28] if action_dim >= 29 else 0.0
+            
+            # Send arm command
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=gravity_torques
+                tauff_target=np.zeros(14, dtype=np.float32)
             )
             
             # Send hand command (direct joint angles)
@@ -651,36 +585,11 @@ class G1RemoteClient:
                 right_hand = hand_joints[7:14]
                 self.hand_ctrl.ctrl_dual_hand(left_hand, right_hand)
             
-            # Handle locomotion control (hybrid mode)
-            if self.loco_client is not None and has_loco:
-                # Extract locomotion commands
-                vx = action[28]    # Forward/backward velocity
-                vy = action[29]    # Strafe left/right velocity
-                vyaw = action[30]  # Turn (yaw angular velocity)
-                
-                # Check if policy wants to control locomotion
-                # Threshold of 0.01 to filter noise
-                policy_loco_active = (
-                    abs(vx) > 0.01 or 
-                    abs(vy) > 0.01 or 
-                    abs(vyaw) > 0.01
-                )
-                
-                if policy_loco_active:
-                    # Use policy locomotion commands
-                    self.loco_client.Move(
-                        vx * self.loco_velocity_scale,
-                        vy * self.loco_velocity_scale,
-                        vyaw * self.loco_velocity_scale
-                    )
-                    if i % 30 == 0:
-                        logger.debug(f"  Loco (policy): vx={vx:.2f}, vy={vy:.2f}, vyaw={vyaw:.2f}")
-                else:
-                    # Fall back to wireless controller
-                    self._forward_controller_locomotion()
-            elif self.loco_client is not None:
-                # No loco in action space, always use wireless controller
-                self._forward_controller_locomotion()
+            # Send waist yaw command
+            self.robot.ctrl_waist_yaw(waist_yaw)
+            
+            # Forward wireless controller locomotion (human control only)
+            self._forward_controller_locomotion()
             
             # Log every 10th action
             if i % 10 == 0:
@@ -755,11 +664,9 @@ class G1RemoteClient:
                             for i in range(steps):
                                 alpha = (i + 1) / steps
                                 interp = current * (1 - alpha) + arm_target * alpha
-                                # Compute gravity compensation for interpolated position
-                                gravity_torques = self.compute_gravity_compensation(interp)
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp,
-                                    tauff_target=gravity_torques
+                                    tauff_target=np.zeros(14, dtype=np.float32)
                                 )
                                 await asyncio.sleep(1.0 / 250)
                             
@@ -767,6 +674,10 @@ class G1RemoteClient:
                             if len(target) >= 28 and self.hand_ctrl is not None:
                                 hand_target = target[14:28]
                                 self.hand_ctrl.ctrl_dual_hand(hand_target[:7], hand_target[7:])
+                            
+                            # Set waist yaw target if provided (index 28)
+                            if len(target) >= 29:
+                                self.robot.ctrl_waist_yaw(target[28])
                             
                             response = {"status": "success", "message": "Reset complete"}
                         
@@ -776,7 +687,8 @@ class G1RemoteClient:
                                 hand_state = self.hand_ctrl.get_hand_state()
                             else:
                                 hand_state = np.zeros(14, dtype=np.float32)
-                            full_state = np.concatenate([arm_state, hand_state])
+                            waist_yaw = self.robot.get_current_waist_yaw()
+                            full_state = np.concatenate([arm_state, hand_state, [waist_yaw]])
                             response = {
                                 "status": "success",
                                 "state": full_state.tolist()
@@ -802,12 +714,11 @@ class G1RemoteClient:
                         
                         elif cmd == "emergency_stop":
                             logger.warning("EMERGENCY STOP")
-                            # Stop arm movement - hold current position with gravity comp
+                            # Stop arm movement - hold current position
                             current = self.robot.get_current_dual_arm_q()
-                            gravity_torques = self.compute_gravity_compensation(current)
                             self.robot.ctrl_dual_arm(
                                 q_target=current,
-                                tauff_target=gravity_torques
+                                tauff_target=np.zeros(14, dtype=np.float32)
                             )
                             # Stop locomotion
                             if self.loco_client is not None:

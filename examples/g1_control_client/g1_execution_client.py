@@ -7,7 +7,6 @@ A systematic training pipeline that alternates between:
 2. Human correction (operator adjusts robot in damping mode)
 
 All data is continuously recorded at 30Hz with phase labels.
-Includes locomotion data (loco_state, loco_action) for hybrid control.
 
 State Machine:
     WAITING -> READY -> EXECUTING -> LABELING -> DAMPING -> SAVING -> DECIDING -> (loop or SYNCING)
@@ -16,17 +15,13 @@ Key concepts:
     - EPOCH: A training cycle with a specific policy checkpoint. Multiple episodes per epoch.
     - EPISODE: A single rollout/trajectory recorded during EXECUTING state.
 
-State Space (32 dims):
+State Space (29 dims):
     [0:28]  qpos        - arm (14) + hand (14) joint positions
-    [28:31] rpy         - roll, pitch, yaw from IMU (radians)
-    [31]    yaw_rate    - yaw angular velocity from gyroscope
+    [28]    waist_yaw   - waist yaw joint position
 
-Action Space (32 dims):
+Action Space (29 dims):
     [0:28]  upper_body  - arm (14) + hand (14) joint targets
-    [28]    vx          - forward/backward velocity command
-    [29]    vy          - strafe left/right velocity command
-    [30]    vyaw        - turn (yaw angular velocity) command
-    [31]    padding     - zero (ignored)
+    [28]    waist_yaw   - waist yaw joint target
 
 Usage:
     python g1_execution_client.py --config training_config_g1.yaml
@@ -86,21 +81,13 @@ except ImportError:
     logger.warning("Unitree SDK not available - hand control disabled")
     DEX3_AVAILABLE = False
 
-# Try to import LocoClient for locomotion control
+# Try to import LocoClient for locomotion control (wireless controller forwarding)
 try:
     from unitree_sdk2py.g1.loco.g1_loco_client import LocoClient
     LOCO_AVAILABLE = True
 except ImportError:
     logger.warning("LocoClient not available - locomotion control disabled")
     LOCO_AVAILABLE = False
-
-# Try to import pinocchio for gravity compensation
-try:
-    import pinocchio as pin
-    PINOCCHIO_AVAILABLE = True
-except ImportError:
-    logger.warning("Pinocchio not available - gravity compensation disabled")
-    PINOCCHIO_AVAILABLE = False
 
 
 class TrainingState(Enum):
@@ -324,16 +311,16 @@ class G1TrainingClient:
         self.last_policy_epoch = -1
         self.episode_rejected = False
         
-        # G1 has fixed 32-dim action space (28 upper body + 3 loco + 1 padding)
-        self.action_dim = 32
+        # G1 29-dim action space: 28 upper body + 1 waist_yaw
+        self.action_dim = 29
         self.upper_body_dim = 28  # 14 arm + 14 hand
-        logger.info(f"Action dim: {self.action_dim} (28 upper body + 4 locomotion)")
+        logger.info(f"Action dim: {self.action_dim} (28 upper body + 1 waist_yaw)")
         
         # Control frequency
         self.control_freq = self.config.get('robot', {}).get('control_freq', 30)
         logger.info(f"Control frequency: {self.control_freq}Hz")
         
-        # Locomotion velocity scaling
+        # Locomotion velocity scaling (for wireless controller forwarding)
         self.loco_velocity_scale = 0.3
         
         # Components (initialized lazily)
@@ -360,9 +347,9 @@ class G1TrainingClient:
         # Position hold state
         self._hold_position_background = False
         
-        # Reset pose for robot (28 DOF: 14 arm + 14 hand)
+        # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw)
         # Zeros for home position
-        self.reset_pose = np.zeros(28, dtype=np.float32)
+        self.reset_pose = np.zeros(29, dtype=np.float32)
         
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -427,9 +414,9 @@ class G1TrainingClient:
                 self.hand_ctrl = None
                 logger.warning("  Hand controller not available")
             
-            # Initialize locomotion client
+            # Initialize locomotion client (for wireless controller forwarding only)
             if LOCO_AVAILABLE:
-                logger.info("  Initializing locomotion client...")
+                logger.info("  Initializing locomotion client (wireless controller forwarding)...")
                 try:
                     self.loco_client = LocoClient()
                     self.loco_client.SetTimeout(0.0001)
@@ -614,59 +601,40 @@ class G1TrainingClient:
             self.recording_active = False
     
     def get_current_state(self) -> np.ndarray:
-        """Get current robot state (28 DOF: arm + hand)."""
-        arm_q = self.robot.get_current_dual_arm_q()
+        """Get current robot state (29 DOF: arm + hand + waist_yaw)."""
+        arm_q = self.robot.get_current_dual_arm_q()  # 14 DOF
         
         if self.hand_ctrl is not None:
-            hand_q = self.hand_ctrl.get_hand_state()
+            hand_q = self.hand_ctrl.get_hand_state()  # 14 DOF
         else:
             hand_q = np.zeros(14, dtype=np.float32)
         
-        return np.concatenate([arm_q, hand_q])
+        waist_yaw = self.robot.get_current_waist_yaw()  # 1 DOF
+        
+        return np.concatenate([arm_q, hand_q, [waist_yaw]])  # 29 DOF
     
-    def get_loco_state(self) -> np.ndarray:
-        """
-        Get locomotion state from lowstate.
+    def get_current_qvel(self) -> np.ndarray:
+        """Get current robot joint velocities (29 DOF)."""
+        arm_dq = self.robot.get_current_dual_arm_dq()  # 14 DOF
         
-        Returns:
-            loco_state: (17,) array
-                [0]     mode_machine
-                [1:4]   rpy
-                [4:8]   quaternion
-                [8:11]  accelerometer
-                [11:14] gyroscope
-                [14:17] leg_joints (placeholder zeros)
-        """
-        loco_state = np.zeros(17, dtype=np.float32)
+        # Hands don't report velocity, use zeros
+        hand_dq = np.zeros(14, dtype=np.float32)
         
-        try:
-            lowstate = self.robot.get_lowstate_raw()
-            if lowstate is not None:
-                imu = lowstate.imu_state
-                loco_state[0] = float(lowstate.mode_machine)
-                loco_state[1:4] = imu.rpy[:3]
-                loco_state[4:8] = imu.quaternion[:4]
-                loco_state[8:11] = imu.accelerometer[:3]
-                loco_state[11:14] = imu.gyroscope[:3]
-                # leg_joints placeholder - zeros
-        except Exception as e:
-            logger.debug(f"Could not get loco_state: {e}")
+        # Waist yaw velocity (simplified - use 0)
+        waist_yaw_dq = 0.0
         
-        return loco_state
+        return np.concatenate([arm_dq, hand_dq, [waist_yaw_dq]])  # 29 DOF
     
     def get_observation(self, for_policy: bool = False) -> dict:
         """
         Get current observation from robot.
         
         Args:
-            for_policy: If True, format for policy inference (32-dim state)
+            for_policy: If True, format for policy inference (29-dim state)
                        If False, format for recording
         """
-        # Get current state (28 DOF: arm + hand)
+        # Get current state (29 DOF: arm + hand + waist_yaw)
         current_q = self.get_current_state()
-        
-        # Get locomotion state
-        loco_state = self.get_loco_state()
         
         # Dummy image for fallback
         dummy_image = np.full((224, 224, 3), 128, dtype=np.uint8)
@@ -688,33 +656,21 @@ class G1TrainingClient:
             head_image = dummy_image
         
         if for_policy:
-            # Format for policy inference: 32-dim state
-            # [qpos(28), rpy(3), yaw_rate(1)]
-            rpy = loco_state[1:4]
-            yaw_rate = loco_state[13]  # gyroscope z
-            
-            state = np.concatenate([current_q, rpy, [yaw_rate]])  # 32 dims
-            
+            # Format for policy inference: 29-dim state
             task_config = self.config.get('task', {})
             task_description = task_config.get('description', 'manipulation task')
             
             return {
                 "images": {"cam_head": head_image},
-                "state": state,
+                "state": current_q,  # 29 dims
                 "prompt": f"{task_description}, Advantage=True",
             }
         else:
             # Format for recording
             return {
-                "state": current_q,  # 28 DOF
-                "loco_state": loco_state,  # 17 dims
+                "state": current_q,  # 29 DOF
                 "images": {"cam_head": head_image},
             }
-    
-    def compute_gravity_compensation(self, joint_positions: np.ndarray) -> np.ndarray:
-        """Compute gravity compensation torques (currently disabled)."""
-        # Returning zeros - use increased PD gains instead
-        return np.zeros(14, dtype=np.float32)
     
     def reset_to_pose(self, duration: float = 2.0):
         """Smoothly reset the robot to the configured reset pose."""
@@ -728,17 +684,21 @@ class G1TrainingClient:
             t_smooth = t * t * (3 - 2 * t)
             
             target_q = current_q + t_smooth * (self.reset_pose[:14] - current_q)
-            gravity_torques = self.compute_gravity_compensation(target_q)
             
             self.robot.ctrl_dual_arm(
                 q_target=target_q,
-                tauff_target=gravity_torques
+                tauff_target=np.zeros(14, dtype=np.float32)
             )
             
             # Move hands to reset pose
             if self.hand_ctrl is not None and len(self.reset_pose) >= 28:
                 hand_target = self.reset_pose[14:28]
                 self.hand_ctrl.ctrl_dual_hand(hand_target[:7], hand_target[7:])
+            
+            # Move waist yaw to reset pose
+            if len(self.reset_pose) >= 29:
+                waist_yaw_target = self.reset_pose[28]
+                self.robot.ctrl_waist_yaw(waist_yaw_target)
             
             time.sleep(1.0 / self.control_freq)
         
@@ -759,19 +719,15 @@ class G1TrainingClient:
         """
         Execute a full action chunk on the robot.
         
-        Action format (32 dims):
+        Action format (29 dims):
             [0:14]  arm_joints
             [14:28] hand_joints
-            [28]    vx
-            [29]    vy
-            [30]    vyaw
-            [31]    padding
+            [28]    waist_yaw
         """
         control_period = 1.0 / self.control_freq
         actions_executed = 0
         
         action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
-        has_loco = action_dim >= 31
         
         logger.info(f"   Executing {len(action_chunk)} actions at {self.control_freq}Hz ({action_dim} DOF)...")
         
@@ -790,54 +746,39 @@ class G1TrainingClient:
             # Extract hand joints (14 DOF)
             hand_joints = action[14:28] if action_dim >= 28 else np.zeros(14, dtype=np.float32)
             
-            # Compute gravity compensation
-            gravity_torques = self.compute_gravity_compensation(arm_joints)
+            # Extract waist yaw (1 DOF)
+            waist_yaw = action[28] if action_dim >= 29 else 0.0
             
             # Send arm command
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=gravity_torques
+                tauff_target=np.zeros(14, dtype=np.float32)
             )
             
             # Send hand command
             if self.hand_ctrl is not None:
                 self.hand_ctrl.ctrl_dual_hand(hand_joints[:7], hand_joints[7:14])
             
-            # Handle locomotion (hybrid mode)
-            loco_action = np.zeros(20, dtype=np.float32)  # For recording
-            if self.loco_client is not None and has_loco:
-                vx = action[28]
-                vy = action[29]
-                vyaw = action[30]
-                
-                policy_loco_active = abs(vx) > 0.01 or abs(vy) > 0.01 or abs(vyaw) > 0.01
-                
-                if policy_loco_active:
-                    self.loco_client.Move(
-                        vx * self.loco_velocity_scale,
-                        vy * self.loco_velocity_scale,
-                        vyaw * self.loco_velocity_scale
-                    )
-                    # Record policy loco commands
-                    loco_action[0:3] = [vx, vy, vyaw]
-                else:
-                    self._forward_controller_locomotion()
-            elif self.loco_client is not None:
-                self._forward_controller_locomotion()
+            # Send waist yaw command
+            self.robot.ctrl_waist_yaw(waist_yaw)
+            
+            # Forward wireless controller locomotion (human control only)
+            self._forward_controller_locomotion()
             
             # Record timestep
             if self.recording_active and self.episode_writer:
-                current_q = self.get_current_state()
+                current_q = self.get_current_state()  # 29 DOF
+                current_qvel = self.get_current_qvel()  # 29 DOF
                 obs = self.get_observation(for_policy=False)
                 
-                recorded_action = action[:28]  # Upper body only
+                # Action is 29-dim: arm + hand + waist_yaw
+                recorded_action = action[:29] if action_dim >= 29 else np.concatenate([action[:28], [waist_yaw]])
                 
                 self.episode_writer.add_timestep(
                     qpos=current_q,
+                    qvel=current_qvel,
                     action=recorded_action,
                     images=obs.get('images'),
-                    loco_state=obs.get('loco_state'),
-                    loco_action=loco_action,
                     phase="policy"
                 )
             
@@ -1092,11 +1033,10 @@ class G1TrainingClient:
                 loop_start = time.time()
                 
                 current_q = self.robot.get_current_dual_arm_q()
-                gravity_torques = self.compute_gravity_compensation(current_q)
                 
                 self.robot.ctrl_dual_arm(
                     q_target=current_q,
-                    tauff_target=gravity_torques
+                    tauff_target=np.zeros(14, dtype=np.float32)
                 )
                 
                 elapsed = time.time() - loop_start
@@ -1115,9 +1055,6 @@ class G1TrainingClient:
         print("  Press 'e' to save episode and continue")
         print("=" * 60)
         
-        # Enter damping mode if available
-        # self.robot.enter_damping_mode()
-        
         control_period = 1.0 / self.control_freq
         
         with self.keyboard:
@@ -1131,11 +1068,10 @@ class G1TrainingClient:
                     break
                 
                 current_q = self.robot.get_current_dual_arm_q()
-                gravity_torques = self.compute_gravity_compensation(current_q)
                 
                 self.robot.ctrl_dual_arm(
                     q_target=current_q,
-                    tauff_target=gravity_torques
+                    tauff_target=np.zeros(14, dtype=np.float32)
                 )
                 
                 elapsed = time.time() - loop_start

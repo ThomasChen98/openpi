@@ -9,7 +9,7 @@
 # Key differences from H1 pipeline:
 #   - Port 8001 for policy server (H1 uses 8000)
 #   - Port 8081 for Viser visualizer (H1 uses 8080)
-#   - 32-dim action space (28 upper body + 3 locomotion + 1 padding)
+#   - 29-dim action space (28 upper body + 1 waist_yaw)
 #   - G1-specific data paths and conversion
 #   - Single head camera (no wrist cameras)
 #
@@ -109,8 +109,8 @@ SERVER_PORT=$(yq -r '.policy_server.port // 8001' "$CONFIG_FILE")
 VISER_PORT=$(yq -r '.visualization.viser_port // 8081' "$CONFIG_FILE")
 ROBOT_COMMAND_PORT=$(yq -r '.visualization.robot_command_port // 5008' "$CONFIG_FILE")
 
-# G1 fixed action dim: 32 (28 upper body + 3 locomotion + 1 padding)
-ACTION_DIM=32
+# G1 fixed action dim: 29 (28 upper body + 1 waist_yaw)
+ACTION_DIM=29
 
 # Pipeline
 START_PHASE=$(yq -r '.pipeline.start_phase // "data_collection"' "$CONFIG_FILE")
@@ -236,7 +236,7 @@ start_server() {
     export CUDA_VISIBLE_DEVICES=$GPU_ID
     
     log_info "Starting server..."
-    log_info "Action dim: $ACTION_DIM (G1: 28 upper body + 4 locomotion)"
+    log_info "Action dim: $ACTION_DIM (G1: 28 upper body + 1 waist_yaw)"
     nohup uv run scripts/serve_policy.py \
         --port "$SERVER_PORT" \
         --training-epoch "$EPOCH" \
@@ -355,7 +355,7 @@ start_visualizer() {
         echo -e "${BLUE}║  - Use 'Infer' button to test policy                           ║${NC}"
         echo -e "${BLUE}║  - Step through frames with slider                             ║${NC}"
         echo -e "${BLUE}║  - View camera feeds and predicted actions                     ║${NC}"
-        echo -e "${BLUE}║  - Test locomotion commands with Vyaw slider                   ║${NC}"
+        echo -e "${BLUE}║  - Override waist yaw with slider if enabled                   ║${NC}"
         echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
         echo ""
         return 0
@@ -399,7 +399,7 @@ wait_for_data() {
     echo ""
     echo "The robot will:"
     echo "  1. Connect to policy server at $SERVER_HOST:$SERVER_PORT"
-    echo "  2. Execute policy and record episodes (28 DOF + locomotion)"
+    echo "  2. Execute policy and record episodes (29 DOF: 28 upper body + waist_yaw)"
     echo "  3. Label episodes as good (g) or bad (b)"
     echo "  4. Rsync data back when done"
     echo ""
@@ -603,7 +603,7 @@ show_config() {
     echo -e "  Task Description:  ${GREEN}$TASK_DESCRIPTION${NC}"
     echo -e "  Policy Config:     $CONFIG_NAME"
     echo -e "  Warmup Checkpoint: ${WARMUP_CHECKPOINT:-none}"
-    echo -e "  Action Dim:        $ACTION_DIM (28 upper body + 4 locomotion)"
+    echo -e "  Action Dim:        $ACTION_DIM (28 upper body + 1 waist_yaw)"
     echo -e "  Max Epochs:        $MAX_EPOCHS"
     echo -e "  Save Interval:     $SAVE_INTERVAL"
     echo -e "  Keep Period:       $KEEP_PERIOD"

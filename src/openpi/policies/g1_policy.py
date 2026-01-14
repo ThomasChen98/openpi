@@ -4,39 +4,24 @@ G1 Policy Transforms
 G1 robot configuration:
 - Arms: 14 DOF (7 per arm)
 - Hands: 14 DOF Dex3 (7 per hand)
-- Locomotion: 3 DOF (vx, vy, vyaw)
+- Waist: 1 DOF (waist_yaw)
 - Camera: 1 (ego_cam / cam_head)
 
-State Space (32 dims):
+State Space (29 dims):
     [0:28]  qpos        - arm (14) + hand (14) joint positions
-    [28:31] rpy         - roll, pitch, yaw from IMU (radians)
-    [31]    yaw_rate    - yaw angular velocity from gyroscope
+    [28]    waist_yaw   - waist yaw joint position
 
-Action Space (32 dims):
+Action Space (29 dims):
     [0:28]  upper_body  - arm (14) + hand (14) joint targets
-    [28]    vx          - forward/backward velocity command
-    [29]    vy          - strafe left/right velocity command  
-    [30]    vyaw        - turn (yaw angular velocity) command
-    [31]    padding     - zero padding
+    [28]    waist_yaw   - waist yaw joint target
 
 HDF5 Data format (from episode_writer_hdf5.py):
 /observations/
-    qpos: [T, 28] - arm (14) + hand (14) joint positions
-    loco_state: [T, 17] - locomotion state:
-        [0]     mode_machine    - FSM state
-        [1:4]   rpy             - roll, pitch, yaw (radians)
-        [4:8]   quaternion      - orientation (w, x, y, z)
-        [8:11]  accelerometer   - linear acceleration
-        [11:14] gyroscope       - angular velocity (wx, wy, wz)
-        [14:17] leg_joints      - knee positions (height proxy)
+    qpos: [T, 29] - arm (14) + hand (14) + waist_yaw (1) joint positions
+    qvel: [T, 29] - joint velocities (same structure)
     images/
-        ego_cam: [T, H, W, 3] - RGB images
-/action: [T, 28] - arm + hand joint targets
-/loco_action: [T, 20] - joysticks (4: Lx, Ly, Rx, Ry) + buttons (16)
-
-Training transforms build 32-dim state/action from HDF5 data:
-- State: qpos[28] + loco_state[1:4](rpy) + loco_state[13](gyro_z) = 32
-- Action: action[28] + loco_action[0:3](vx,vy,vyaw) + padding = 32
+        cam_head: [T, H, W, 3] - RGB images
+/action: [T, 29] - joint targets (arm + hand + waist_yaw)
 """
 
 import dataclasses
@@ -49,21 +34,17 @@ from openpi import transforms
 from openpi.models import model as _model
 
 
-# G1 dimension constants
-G1_QPOS_DIM = 28      # 14 arm + 14 Dex3 hand
-G1_RPY_DIM = 3        # roll, pitch, yaw from IMU
-G1_YAWRATE_DIM = 1    # yaw angular velocity from gyroscope
-G1_STATE_DIM = 32     # qpos(28) + rpy(3) + yaw_rate(1)
-
+# G1 dimension constants - 29-dim format
 G1_UPPER_BODY_DIM = 28  # 14 arm + 14 Dex3 hand
-G1_LOCO_DIM = 3         # vx, vy, vyaw
-G1_ACTION_DIM = 32      # upper_body(28) + loco(3) + padding(1)
+G1_WAIST_DIM = 1        # waist yaw
+G1_STATE_DIM = 29       # upper_body(28) + waist_yaw(1)
+G1_ACTION_DIM = 29      # same as state
 
 
 def make_g1_example() -> dict:
     """Creates a random input example for the G1 policy."""
     return {
-        "state": np.random.rand(G1_STATE_DIM).astype(np.float32),  # 32 dims
+        "state": np.random.rand(G1_STATE_DIM).astype(np.float32),  # 29 dims
         "images": {
             "cam_head": np.random.randint(256, size=(224, 224, 3), dtype=np.uint8),
         },
@@ -89,15 +70,14 @@ class G1Inputs(transforms.DataTransformFn):
     Handles two input scenarios:
     
     1. Training (from HDF5 via repack):
-       - state: qpos [28]
-       - loco_state: [17] containing rpy at [1:4] and gyroscope at [11:14]
-       - Builds: [qpos(28), rpy(3), yaw_rate(1)] = 32 dims
-    
-    2. Inference (from g1_remote_client):
-       - state: [32] already in correct format
+       - state: qpos [29] = upper_body(28) + waist_yaw(1)
        - Passes through directly
     
-    Output state: [32] = qpos(28) + rpy(3) + yaw_rate(1)
+    2. Inference (from g1_remote_client):
+       - state: [29] already in correct format
+       - Passes through directly
+    
+    Output state: [29] = upper_body(28) + waist_yaw(1)
     """
 
     model_type: _model.ModelType
@@ -130,35 +110,23 @@ class G1Inputs(transforms.DataTransformFn):
             images[dest] = np.zeros_like(base_image)
             image_masks[dest] = np.True_ if self.model_type != _model.ModelType.PI0 else np.False_
 
-        # Build 32-dim state
+        # State should be 29-dim: upper_body(28) + waist_yaw(1)
         input_state = np.asarray(data["state"], dtype=np.float32)
         
         if len(input_state) == G1_STATE_DIM:
-            # Inference path: state is already 32 dims, pass through
+            # Expected format: 29 dims
             state = input_state
-        elif len(input_state) == G1_QPOS_DIM:
-            # Training path: state is qpos (28), need to add loco info
-            qpos = input_state
-            
-            # Get RPY and yaw_rate from loco_state if available
-            if "loco_state" in data and data["loco_state"] is not None:
-                loco_state = np.asarray(data["loco_state"], dtype=np.float32)
-                rpy = loco_state[1:4]         # indices 1-3: roll, pitch, yaw
-                yaw_rate = loco_state[13:14]  # index 13: gyroscope z (wz)
-            else:
-                rpy = np.zeros(G1_RPY_DIM, dtype=np.float32)
-                yaw_rate = np.zeros(G1_YAWRATE_DIM, dtype=np.float32)
-            
-            # Build state: [qpos(28), rpy(3), yaw_rate(1)] = 32 dims
-            state = np.concatenate([qpos, rpy, yaw_rate])
+        elif len(input_state) == G1_UPPER_BODY_DIM:
+            # Legacy 28-dim format: pad with zero waist_yaw
+            state = np.concatenate([input_state, np.zeros(G1_WAIST_DIM, dtype=np.float32)])
         else:
-            raise ValueError(f"Expected state dim {G1_STATE_DIM} or {G1_QPOS_DIM}, got {len(input_state)}")
+            raise ValueError(f"Expected state dim {G1_STATE_DIM} or {G1_UPPER_BODY_DIM}, got {len(input_state)}")
 
         # Create inputs dict
         inputs = {
             "image": images,
             "image_mask": image_masks,
-            "state": state,  # [32]
+            "state": state,  # [29]
         }
 
         # Actions are only available during training
@@ -177,80 +145,16 @@ class G1Outputs(transforms.DataTransformFn):
     """
     Transform outputs from model back to G1 action format.
     
-    Model outputs 32 dims: [upper_body(28), vx, vy, vyaw, padding]
+    Model outputs 29 dims: [upper_body(28), waist_yaw(1)]
     
     Args:
         action_dim: Number of action dimensions to return.
-            - 32: Full action space (default)
-            - 31: Without padding [upper_body(28), vx, vy, vyaw]
+            - 29: Full action space (default)
             - 28: Upper body only [arm(14), hand(14)]
     """
     
-    action_dim: int = 32  # Return full 32-dim actions by default
+    action_dim: int = 29  # Return full 29-dim actions by default
 
     def __call__(self, data: dict) -> dict:
         # Extract first action_dim dimensions from model output
         return {"actions": np.asarray(data["actions"][:, :self.action_dim])}
-
-
-@dataclasses.dataclass(frozen=True)
-class G1ActionsFromHDF5(transforms.DataTransformFn):
-    """
-    Build 32-dim actions from HDF5 data during training.
-    
-    Combines:
-    - action: [28] upper body joint targets
-    - loco_action: [20] joystick/button inputs, we use [0:3] as vx, vy, vyaw
-    
-    Output: [32] = [upper_body(28), vx, vy, vyaw, 0]
-    
-    Note: loco_action format from HDF5:
-        [0] Lx  -> maps to vy (strafe, but we use Ly for forward)
-        [1] Ly  -> maps to vx (forward/back)
-        [2] Rx  -> maps to vyaw (turn)
-        [3] Ry  -> not used
-        [4:20] buttons -> not used for action
-    
-    The joystick mapping matches the teleop convention where:
-    - Ly (left stick Y) = forward/backward
-    - Lx (left stick X) = strafe
-    - Rx (right stick X) = turn
-    """
-
-    def __call__(self, data: dict) -> dict:
-        # Get upper body action (28 dims)
-        upper_body = np.asarray(data["actions"], dtype=np.float32)
-        
-        if len(upper_body.shape) == 1:
-            upper_body = upper_body.reshape(1, -1)
-        
-        batch_size = upper_body.shape[0]
-        
-        # Get locomotion commands from loco_action if available
-        if "loco_action" in data and data["loco_action"] is not None:
-            loco_action = np.asarray(data["loco_action"], dtype=np.float32)
-            if len(loco_action.shape) == 1:
-                loco_action = loco_action.reshape(1, -1)
-            
-            # Map joystick to velocity commands
-            # Teleop convention: Ly=forward, Lx=strafe, Rx=turn
-            # loco_action: [Lx, Ly, Rx, Ry, ...]
-            vx = -loco_action[:, 1:2]   # Ly -> forward (negated for intuitive control)
-            vy = -loco_action[:, 0:1]   # Lx -> strafe (negated for intuitive control)
-            vyaw = -loco_action[:, 2:3] # Rx -> turn (negated for intuitive control)
-        else:
-            # No locomotion data, use zeros
-            vx = np.zeros((batch_size, 1), dtype=np.float32)
-            vy = np.zeros((batch_size, 1), dtype=np.float32)
-            vyaw = np.zeros((batch_size, 1), dtype=np.float32)
-        
-        # Padding
-        padding = np.zeros((batch_size, 1), dtype=np.float32)
-        
-        # Build 32-dim action: [upper_body(28), vx, vy, vyaw, padding]
-        actions = np.concatenate([
-            upper_body[:, :G1_UPPER_BODY_DIM],
-            vx, vy, vyaw, padding
-        ], axis=1)
-        
-        return {**data, "actions": actions}

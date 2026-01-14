@@ -2,24 +2,15 @@
 HDF5 Episode Writer for G1 Policy Execution Recording
 
 Saves policy execution data in HDF5 format compatible with the OpenPI training pipeline.
-Includes locomotion data (loco_state, loco_action) for hybrid locomotion control.
+Simplified 29-dim format: arm (14) + hand (14) + waist_yaw (1).
 
 File structure:
 /observations/
-    qpos: [T, 28] - arm (14) + hand (14) joint positions
-    loco_state: [T, 17] - locomotion state from lowstate
-        [0]     mode_machine    - FSM state (0=zero torque, 1=damp, etc.)
-        [1:4]   rpy             - roll, pitch, yaw (radians)
-        [4:8]   quaternion      - orientation quaternion (w, x, y, z)
-        [8:11]  accelerometer   - linear acceleration (x, y, z)
-        [11:14] gyroscope       - angular velocity (x, y, z)
-        [14:17] leg_joints      - knee joint positions (left, right, avg) as height proxy
+    qpos: [T, 29] - arm (14) + hand (14) + waist_yaw (1) joint positions
+    qvel: [T, 29] - joint velocities (same structure as qpos)
     images/
         cam_head: [T,] - JPEG compressed images (ego camera)
-/action: [T, 28] - upper body joint targets (arm + hand)
-/loco_action: [T, 20] - controller inputs (joysticks + buttons)
-    [0:4]   joysticks       - Lx, Ly, Rx, Ry (float, -1 to 1)
-    [4:20]  buttons         - L1, L2, R1, R2, A, B, X, Y, Up, Down, Left, Right, Select, Start, F1, F3
+/action: [T, 29] - joint targets (arm + hand + waist_yaw)
 /phase: [T,] - string labels ("policy" or "human") for training pipeline
 
 Metadata attributes:
@@ -28,7 +19,6 @@ Metadata attributes:
     fps: int - recording frequency
     robot_name: str - "G1_29"
     timestamp: str - ISO format timestamp
-    has_loco_data: bool - whether locomotion data is present
     policy_frames: int - count of policy execution frames
     human_frames: int - count of human adjustment frames
 """
@@ -74,15 +64,12 @@ class EpisodeWriterHDF5:
         
         self.filepath = os.path.join(self.save_dir, f'episode_{self.episode_idx}.hdf5')
         
-        # Data buffers
-        self.qpos_buffer = []       # [T, 28] - arm (14) + hand (14) joint positions
-        self.action_buffer = []     # [T, 28] - upper body joint targets
+        # Data buffers - 29-dim: arm (14) + hand (14) + waist_yaw (1)
+        self.qpos_buffer = []       # [T, 29] - joint positions
+        self.qvel_buffer = []       # [T, 29] - joint velocities
+        self.action_buffer = []     # [T, 29] - joint targets
         self.image_buffers = {}     # {camera_name: [frames]}
         self.phase_buffer = []      # Phase labels ("policy" or "human")
-        
-        # Locomotion data buffers
-        self.loco_state_buffer = []   # [T, 17] - locomotion state
-        self.loco_action_buffer = []  # [T, 20] - joysticks (4) + buttons (16)
         
         # Advantage labeling (per-episode)
         self.advantage_label = None  # True = good, False = bad, None = unlabeled
@@ -95,11 +82,10 @@ class EpisodeWriterHDF5:
         """Start a new episode recording"""
         self.recording = True
         self.qpos_buffer = []
+        self.qvel_buffer = []
         self.action_buffer = []
         self.image_buffers = {}
         self.phase_buffer = []
-        self.loco_state_buffer = []
-        self.loco_action_buffer = []
         self.advantage_label = None  # Reset advantage label for new episode
         logger.info(f"Started recording episode {self.episode_idx}")
     
@@ -117,39 +103,28 @@ class EpisodeWriterHDF5:
     def add_timestep(
         self, 
         qpos, 
+        qvel,
         action, 
         images=None, 
-        loco_state=None, 
-        loco_action=None, 
         phase="policy"
     ):
         """
         Add a single timestep to the episode
         
         Args:
-            qpos: Joint positions array [28] - arm (14) + hand (14)
-            action: Target joint positions array [28] - upper body targets
+            qpos: Joint positions array [29] - arm (14) + hand (14) + waist_yaw (1)
+            qvel: Joint velocities array [29] - same structure as qpos
+            action: Target joint positions array [29] - joint targets
             images: Dict of {camera_name: image_array} where image is [H, W, 3] RGB uint8
-            loco_state: Locomotion state array [17] (optional)
-                [mode_machine, rpy(3), quaternion(4), accel(3), gyro(3), leg_joints(3)]
-            loco_action: Controller input array [20] (optional)
-                [joysticks(4): Lx,Ly,Rx,Ry, buttons(16)]
-                During policy execution, this can be zeros or the policy's vx,vy,vyaw
             phase: Phase label - "policy" (robot executing) or "human" (operator adjusting)
         """
         if not self.recording:
             return
         
         self.qpos_buffer.append(np.array(qpos, dtype=np.float32))
+        self.qvel_buffer.append(np.array(qvel, dtype=np.float32))
         self.action_buffer.append(np.array(action, dtype=np.float32))
         self.phase_buffer.append(phase)
-        
-        # Store locomotion data if provided
-        if loco_state is not None:
-            self.loco_state_buffer.append(np.array(loco_state, dtype=np.float32))
-        
-        if loco_action is not None:
-            self.loco_action_buffer.append(np.array(loco_action, dtype=np.float32))
         
         if images is not None:
             for camera_name, image in images.items():
@@ -174,13 +149,11 @@ class EpisodeWriterHDF5:
         
         try:
             # Convert buffers to numpy arrays
-            qpos_data = np.array(self.qpos_buffer, dtype=np.float32)      # [T, 28]
-            action_data = np.array(self.action_buffer, dtype=np.float32)  # [T, 28]
+            qpos_data = np.array(self.qpos_buffer, dtype=np.float32)      # [T, 29]
+            qvel_data = np.array(self.qvel_buffer, dtype=np.float32)      # [T, 29]
+            action_data = np.array(self.action_buffer, dtype=np.float32)  # [T, 29]
             
             episode_length = len(self.qpos_buffer)
-            
-            # Check if we have locomotion data
-            has_loco_data = len(self.loco_state_buffer) > 0
             
             logger.info(f"Saving episode {self.episode_idx}: {episode_length} timesteps")
             
@@ -189,12 +162,7 @@ class EpisodeWriterHDF5:
                 # Create observations group
                 obs_group = f.create_group('observations')
                 obs_group.create_dataset('qpos', data=qpos_data, compression='gzip')
-                
-                # Save locomotion state if available
-                if has_loco_data and self.loco_state_buffer:
-                    loco_state_data = np.array(self.loco_state_buffer, dtype=np.float32)
-                    obs_group.create_dataset('loco_state', data=loco_state_data, compression='gzip')
-                    logger.info(f"  Saved loco_state: {loco_state_data.shape}")
+                obs_group.create_dataset('qvel', data=qvel_data, compression='gzip')
                 
                 # Create images subgroup with JPEG compression
                 if self.image_buffers:
@@ -229,14 +197,8 @@ class EpisodeWriterHDF5:
                 else:
                     logger.warning("No images to save")
                 
-                # Save actions (upper body joint targets)
+                # Save actions (joint targets)
                 f.create_dataset('action', data=action_data, compression='gzip')
-                
-                # Save locomotion actions if available
-                if has_loco_data and self.loco_action_buffer:
-                    loco_action_data = np.array(self.loco_action_buffer, dtype=np.float32)
-                    f.create_dataset('loco_action', data=loco_action_data, compression='gzip')
-                    logger.info(f"  Saved loco_action: {loco_action_data.shape}")
                 
                 # Save phase labels as fixed-length strings
                 phase_data = np.array(self.phase_buffer, dtype='S10')
@@ -247,7 +209,6 @@ class EpisodeWriterHDF5:
                 f.attrs['fps'] = self.fps
                 f.attrs['robot_name'] = self.robot_name
                 f.attrs['timestamp'] = datetime.now().isoformat()
-                f.attrs['has_loco_data'] = has_loco_data
                 
                 # Save advantage label (per-episode)
                 if self.advantage_label is not None:
@@ -267,10 +228,8 @@ class EpisodeWriterHDF5:
             logger.info(f"Episode saved successfully: {self.filepath}")
             logger.info(f"  Robot: {self.robot_name}")
             logger.info(f"  Advantage: {advantage_str}")
-            logger.info(f"  qpos: {qpos_data.shape}, action: {action_data.shape}")
+            logger.info(f"  qpos: {qpos_data.shape}, qvel: {qvel_data.shape}, action: {action_data.shape}")
             logger.info(f"  Phase breakdown: {policy_frames} policy, {human_frames} human")
-            if has_loco_data:
-                logger.info(f"  Has locomotion data: True")
             
             # Prepare for next episode (increment and update filepath)
             self.episode_idx += 1

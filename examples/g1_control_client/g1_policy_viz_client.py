@@ -4,12 +4,14 @@
 Loads observations from G1 dataset and sends them to the policy server for inference,
 then visualizes the predicted action chunks using viser.
 
+29-dim State/Action format:
+    [0:28]  upper_body  - arm (14) + hand (14) joint positions/targets
+    [28]    waist_yaw   - waist yaw joint position/target
+
 Features:
 * Load observations (images + state) from HDF5 datasets
 * Send observations to policy server
 * Receive and visualize predicted action chunks
-* Display locomotion state (mode_machine, IMU, leg positions)
-* Display controller inputs (joysticks, buttons)
 * Interactive frame selection and playback controls
 * Display robot motion using viser URDF viewer with Dex3 hands
 * Display camera images alongside robot visualization
@@ -117,7 +119,7 @@ def get_observation_at_frame(
     data: dict,
     frame_idx: int,
     prompt: str,
-    action_dim: int = 28,
+    action_dim: int = 29,
     target_size: tuple = (224, 224),
 ) -> dict:
     """Get observation at specific frame in the format expected by the policy.
@@ -126,14 +128,18 @@ def get_observation_at_frame(
         data: Loaded data from HDF5
         frame_idx: Frame index to get observation from
         prompt: Task prompt/instruction
-        action_dim: Action dimension (28 for G1 arms+hands)
+        action_dim: Action dimension (29 for G1 arms+hands+waist_yaw)
         target_size: Target image size (height, width)
         
     Returns:
         Observation dictionary compatible with G1 policy
     """
-    # Get state (first action_dim dimensions of qpos)
-    state = data['qpos'][frame_idx][:action_dim].astype(np.float32)
+    # Get state - 29 dims: upper_body(28) + waist_yaw(1)
+    qpos = data['qpos'][frame_idx]
+    # If qpos is only 28 dims (legacy), pad with zero for waist_yaw
+    if len(qpos) < 29:
+        qpos = np.concatenate([qpos[:28], [0.0]])
+    state = qpos[:action_dim].astype(np.float32)
     
     # Policy expected camera name for G1
     policy_cameras = ['cam_head']  # G1 only has head camera in current setup
@@ -171,16 +177,10 @@ def get_observation_at_frame(
             img = einops.rearrange(img, 'h w c -> c h w')
             images[policy_name] = img.astype(np.uint8)
     
-    # Add loco_state if available (for 32-dim state)
-    loco_state = None
-    if data['loco_state'] is not None:
-        loco_state = data['loco_state'][frame_idx].astype(np.float32)
-    
     return {
-        "state": state,
+        "state": state,  # 29 dims: upper_body(28) + waist_yaw(1)
         "images": images,
         "prompt": prompt,
-        "loco_state": loco_state,
     }
 
 
@@ -293,7 +293,7 @@ def main(args: Args) -> None:
     # Connect to policy server (if available)
     policy = None
     server_metadata = {}
-    action_dim = 28  # Default for G1
+    action_dim = 29  # Default for G1: 28 upper body + 1 waist_yaw
     
     if _websocket_client_policy is not None:
         try:
@@ -578,40 +578,40 @@ def main(args: Args) -> None:
                 hint="Stop and save episode"
             )
             
-            server.gui.add_markdown("### 🚶 Locomotion Test")
+            server.gui.add_markdown("### 🔄 Waist Yaw Override")
             
-            loco_test_enabled = server.gui.add_checkbox(
-                "🔄 Enable Vyaw Test",
+            waist_yaw_override_enabled = server.gui.add_checkbox(
+                "Enable Waist Yaw Override",
                 initial_value=False,
-                hint="When enabled, inject vyaw command into executed actions"
+                hint="When enabled, override policy's waist yaw with slider value"
             )
             
-            loco_vyaw_slider = server.gui.add_slider(
-                "Vyaw Value",
-                min=-1.0,
-                max=1.0,
+            waist_yaw_slider = server.gui.add_slider(
+                "Waist Yaw Value",
+                min=-2.5,
+                max=2.5,
                 step=0.1,
-                initial_value=0.5,
-                hint="Turn velocity to inject (-1=right, +1=left)"
+                initial_value=0.0,
+                hint="Waist yaw angle in radians"
             )
             
-            loco_test_status = server.gui.add_text(
-                "Loco Test",
+            waist_yaw_status = server.gui.add_text(
+                "Override Status",
                 initial_value="Disabled",
                 disabled=True,
             )
             
-            @loco_test_enabled.on_update
+            @waist_yaw_override_enabled.on_update
             def _(_):
-                if loco_test_enabled.value:
-                    loco_test_status.value = f"✓ Active: vyaw={loco_vyaw_slider.value:.1f}"
+                if waist_yaw_override_enabled.value:
+                    waist_yaw_status.value = f"✓ Active: waist_yaw={waist_yaw_slider.value:.2f} rad"
                 else:
-                    loco_test_status.value = "Disabled"
+                    waist_yaw_status.value = "Disabled"
             
-            @loco_vyaw_slider.on_update
+            @waist_yaw_slider.on_update
             def _(_):
-                if loco_test_enabled.value:
-                    loco_test_status.value = f"✓ Active: vyaw={loco_vyaw_slider.value:.1f}"
+                if waist_yaw_override_enabled.value:
+                    waist_yaw_status.value = f"✓ Active: waist_yaw={waist_yaw_slider.value:.2f} rad"
             
             server.gui.add_markdown("### ⚠️ Safety")
             estop_button = server.gui.add_button(
@@ -820,19 +820,19 @@ def main(args: Args) -> None:
                         infer_button.disabled = True
                         
                         try:
-                            # Prepare actions - inject locomotion test if enabled
+                            # Prepare actions - override waist yaw if enabled
                             actions_to_send = predicted_actions.copy()
-                            if loco_test_enabled.value:
-                                # Ensure actions have locomotion dimensions (32 dim)
-                                if actions_to_send.shape[1] < 32:
-                                    # Pad to 32 dims
-                                    padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                            if waist_yaw_override_enabled.value:
+                                # Ensure actions have 29 dims for waist_yaw
+                                if actions_to_send.shape[1] < 29:
+                                    # Pad to 29 dims
+                                    padded = np.zeros((actions_to_send.shape[0], 29), dtype=np.float32)
                                     padded[:, :actions_to_send.shape[1]] = actions_to_send
                                     actions_to_send = padded
-                                # Inject vyaw at index 30
-                                vyaw_value = loco_vyaw_slider.value
-                                actions_to_send[:, 30] = vyaw_value
-                                robot_status.value = f"🚀 Executing with vyaw={vyaw_value:.1f}..."
+                                # Override waist_yaw at index 28
+                                waist_value = waist_yaw_slider.value
+                                actions_to_send[:, 28] = waist_value
+                                robot_status.value = f"🚀 Executing with waist_yaw={waist_value:.2f}..."
                             
                             result = await send_robot_command(
                                 args.robot_host,
@@ -972,14 +972,14 @@ def main(args: Args) -> None:
                     show_gt_cb.value = False
                     update_visualization()
                     
-                    # Execute on robot - inject locomotion test if enabled
+                    # Execute on robot - override waist yaw if enabled
                     actions_to_send = predicted_actions.copy()
-                    if loco_test_enabled.value:
-                        if actions_to_send.shape[1] < 32:
-                            padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                    if waist_yaw_override_enabled.value:
+                        if actions_to_send.shape[1] < 29:
+                            padded = np.zeros((actions_to_send.shape[0], 29), dtype=np.float32)
                             padded[:, :actions_to_send.shape[1]] = actions_to_send
                             actions_to_send = padded
-                        actions_to_send[:, 30] = loco_vyaw_slider.value
+                        actions_to_send[:, 28] = waist_yaw_slider.value
                     
                     result = await send_robot_command(
                         args.robot_host,
@@ -987,9 +987,9 @@ def main(args: Args) -> None:
                         {"command": "execute", "actions": actions_to_send.tolist()}
                     )
                     
-                    loco_info = f" (vyaw={loco_vyaw_slider.value:.1f})" if loco_test_enabled.value else ""
+                    waist_info = f" (waist_yaw={waist_yaw_slider.value:.2f})" if waist_yaw_override_enabled.value else ""
                     if result["status"] == "success":
-                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms){loco_info}"
+                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms){waist_info}"
                     else:
                         robot_status.value = f"❌ Error: {result.get('message')}"
                     
@@ -1096,17 +1096,17 @@ def main(args: Args) -> None:
                             show_gt_cb.value = False
                             update_visualization()
                             
-                            # Execute on robot - inject locomotion test if enabled
+                            # Execute on robot - override waist yaw if enabled
                             actions_to_send = predicted_actions.copy()
-                            if loco_test_enabled.value:
-                                if actions_to_send.shape[1] < 32:
-                                    padded = np.zeros((actions_to_send.shape[0], 32), dtype=np.float32)
+                            if waist_yaw_override_enabled.value:
+                                if actions_to_send.shape[1] < 29:
+                                    padded = np.zeros((actions_to_send.shape[0], 29), dtype=np.float32)
                                     padded[:, :actions_to_send.shape[1]] = actions_to_send
                                     actions_to_send = padded
-                                actions_to_send[:, 30] = loco_vyaw_slider.value
+                                actions_to_send[:, 28] = waist_yaw_slider.value
                             
-                            loco_info = f" vyaw={loco_vyaw_slider.value:.1f}" if loco_test_enabled.value else ""
-                            robot_status.value = f"🚀 Continuous #{loop_count}: Executing{loco_info}..."
+                            waist_info = f" waist_yaw={waist_yaw_slider.value:.2f}" if waist_yaw_override_enabled.value else ""
+                            robot_status.value = f"🚀 Continuous #{loop_count}: Executing{waist_info}..."
                             exec_result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
@@ -1114,7 +1114,7 @@ def main(args: Args) -> None:
                             )
                             
                             if exec_result["status"] == "success":
-                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms){loco_info}"
+                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms){waist_info}"
                             else:
                                 robot_status.value = f"❌ Error in loop #{loop_count}: {exec_result.get('message')}"
                                 is_continuous_running = False
@@ -1261,7 +1261,7 @@ def main(args: Args) -> None:
         nonlocal current_frame
         
         # Get joint positions based on mode
-        predicted_loco_cmd = None  # vx, vy, vyaw from policy
+        waist_yaw_target = None
         if show_ground_truth:
             if use_actions_cb.value:
                 joints = data['actions'][current_frame]
@@ -1270,12 +1270,10 @@ def main(args: Args) -> None:
         elif predicted_actions is not None and show_predicted_cb.value:
             action_idx = int(action_index_slider.value)
             full_action = predicted_actions[action_idx]
-            # Policy outputs 32 dims: [28 DOF joints, vx, vy, vyaw, padding]
-            if len(full_action) >= 32:
-                joints = full_action[:28]  # Extract only joint positions for URDF
-                predicted_loco_cmd = full_action[28:31]  # vx, vy, vyaw
-            else:
-                joints = full_action
+            # Policy outputs 29 dims: [28 DOF upper body, waist_yaw]
+            joints = full_action[:28] if len(full_action) >= 28 else full_action
+            if len(full_action) >= 29:
+                waist_yaw_target = full_action[28]
         else:
             return
         
@@ -1346,15 +1344,11 @@ def main(args: Args) -> None:
             active = action_info.get('active_buttons', [])
             loco_displays['buttons'].value = ', '.join(active) if active else 'None'
         
-        # Display predicted locomotion commands from policy
-        if predicted_loco_cmd is not None:
-            loco_displays['predicted_loco'].value = (
-                f"vx:{predicted_loco_cmd[0]:.3f} "
-                f"vy:{predicted_loco_cmd[1]:.3f} "
-                f"vyaw:{predicted_loco_cmd[2]:.3f}"
-            )
+        # Display predicted waist yaw target from policy
+        if waist_yaw_target is not None:
+            loco_displays['predicted_loco'].value = f"waist_yaw: {waist_yaw_target:.3f} rad"
         else:
-            loco_displays['predicted_loco'].value = "vx:-- vy:-- vyaw:--"
+            loco_displays['predicted_loco'].value = "waist_yaw: --"
         
         # Update camera images
         update_camera_displays()

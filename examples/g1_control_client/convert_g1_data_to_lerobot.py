@@ -9,6 +9,10 @@ Supports advantage labeling for training with advantage-augmented prompts:
 The prompt format with advantage labeling is:
   "task_description, Advantage=True" or "task_description, Advantage=False"
 
+29-dim format:
+  - qpos: [T, 29] - arm (14) + hand (14) + waist_yaw (1)
+  - action: [T, 29] - joint targets (same structure)
+
 Usage:
 uv run examples/g1_control_client/convert_g1_data_to_lerobot.py --data_dir training_data/g1/cabinet_bottle/episode_03.hdf5 --task_description "pick up the bottle" --num_repeats 10
 
@@ -68,12 +72,11 @@ def decompress_jpeg_images(compressed_data) -> np.ndarray:
 def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict:
     """Load a single episode from an HDF5 file.
     
-    G1 HDF5 format:
-    - action: [T, 28] - arm + hand joint targets
-    - loco_action: [T, 20] - joystick/button inputs
-    - observations/qpos: [T, 28] - arm + hand joint positions
-    - observations/loco_state: [T, 17] - locomotion state (rpy at [1:4], gyro at [11:14])
-    - observations/images/ego_cam: [T, H, W, 3] - RGB images
+    G1 HDF5 format (29-dim):
+    - action: [T, 29] - arm + hand + waist_yaw joint targets
+    - observations/qpos: [T, 29] - arm + hand + waist_yaw joint positions
+    - observations/qvel: [T, 29] - joint velocities (optional)
+    - observations/images/ego_cam or cam_head: [T, H, W, 3] - RGB images
     
     Args:
         hdf5_path: Path to the HDF5 file
@@ -81,19 +84,15 @@ def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict
         
     Returns:
         Dictionary containing episode data with keys:
-        - actions: (num_steps, 28) array - upper body actions
-        - loco_action: (num_steps, 20) array - locomotion actions
-        - qpos: (num_steps, 28) array - joint positions
-        - loco_state: (num_steps, 17) array - locomotion state
+        - actions: (num_steps, 29) array - joint targets
+        - qpos: (num_steps, 29) array - joint positions
         - ego_cam: (num_steps, height, width, 3) array
         - advantage: bool or None (if read_advantage is True)
     """
     with h5py.File(hdf5_path, "r") as f:
         # Extract data from HDF5
-        actions = f["action"][:]  # Shape: (num_steps, 28)
-        loco_action = f["loco_action"][:]  # Shape: (num_steps, 20)
-        qpos = f["observations"]["qpos"][:]  # Shape: (num_steps, 28)
-        loco_state = f["observations"]["loco_state"][:]  # Shape: (num_steps, 17)
+        actions = f["action"][:]  # Shape: (num_steps, 29)
+        qpos = f["observations"]["qpos"][:]  # Shape: (num_steps, 29)
         
         images_group = f["observations"]["images"]
         
@@ -127,9 +126,7 @@ def load_episode_from_hdf5(hdf5_path: str, read_advantage: bool = False) -> dict
         
         return {
             "actions": actions,
-            "loco_action": loco_action,
             "qpos": qpos,
-            "loco_state": loco_state,
             "ego_cam": ego_cam,
             "advantage": advantage,
         }
@@ -264,17 +261,13 @@ def main(
     # Auto-detect dimensions from first HDF5 file
     first_file = hdf5_files[0]
     with h5py.File(first_file, "r") as f:
-        action_dim = int(f["action"].shape[1])  # Should be 28
-        state_dim = int(f["observations"]["qpos"].shape[1])  # Should be 28
-        loco_state_dim = int(f["observations"]["loco_state"].shape[1])  # Should be 17
-        loco_action_dim = int(f["loco_action"].shape[1])  # Should be 20
+        action_dim = int(f["action"].shape[1])  # Should be 29
+        state_dim = int(f["observations"]["qpos"].shape[1])  # Should be 29
         fps = int(f.attrs.get("fps", 30))  # Default to 30 if not specified
     
     print(f"\nData dimensions:")
-    print(f"  Action (upper body): {action_dim} (arm + hand joints)")
-    print(f"  State (qpos): {state_dim} (arm + hand joints)")
-    print(f"  Loco state: {loco_state_dim}")
-    print(f"  Loco action: {loco_action_dim}")
+    print(f"  Action: {action_dim} (arm + hand + waist_yaw)")
+    print(f"  State (qpos): {state_dim} (arm + hand + waist_yaw)")
     print(f"  FPS: {fps}")
     
     # Clean up any existing dataset in the output directory
@@ -289,8 +282,7 @@ def main(
         shutil.rmtree(output_path)
 
     # Create LeRobot dataset, define features to store
-    # Match H1 format exactly: ego_cam, cam_left_wrist, cam_right_wrist, qpos, action
-    # Also include loco_state and loco_action for G1 transforms (processed during G1Inputs/G1Outputs)
+    # Simplified 29-dim format: qpos, action (no loco_state/loco_action)
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
         root=output_path,
@@ -317,20 +309,10 @@ def main(
                 "shape": (state_dim,),
                 "names": ["qpos"],
             },
-            "loco_state": {
-                "dtype": "float32",
-                "shape": (loco_state_dim,),
-                "names": ["loco_state"],
-            },
             "action": {
                 "dtype": "float32",
                 "shape": (action_dim,),
                 "names": ["action"],
-            },
-            "loco_action": {
-                "dtype": "float32",
-                "shape": (loco_action_dim,),
-                "names": ["loco_action"],
             },
         },
         image_writer_threads=10,
@@ -370,9 +352,7 @@ def main(
         
         print(f"  Data shapes:")
         print(f"    actions: {episode_data['actions'].shape}")
-        print(f"    loco_action: {episode_data['loco_action'].shape}")
         print(f"    qpos: {episode_data['qpos'].shape}")
-        print(f"    loco_state: {episode_data['loco_state'].shape}")
         print(f"    ego_cam: {episode_data['ego_cam'].shape}")
         if use_advantage:
             advantage_str = "True (good)" if episode_data["advantage"] else "False (needs improvement)"
@@ -412,9 +392,7 @@ def main(
             print(f"Processing episode {episode_counter}/{total_episodes} (file {file_idx + 1}, repeat {repeat_idx + 1})")
             
             actions = episode_data["actions"]
-            loco_action = episode_data["loco_action"]
             qpos = episode_data["qpos"]
-            loco_state = episode_data["loco_state"]
             ego_cam = episode_data["ego_cam"]
             
             # Format task description with advantage label if using advantage labeling
@@ -441,9 +419,7 @@ def main(
                         "cam_left_wrist": cam_left_wrist_resized,
                         "cam_right_wrist": cam_right_wrist_resized,
                         "qpos": qpos[step_idx].astype(np.float32),
-                        "loco_state": loco_state[step_idx].astype(np.float32),
                         "action": actions[step_idx].astype(np.float32),
-                        "loco_action": loco_action[step_idx].astype(np.float32),
                         "task": episode_task,
                     }
                 )
@@ -505,4 +481,3 @@ def main(
 
 if __name__ == "__main__":
     tyro.cli(main)
-

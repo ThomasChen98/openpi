@@ -66,6 +66,12 @@ class G1_29_ArmController:
         self.kd_low = 3.5     # Was 3.0
         self.kp_wrist = 55.0  # Was 40.0
         self.kd_wrist = 2.0   # Was 1.5
+        
+        # Waist yaw control gains
+        self.kp_waist = 60.0
+        self.kd_waist = 1.5
+        self.waist_yaw_target = 0.0
+        self.waist_yaw_limits = [-2.618, 2.618]  # From URDF: approx +/- 150 degrees
 
         self.all_motor_q = None
         self.arm_velocity_limit = 20.0
@@ -118,7 +124,12 @@ class G1_29_ArmController:
         arm_indices = set(member.value for member in G1_29_JointArmIndex)
         for id in G1_29_JointIndex:
             self.msg.motor_cmd[id].mode = 1
-            if id.value in arm_indices:
+            if id == G1_29_JointIndex.kWaistYaw:
+                # Waist yaw with dedicated gains
+                self.msg.motor_cmd[id].kp = self.kp_waist
+                self.msg.motor_cmd[id].kd = self.kd_waist
+                self.waist_yaw_target = self.all_motor_q[id]
+            elif id.value in arm_indices:
                 if self._Is_wrist_motor(id):
                     self.msg.motor_cmd[id].kp = self.kp_wrist
                     self.msg.motor_cmd[id].kd = self.kd_wrist
@@ -134,6 +145,7 @@ class G1_29_ArmController:
                     self.msg.motor_cmd[id].kd = self.kd_high
             self.msg.motor_cmd[id].q = self.all_motor_q[id]
         logger.info("Lock OK!")
+        logger.info(f"[G1_29_ArmController] Initial waist yaw: {self.waist_yaw_target:.3f} rad")
 
         # initialize publish thread
         self.publish_thread = threading.Thread(target=self._ctrl_motor_state)
@@ -171,6 +183,7 @@ class G1_29_ArmController:
             with self.ctrl_lock:
                 arm_q_target = self.q_target
                 arm_tauff_target = self.tauff_target
+                waist_yaw_target = self.waist_yaw_target
 
             if self.simulation_mode:
                 cliped_arm_q_target = arm_q_target
@@ -181,6 +194,13 @@ class G1_29_ArmController:
                 self.msg.motor_cmd[id].q = cliped_arm_q_target[idx]
                 self.msg.motor_cmd[id].dq = 0
                 self.msg.motor_cmd[id].tau = arm_tauff_target[idx]
+            
+            # Command waist yaw
+            self.msg.motor_cmd[G1_29_JointIndex.kWaistYaw].q = waist_yaw_target
+            self.msg.motor_cmd[G1_29_JointIndex.kWaistYaw].dq = 0
+            self.msg.motor_cmd[G1_29_JointIndex.kWaistYaw].kp = self.kp_waist
+            self.msg.motor_cmd[G1_29_JointIndex.kWaistYaw].kd = self.kd_waist
+            self.msg.motor_cmd[G1_29_JointIndex.kWaistYaw].tau = 0
 
             self.msg.crc = self.crc.Crc(self.msg)
             self.lowcmd_publisher.Write(self.msg)
@@ -199,6 +219,24 @@ class G1_29_ArmController:
         with self.ctrl_lock:
             self.q_target = q_target
             self.tauff_target = tauff_target
+
+    def ctrl_waist_yaw(self, yaw_target: float):
+        '''Set control target value q of the waist yaw motor.
+        
+        Args:
+            yaw_target: Target waist yaw angle in radians (clamped to limits)
+        '''
+        with self.ctrl_lock:
+            self.waist_yaw_target = np.clip(yaw_target, self.waist_yaw_limits[0], self.waist_yaw_limits[1])
+
+    def get_current_waist_yaw(self) -> float:
+        '''Return current state q of the waist yaw motor.'''
+        return self.lowstate_buffer.GetData().motor_state[G1_29_JointIndex.kWaistYaw].q
+
+    def get_waist_yaw_target(self) -> float:
+        '''Return the current target q of the waist yaw motor.'''
+        with self.ctrl_lock:
+            return self.waist_yaw_target
 
     def get_mode_machine(self):
         '''Return current dds mode machine.'''
@@ -222,7 +260,7 @@ class G1_29_ArmController:
         return self.lowstate_subscriber.Read()
 
     def ctrl_dual_arm_go_home(self, release_control: bool = False):
-        '''Move both the left and right arms of the robot to their home position.
+        '''Move both the left and right arms and waist yaw of the robot to their home position.
         
         Args:
             release_control: If True, release SDK control to internal controller after reaching home.
@@ -233,17 +271,19 @@ class G1_29_ArmController:
         current_attempts = 0
         with self.ctrl_lock:
             self.q_target = np.zeros(14)
+            self.waist_yaw_target = 0.0  # Also reset waist yaw to zero
         tolerance = 0.05
         while current_attempts < max_attempts:
             current_q = self.get_current_dual_arm_q()
-            if np.all(np.abs(current_q) < tolerance):
+            current_waist = self.get_current_waist_yaw()
+            if np.all(np.abs(current_q) < tolerance) and abs(current_waist) < tolerance:
                 if self.motion_mode and release_control:
                     # Only ramp down if explicitly releasing control
                     logger.info("[G1_29_ArmController] Releasing SDK arm control to internal controller...")
                     for weight in np.linspace(1, 0, num=101):
                         self.msg.motor_cmd[G1_29_JointIndex.kNotUsedJoint0].q = weight
                         time.sleep(0.02)
-                logger.info("[G1_29_ArmController] both arms have reached the home position.")
+                logger.info("[G1_29_ArmController] both arms and waist have reached the home position.")
                 break
             current_attempts += 1
             time.sleep(0.05)

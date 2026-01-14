@@ -427,33 +427,26 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
     """
     G1 robot data config for local LeRobot format datasets.
     
-    Handles G1 with Dex3 hands and locomotion control.
+    Handles G1 with Dex3 hands and waist yaw control.
     
-    State Space (32 dims):
+    State Space (29 dims):
         [0:28]  qpos        - arm (14) + hand (14) joint positions
-        [28:31] rpy         - roll, pitch, yaw from IMU
-        [31]    yaw_rate    - yaw angular velocity from gyroscope
+        [28]    waist_yaw   - waist yaw joint position
     
-    Action Space (32 dims):
+    Action Space (29 dims):
         [0:28]  upper_body  - arm (14) + hand (14) joint targets
-        [28]    vx          - forward/backward velocity
-        [29]    vy          - strafe left/right velocity
-        [30]    vyaw        - turn (yaw angular velocity)
-        [31]    padding     - zero
+        [28]    waist_yaw   - waist yaw joint target
     
     HDF5 data format:
-        qpos: [T, 28] - arm + hand joints
-        loco_state: [T, 17] - mode, rpy(3), quaternion(4), accel(3), gyro(3), leg_joints(3)
-        action: [T, 28] - arm + hand targets
-        loco_action: [T, 20] - joystick(4) + buttons(16)
+        qpos: [T, 29] - arm + hand + waist_yaw joints
+        action: [T, 29] - arm + hand + waist_yaw targets
     """
     # Local directory path containing the LeRobot format dataset
     data_dir: str = tyro.MISSING
-    # If true, will convert arm joint dimensions to deltas (not hands or loco)
+    # If true, will convert arm joint dimensions to deltas (not hands or waist)
     extra_delta_transform: bool = True
     # Action keys that will be used to read the action sequence from the dataset
-    # Include both upper body and locomotion actions for proper alignment
-    action_sequence_keys: Sequence[str] = ("action", "loco_action")
+    action_sequence_keys: Sequence[str] = ("action",)
     
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
@@ -468,28 +461,24 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
                             "cam_left_wrist": "cam_left_wrist",  # Zero-padded in dataset
                             "cam_right_wrist": "cam_right_wrist",  # Zero-padded in dataset
                         },
-                        "state": "qpos",           # 28 dims
-                        "loco_state": "loco_state", # 17 dims (for rpy and gyro)
-                        "actions": "action",        # 28 dims (upper body)
-                        "loco_action": "loco_action", # 20 dims (for vx, vy, vyaw)
+                        "state": "qpos",           # 29 dims (arm + hand + waist_yaw)
+                        "actions": "action",        # 29 dims (joint targets)
                         "prompt": "task",
                     }
                 ),
-                # Build 32-dim actions from action + loco_action
-                g1_policy.G1ActionsFromHDF5(),
             ]
         )
 
-        # Data transforms: G1Inputs builds 32-dim state, G1Outputs returns 32-dim actions
+        # Data transforms: G1Inputs handles 29-dim state, G1Outputs returns 29-dim actions
         data_transforms = _transforms.Group(
             inputs=[g1_policy.G1Inputs(model_type=model_config.model_type)],
-            outputs=[g1_policy.G1Outputs(action_dim=32)],
+            outputs=[g1_policy.G1Outputs(action_dim=29)],
         )
 
         if self.extra_delta_transform:
-            # Apply delta transform to arm joints only (first 14), not hands or loco
-            # Mask: [True]*14 + [False]*18 = delta for arms, absolute for hands+loco
-            delta_action_mask = _transforms.make_bool_mask(14, -18)
+            # Apply delta transform to arm joints only (first 14), not hands or waist_yaw
+            # Mask: [True]*14 + [False]*15 = delta for arms, absolute for hands+waist
+            delta_action_mask = _transforms.make_bool_mask(14, -15)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],
@@ -1216,13 +1205,13 @@ _CONFIGS = [
     #
     TrainConfig(
         # Fine-tune pi05 on G1 data stored locally (LeRobot format)
-        # State: 32 dims = qpos(28) + rpy(3) + yaw_rate(1)
-        # Action: 32 dims = upper_body(28) + vx + vy + vyaw + padding
+        # State: 29 dims = arm(14) + hand(14) + waist_yaw(1)
+        # Action: 29 dims = joint targets (same structure)
         # NOTE: Override data_dir via --data-dir when training/serving
         name="pi05_g1_auto",
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=32,  # 28 upper body + 3 loco + 1 padding
+            action_dim=29,  # 28 upper body + 1 waist_yaw
             action_horizon=50,
         ),
         data=LeRobotG1LocalDataConfig(
