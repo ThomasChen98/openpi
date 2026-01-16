@@ -42,7 +42,7 @@ training:
   keep_period: 1200
   num_repeats: 1
   labeling_mode: "human_labeling"                      # SFT: Use human episode-level labels
-  gpu_id: 1
+  gpu_id: 0
 
 # =============================================================================
 # REWARD CONFIGURATION (Not used in SFT mode, but kept for compatibility)
@@ -56,6 +56,7 @@ reward:
   image_rotation: 0
   advantage_threshold: 0.5                              # Not used in human_labeling
   look_ahead_window: 80                                 # Not used in human_labeling
+  random_drop_rate: 0.0                                 # Not used in human_labeling
 
 # =============================================================================
 # SERVER CONFIGURATION

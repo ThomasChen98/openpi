@@ -55,6 +55,7 @@ reward:
   # Advantage labeling parameters
   advantage_threshold: 0.33         # Top percentile for advantage (e.g., 0.33 = top 33%)
   look_ahead_window: 80             # Frames to look ahead for action chunk advantage (only for action_chunk_advantage mode)
+  random_drop_rate: 0.0             # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
 
 # =============================================================================
 # SERVER CONFIGURATION - Policy server settings

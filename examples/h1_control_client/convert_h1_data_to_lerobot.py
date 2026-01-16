@@ -28,6 +28,7 @@ import shutil
 from pathlib import Path
 from typing import Literal
 import pickle
+import random
 
 import os
 import cv2
@@ -162,6 +163,7 @@ def main(
     reward_image_rotation: int = 0,
     reward_advantage_threshold: float = 0.3,
     reward_ranking_frames: int = 5,
+    reward_random_drop_rate: float = 0.0,
     action_dim: int = None,
     filter_good_only: bool = False,
 ):
@@ -361,7 +363,13 @@ def main(
             "shape": (1,),
             "names": ["advantage"],
         }
+        features["drop_advantage"] = {
+            "dtype": "bool",
+            "shape": (1,),
+            "names": ["drop_advantage"],
+        }
         print("Added 'advantage' feature for per-frame advantage labels")
+        print("Added 'drop_advantage' feature for random drop tracking")
     
     dataset = LeRobotDataset.create(
         repo_id=repo_id,
@@ -475,6 +483,9 @@ def main(
     total_episodes = len(episodes_data) * num_repeats
     print(f"\nProcessing {total_episodes} episodes ({len(episodes_data)} files × {num_repeats} repeats)...")
     
+    # Track random drop statistics for action_chunk_advantage mode
+    random_drop_stats = {"dropped": 0, "kept_with_advantage": 0, "total_frames": 0}
+    
     episode_counter = 0
     for repeat_idx in range(num_repeats):
         for file_idx, episode_data in enumerate(episodes_data):
@@ -532,12 +543,31 @@ def main(
                 if labeling_mode == "action_chunk_advantage":
                     # Store per-frame advantage as a separate feature
                     # Task field remains clean (no advantage suffix)
-                    if frame_advantages is not None and step_idx < len(frame_advantages):
+                    
+                    # Random drop: randomly select frames to keep original prompt (no advantage)
+                    # This creates a mix of: advantage=True, advantage=False, and no-advantage samples
+                    random_drop_stats["total_frames"] += 1
+                    should_drop_advantage = random.random() < reward_random_drop_rate
+                    
+                    if should_drop_advantage:
+                        # Drop advantage label - mark with drop_advantage=True
+                        # The training transform will skip advantage labeling for these frames
+                        frame_data["advantage"] = np.array([False], dtype=bool)  # Default value (ignored)
+                        frame_data["drop_advantage"] = np.array([True], dtype=bool)
+                        frame_data["task"] = task_description  # Original task, no advantage marker
+                        random_drop_stats["dropped"] += 1
+                    elif frame_advantages is not None and step_idx < len(frame_advantages):
+                        # Keep advantage label (True or False based on pre-computed advantages)
                         frame_data["advantage"] = np.array([bool(frame_advantages[step_idx])], dtype=bool)
+                        frame_data["drop_advantage"] = np.array([False], dtype=bool)
+                        frame_data["task"] = task_description
+                        random_drop_stats["kept_with_advantage"] += 1
                     else:
                         # Default to False if index out of bounds or no advantages
                         frame_data["advantage"] = np.array([False], dtype=bool)
-                    frame_data["task"] = task_description
+                        frame_data["drop_advantage"] = np.array([False], dtype=bool)
+                        frame_data["task"] = task_description
+                        random_drop_stats["kept_with_advantage"] += 1
                 elif use_advantage:
                     # Episode-level advantage: append to task string
                     advantage = episode_data["advantage"]
@@ -559,6 +589,18 @@ def main(
     print(f"Total episodes: {total_episodes}")
     print(f"Total frames: {episode_counter * len(actions)}")
     print(f"Dataset saved to: {output_path}")
+    
+    # Print random drop statistics if applicable
+    if labeling_mode == "action_chunk_advantage" and reward_random_drop_rate > 0:
+        total = random_drop_stats["total_frames"]
+        dropped = random_drop_stats["dropped"]
+        kept = random_drop_stats["kept_with_advantage"]
+        if total > 0:
+            print(f"\nRandom Drop Statistics (rate={reward_random_drop_rate:.2%}):")
+            print(f"  Total frames: {total}")
+            print(f"  Dropped (no advantage): {dropped} ({100*dropped/total:.1f}%)")
+            print(f"  Kept with advantage: {kept} ({100*kept/total:.1f}%)")
+            print(f"    → These will be split into Advantage=True/False based on pre-computed advantages")
 
     # Optionally push to the Hugging Face Hub
     if push_to_hub:

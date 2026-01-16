@@ -63,6 +63,10 @@ while [[ $# -gt 0 ]]; do
             REWARD_ADVANTAGE_THRESHOLD="$2"
             shift 2
             ;;
+        --reward-random-drop-rate)
+            REWARD_RANDOM_DROP_RATE="$2"
+            shift 2
+            ;;
         --action-dim)
             ACTION_DIM="$2"
             shift 2
@@ -92,6 +96,7 @@ REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
 REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
 REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
 REWARD_LOOK_AHEAD_WINDOW="${REWARD_LOOK_AHEAD_WINDOW:-80}"
+REWARD_RANDOM_DROP_RATE="${REWARD_RANDOM_DROP_RATE:-0.0}"
 
 # Action dimension (empty = auto-detect from HDF5, 14=arms, 26=arms+hands)
 ACTION_DIM="${ACTION_DIM:-}"
@@ -268,6 +273,8 @@ if [ "$LABELING_MODE" != "none" ]; then
         if [ -n "$REWARD_TASK_INSTRUCTION" ]; then
             CONVERT_CMD="$CONVERT_CMD --reward_task_instruction \"$REWARD_TASK_INSTRUCTION\""
         fi
+        # Pass random drop rate (default 0.0 means no dropping)
+        CONVERT_CMD="$CONVERT_CMD --reward_random_drop_rate $REWARD_RANDOM_DROP_RATE"
         # Note: action chunk advantages are already pre-computed, just pass task instruction
     fi
 fi

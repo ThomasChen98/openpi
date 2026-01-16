@@ -332,16 +332,23 @@ class ActionChunkAdvantagePrompt(DataTransformFn):
     1. Reads the 'advantage' feature from the START frame of the chunk
     2. Appends ", Advantage=True/False" to the prompt
     3. All frames in the chunk share the same augmented prompt
+    4. If 'drop_advantage' is True for the start frame, skips augmentation
     
     Used for fine-grained action chunk advantage labeling where each chunk
     gets its own advantage label based on whether actions from that state
     lead to good outcomes.
+    
+    Random drop feature: Some frames can be marked with drop_advantage=True
+    to skip advantage labeling and use the original task prompt. This creates
+    a training mix of positive examples (Advantage=True), negative examples
+    (Advantage=False), and neutral examples (no advantage label).
     """
     
     # Debug counter for logging (class variable)
     _debug_counter: int = 0
     _debug_true_count: int = 0
     _debug_false_count: int = 0
+    _debug_dropped_count: int = 0
 
     def __call__(self, data: DataDict) -> DataDict:
         if "advantage" not in data:
@@ -350,6 +357,39 @@ class ActionChunkAdvantagePrompt(DataTransformFn):
         
         if "prompt" not in data:
             raise ValueError("ActionChunkAdvantagePrompt requires 'prompt' field")
+        
+        # Check if this chunk's start frame is marked for random drop
+        # If drop_advantage feature exists and is True, skip advantage augmentation
+        should_drop = False
+        if "drop_advantage" in data:
+            drop_values = data["drop_advantage"]
+            # Get drop flag for START frame (same logic as advantage)
+            if hasattr(drop_values, 'shape'):
+                if len(drop_values.shape) == 0:
+                    should_drop = bool(drop_values.item()) if hasattr(drop_values, 'item') else bool(drop_values)
+                elif len(drop_values.shape) > 1:
+                    should_drop = bool(drop_values[0, 0])
+                else:
+                    should_drop = bool(drop_values[0])
+            else:
+                should_drop = bool(drop_values)
+        
+        # If marked for drop, return original prompt without advantage
+        if should_drop:
+            ActionChunkAdvantagePrompt._debug_counter += 1
+            ActionChunkAdvantagePrompt._debug_dropped_count += 1
+            
+            if ActionChunkAdvantagePrompt._debug_counter % 100 == 0:
+                total = ActionChunkAdvantagePrompt._debug_counter
+                true_pct = 100 * ActionChunkAdvantagePrompt._debug_true_count / total
+                false_pct = 100 * ActionChunkAdvantagePrompt._debug_false_count / total
+                dropped_pct = 100 * ActionChunkAdvantagePrompt._debug_dropped_count / total
+                print(f"[ActionChunkAdvantage] Processed {total} chunks: "
+                      f"True={ActionChunkAdvantagePrompt._debug_true_count} ({true_pct:.1f}%), "
+                      f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%), "
+                      f"Dropped={ActionChunkAdvantagePrompt._debug_dropped_count} ({dropped_pct:.1f}%)")
+            
+            return data  # Return with original prompt (no advantage augmentation)
         
         # Get advantage for the START frame of this chunk
         # data["advantage"] has shape (chunk_length, 1) for action chunks
@@ -392,9 +432,11 @@ class ActionChunkAdvantagePrompt(DataTransformFn):
             total = ActionChunkAdvantagePrompt._debug_counter
             true_pct = 100 * ActionChunkAdvantagePrompt._debug_true_count / total
             false_pct = 100 * ActionChunkAdvantagePrompt._debug_false_count / total
+            dropped_pct = 100 * ActionChunkAdvantagePrompt._debug_dropped_count / total
             print(f"[ActionChunkAdvantage] Processed {total} chunks: "
                   f"True={ActionChunkAdvantagePrompt._debug_true_count} ({true_pct:.1f}%), "
-                  f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%)")
+                  f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%), "
+                  f"Dropped={ActionChunkAdvantagePrompt._debug_dropped_count} ({dropped_pct:.1f}%)")
         
         return {**data, "prompt": augmented_prompt}
 
