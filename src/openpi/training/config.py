@@ -1211,7 +1211,7 @@ _CONFIGS = [
         name="pi05_g1_auto",
         model=pi0_config.Pi0Config(
             pi05=True,
-            action_dim=29,  # 28 upper body + 1 waist_yaw
+            action_dim=32,  # pi05 is trained with 32-dim actions
             action_horizon=50,
         ),
         data=LeRobotG1LocalDataConfig(
@@ -1229,10 +1229,10 @@ _CONFIGS = [
             decay_lr=2.5e-6,
         ),
         log_interval=10,
-        num_train_steps=1_200,
+        num_train_steps=5_000,
         batch_size=32,
-        save_interval=1_200,
-        keep_period=1_200,
+        save_interval=2_500,
+        keep_period=2_500,
     ),
     #
     # ALOHA Sim configs. This config is used to demonstrate how to train on a simple simulated environment.

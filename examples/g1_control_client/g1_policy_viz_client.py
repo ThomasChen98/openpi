@@ -61,7 +61,7 @@ except ImportError:
 
 from utils.data_replay import (
     load_hdf5_data,
-    extract_joints_for_urdf_g1_28dof,
+    extract_joints_for_urdf_g1,
     decode_jpeg_image,
     euler_to_quaternion,
     format_loco_state,
@@ -507,6 +507,18 @@ def main(args: Args) -> None:
             initial_value="--",
             disabled=True,
         )
+        # Waist yaw display (for 29 DOF data)
+        if data.get('has_waist_yaw', False):
+            joint_displays['waist_yaw'] = server.gui.add_text(
+                "Waist Yaw [28]",
+                initial_value="--",
+                disabled=True,
+            )
+            joint_displays['waist_yaw_predicted'] = server.gui.add_text(
+                "Waist Yaw (Policy)",
+                initial_value="--",
+                disabled=True,
+            )
     
     # === ROBOT EXECUTION GUI ===
     if args.robot_execution:
@@ -1285,8 +1297,8 @@ def main(args: Args) -> None:
         if data['loco_action'] is not None:
             loco_action = data['loco_action'][current_frame]
         
-        # Map joints to URDF order (expects 28 DOF)
-        urdf_joints = extract_joints_for_urdf_g1_28dof(joints, loco_state)
+        # Map joints to URDF order (auto-detects 28 or 29 DOF)
+        urdf_joints = extract_joints_for_urdf_g1(joints, loco_state)
         
         # Update robot configuration
         viser_urdf.update_cfg(urdf_joints[:viser_urdf._urdf.num_actuated_joints])
@@ -1297,6 +1309,12 @@ def main(args: Args) -> None:
             joint_displays['right_arm'].value = f"{joints[7:14].round(3)}"
             joint_displays['left_hand'].value = f"{joints[14:21].round(3)}"
             joint_displays['right_hand'].value = f"{joints[21:28].round(3)}"
+        
+        # Update waist yaw display (29 DOF only)
+        if len(joints) >= 29 and 'waist_yaw' in joint_displays:
+            waist_rad = joints[28]
+            waist_deg = np.degrees(waist_rad)
+            joint_displays['waist_yaw'].value = f"{waist_rad:.3f} rad ({waist_deg:.1f}°)"
         
         # Update locomotion displays
         if data['has_loco_data'] and loco_state is not None:
@@ -1344,11 +1362,13 @@ def main(args: Args) -> None:
             active = action_info.get('active_buttons', [])
             loco_displays['buttons'].value = ', '.join(active) if active else 'None'
         
-        # Display predicted waist yaw target from policy
-        if waist_yaw_target is not None:
-            loco_displays['predicted_loco'].value = f"waist_yaw: {waist_yaw_target:.3f} rad"
-        else:
-            loco_displays['predicted_loco'].value = "waist_yaw: --"
+        # Display predicted waist yaw target from policy (29 DOF only)
+        if data.get('has_waist_yaw', False) and 'waist_yaw_predicted' in joint_displays:
+            if waist_yaw_target is not None:
+                waist_deg = np.degrees(waist_yaw_target)
+                joint_displays['waist_yaw_predicted'].value = f"{waist_yaw_target:.3f} rad ({waist_deg:.1f}°)"
+            else:
+                joint_displays['waist_yaw_predicted'].value = "--"
         
         # Update camera images
         update_camera_displays()

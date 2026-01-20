@@ -31,7 +31,7 @@ from viser.extras import ViserUrdf
 
 from utils.data_replay import (
     load_hdf5_data,
-    extract_joints_for_urdf_g1_28dof,
+    extract_joints_for_urdf_g1,
     decode_jpeg_image,
     euler_to_quaternion,
     format_loco_state,
@@ -47,7 +47,7 @@ EGO_ROLL = 0.0
 
 
 def main(
-    hdf5_path: str = "./g1_data_processed/loco_place_bottle_overfit/episode_02.hdf5",
+    hdf5_path: str = "./g1_data_processed/insert_plate_jan16/episode_20.hdf5",
     urdf_path: str | None = None,
     fps: float | None = None,
     start_frame: int = 0,
@@ -239,6 +239,13 @@ def main(
             initial_value="--",
             disabled=True,
         )
+        # Waist yaw display (only for 29 DOF data)
+        if data['has_waist_yaw']:
+            joint_displays['waist_yaw'] = server.gui.add_text(
+                "Waist Yaw",
+                initial_value="--",
+                disabled=True,
+            )
     
     # Visibility callbacks
     @show_meshes_cb.on_update
@@ -269,7 +276,7 @@ def main(
     # Set initial configuration
     initial_joints = data['actions'][start_frame] if use_actions.value else data['qpos'][start_frame]
     initial_loco = data['loco_state'][start_frame] if data['loco_state'] is not None else None
-    urdf_joints = extract_joints_for_urdf_g1_28dof(initial_joints, initial_loco)
+    urdf_joints = extract_joints_for_urdf_g1(initial_joints, initial_loco)
     viser_urdf.update_cfg(urdf_joints[:viser_urdf._urdf.num_actuated_joints])
     
     # Print startup info
@@ -277,10 +284,14 @@ def main(
     print("G1 Data Replay Started!")
     print(f"{'='*80}")
     print(f"Total frames: {data['num_frames']}")
-    print(f"Number of joints: {data['num_joints']} (28 DOF: 14 arm + 14 hand)")
+    if data['has_waist_yaw']:
+        print(f"Number of joints: {data['num_joints']} (29 DOF: 14 arm + 14 hand + 1 waist)")
+    else:
+        print(f"Number of joints: {data['num_joints']} (28 DOF: 14 arm + 14 hand)")
     print(f"Robot: {data['robot_name']}")
     print(f"FPS: {fps}")
     print(f"Has locomotion data: {data['has_loco_data']}")
+    print(f"Has waist yaw: {data['has_waist_yaw']}")
     print(f"Camera topics: {data['camera_topics']}")
     print(f"\nURDF: {urdf_path}")
     print(f"URDF actuated joints: {viser_urdf._urdf.num_actuated_joints}")
@@ -329,8 +340,8 @@ def main(
         if data['loco_action'] is not None:
             loco_action = data['loco_action'][current_frame]
         
-        # Map joints to URDF order
-        urdf_joints = extract_joints_for_urdf_g1_28dof(joint_positions, loco_state)
+        # Map joints to URDF order (auto-detects 28 or 29 DOF)
+        urdf_joints = extract_joints_for_urdf_g1(joint_positions, loco_state)
         
         # Update robot configuration
         viser_urdf.update_cfg(urdf_joints[:viser_urdf._urdf.num_actuated_joints])
@@ -343,6 +354,12 @@ def main(
         joint_displays['right_arm'].value = f"{joint_positions[7:14].round(3)}"
         joint_displays['left_hand'].value = f"{joint_positions[14:21].round(3)}"
         joint_displays['right_hand'].value = f"{joint_positions[21:28].round(3)}"
+        
+        # Update waist yaw display (29 DOF only)
+        if data['has_waist_yaw'] and 'waist_yaw' in joint_displays:
+            waist_yaw_rad = joint_positions[28]
+            waist_yaw_deg = np.degrees(waist_yaw_rad)
+            joint_displays['waist_yaw'].value = f"{waist_yaw_rad:.3f} rad ({waist_yaw_deg:.1f}°)"
         
         # Update locomotion displays
         if data['has_loco_data'] and loco_state is not None:

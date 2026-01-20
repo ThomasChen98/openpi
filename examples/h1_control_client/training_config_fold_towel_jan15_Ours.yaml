@@ -102,5 +102,5 @@ recording:
 # =============================================================================
 pipeline:
   start_phase: "data_collection"
-  start_epoch: 4
+  start_epoch: 1
   auto_sync: true

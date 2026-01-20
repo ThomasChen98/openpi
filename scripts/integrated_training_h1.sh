@@ -103,6 +103,7 @@ REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
 REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
 REWARD_LOOK_AHEAD_WINDOW=$(yq -r '.reward.look_ahead_window // 80' "$CONFIG_FILE")
 REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
+REWARD_RANDOM_DROP_RATE=$(yq -r '.reward.random_drop_rate // 0.0' "$CONFIG_FILE")
 
 # Server
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
@@ -669,6 +670,7 @@ convert_epoch_data() {
             log_info "  Max frames: $REWARD_MAX_FRAMES"
             log_info "  Look-ahead window: $REWARD_LOOK_AHEAD_WINDOW frames"
             log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (top ${REWARD_ADVANTAGE_THRESHOLD} percentile)"
+            log_info "  Random drop rate: ${REWARD_RANDOM_DROP_RATE} (keep original prompt without advantage)"
             log_info "  GPU: $GPU_ID"
         else
             log_info "Using Qwen-based reward labeling with:"
@@ -684,7 +686,8 @@ convert_epoch_data() {
             --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \
             --reward-max-frames \"$REWARD_MAX_FRAMES\" \
             --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \
-            --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\""
+            --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
+            --reward-random-drop-rate \"$REWARD_RANDOM_DROP_RATE\""
     fi
     
     # Execute conversion

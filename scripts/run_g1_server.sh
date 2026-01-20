@@ -37,8 +37,8 @@ PORT="${PORT:-8001}"
 # Set data and checkpoint directories based on config
 if [[ "$POLICY_CONFIG" == "pi05_g1_auto" ]]; then
     # G1 specific paths
-    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/loco_place_bottle_overfit/1199}"
-    DATA_DIR="${DATA_DIR:-${OPENPI_DIR}/examples/g1_control_client/g1_data_lerobot/loco_place_bottle_overfit}"
+    POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_g1_auto/insert_plate_jan16/1199}"
+    DATA_DIR="${DATA_DIR:-${OPENPI_DIR}/examples/g1_control_client/g1_data_lerobot/insert_plate_jan16}"
 else
     # H1 paths (for testing)
     POLICY_DIR="${POLICY_DIR:-checkpoints/pi05_h1_auto/fold_towel_reward_2/epoch_0/1499}"
@@ -76,7 +76,7 @@ if [[ "$POLICY_CONFIG" == "pi05_g1_auto" ]]; then
     echo -e "    [14:28] Dex3 hand joint targets"
     echo -e "    [28]    waist_yaw target"
 else
-    echo -e "${YELLOW}⚠️  Using H1 config for testing${NC}"
+    echo -e "${YELLOW}  Using H1 config for testing${NC}"
     echo -e "    H1 has 26-dim action space (arms + Inspire hands)"
     echo -e "    G1 has 29-dim action space (arms + Dex3 hands + waist_yaw)"
     echo ""

@@ -187,6 +187,7 @@ def main(
     Examples:
         # Process single directory
         python hdf5_to_mp4.py --input_dirs ../h1_data_processed/box_action/bad
+        python hdf5_to_mp4.py --input_dirs ../h1_data_auto/fold_towel_jan15_Ours/epoch_4/raw
         
         # Process multiple directories
         python hdf5_to_mp4.py --input_dirs ../h1_data_processed/box_action/bad ../h1_data_processed/box_action/good
