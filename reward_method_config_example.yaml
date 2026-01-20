@@ -1,0 +1,57 @@
+# Example YAML Configuration for Reward Method Selection
+#
+# This shows how to configure different reward models in your training_config.yaml
+
+# =============================================================================
+# Using "Ours" Method (Fine-tuned Qwen Model)
+# =============================================================================
+reward:
+  method: "Ours"  # Use your fine-tuned Qwen model
+  task_instruction: "Pick up the bottle and insert it into the tray. Keep the bottle perfectly upright (vertical) and aligned straight."
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/IB-checkpoint-750"
+  max_frames: 20
+  image_rotation: 0
+  advantage_threshold: 0.3
+  look_ahead_window: 80
+  random_drop_rate: 0.0
+
+# =============================================================================
+# Using "GVL" Method (OpenAI GPT-5.2)
+# =============================================================================
+# reward:
+#   method: "GVL"  # Use OpenAI GPT-5.2 model
+#   task_instruction: "Fold the towel into a small square."
+#   # No checkpoint_path needed for GVL
+#   # Make sure OPENAI_API_KEY is set in your environment:
+#   #   export OPENAI_API_KEY='your-key-here'
+#   max_frames: 30
+#   image_rotation: 0
+#   advantage_threshold: 0.3
+#   look_ahead_window: 80
+#   random_drop_rate: 0.0
+
+# =============================================================================
+# Notes
+# =============================================================================
+# 
+# "Ours" Method:
+#   - Uses your fine-tuned Qwen3VL model
+#   - Requires: reward.checkpoint_path pointing to Qwen checkpoint
+#   - Runs in conda base environment with proper transformers/unsloth versions
+#   - Uses the miniconda Python at /home/yuxin/miniconda/bin/python
+#
+# "GVL" Method:
+#   - Uses OpenAI's GPT-5.2 model via API
+#   - Requires: OPENAI_API_KEY environment variable
+#   - No checkpoint needed
+#   - Can run in parallel with multiple workers (faster for many episodes)
+#
+# Both methods support:
+#   - reward_labeling: Episode-level advantage labels
+#   - action_chunk_advantage: Fine-grained per-frame advantage labels
+#
+# Cache files are method-specific:
+#   - Ours: episode_000000_Ours_reward.pkl
+#   - GVL: episode_000000_GVL_reward.pkl
+#
+# This allows you to switch between methods without recomputing cached rewards.

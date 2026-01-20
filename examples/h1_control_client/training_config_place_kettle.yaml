@@ -39,7 +39,7 @@ training:
 # =============================================================================
 reward:
   # Path to Qwen reward model checkpoint (required for reward_labeling mode)
-  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-1240"
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/FT-checkpoint-1240"
   
   task_instruction: |
     Pick up the kettle with the right hand and place it onto the charger base.

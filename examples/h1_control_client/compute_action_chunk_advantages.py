@@ -93,7 +93,8 @@ class ActionChunkAdvantageComputer:
     def __init__(
         self,
         task_instruction: str,
-        qwen_checkpoint_path: str,
+        reward_method: str = "Ours",
+        qwen_checkpoint_path: str = "",
         dinov3_model_id: str = "facebook/dinov3-vits16-pretrain-lvd1689m",
         max_frames: int = 30,
         look_ahead_window: int = 80,
@@ -102,8 +103,9 @@ class ActionChunkAdvantageComputer:
     ):
         """
         Args:
-            task_instruction: Task description for Qwen reward model
-            qwen_checkpoint_path: Path to fine-tuned Qwen checkpoint
+            task_instruction: Task description for reward model
+            reward_method: Reward model method ('Ours' or 'GVL')
+            qwen_checkpoint_path: Path to fine-tuned Qwen checkpoint (for 'Ours' method)
             dinov3_model_id: HuggingFace model ID for DINOv3
             max_frames: Max frames to sample for reward prediction
             look_ahead_window: Number of future frames to consider for advantage
@@ -111,6 +113,7 @@ class ActionChunkAdvantageComputer:
             device: cuda or cpu
         """
         self.task_instruction = task_instruction
+        self.reward_method = reward_method
         self.max_frames = max_frames
         self.look_ahead_window = look_ahead_window
         self.advantage_threshold = advantage_threshold
@@ -118,10 +121,26 @@ class ActionChunkAdvantageComputer:
         
         print("Loading models...")
         print(f"  Device: {device}")
+        print(f"  Reward Method: {reward_method}")
         
-        # Load Qwen reward model
-        print(f"  Loading Qwen from: {qwen_checkpoint_path}")
-        self.qwen_model, self.qwen_tokenizer = load_model_and_tokenizer(qwen_checkpoint_path)
+        # Load reward model based on method
+        if reward_method == "Ours":
+            # Load Qwen reward model
+            print(f"  Loading Qwen from: {qwen_checkpoint_path}")
+            self.qwen_model, self.qwen_tokenizer = load_model_and_tokenizer(qwen_checkpoint_path)
+            self.openai_client = None
+        elif reward_method == "GVL":
+            # Load OpenAI client
+            from openai import OpenAI
+            api_key = os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY not set in environment")
+            print("  Using OpenAI GPT-5.2 for GVL method")
+            self.openai_client = OpenAI(api_key=api_key)
+            self.qwen_model = None
+            self.qwen_tokenizer = None
+        else:
+            raise ValueError(f"Unknown reward method: {reward_method}")
         
         # Load DINOv3 for visual embeddings
         print(f"  Loading DINOv3: {dinov3_model_id}")
@@ -154,20 +173,48 @@ class ActionChunkAdvantageComputer:
         for i, fr in enumerate(test_video_frames):
             fr.gt_reward = 0
         
-        # Build inference samples (one per frame)
-        test_video_data = [
-            build_qwen3vl_sft_sample(
-                frames=test_video_frames,
-                task=self.task_instruction,
-                anchor_gt_idx=1,
-                shuffle_frames=False,
-                target_frame_idx=i + 1,
+        if self.reward_method == "Ours":
+            # Use Qwen model
+            # Build inference samples (one per frame)
+            test_video_data = [
+                build_qwen3vl_sft_sample(
+                    frames=test_video_frames,
+                    task=self.task_instruction,
+                    anchor_gt_idx=1,
+                    shuffle_frames=False,
+                    target_frame_idx=i + 1,
+                )
+                for i in range(len(test_video_frames))
+            ]
+            
+            # Run inference with batch_size=1 to avoid batching issues
+            reward_pred = run_inference(self.qwen_model, self.qwen_tokenizer, test_video_data, inference_batch_size=1)
+            
+        elif self.reward_method == "GVL":
+            # Use OpenAI GVL model
+            from embodied_reward_util import (
+                shuffle_frames,
+                build_gemini_parts,
+                build_openai_responses_input_from_gemini_parts
             )
-            for i in range(len(test_video_frames))
-        ]
+            
+            # Shuffle frames
+            shuffle_frames(test_video_frames)
+            
+            # Build input for OpenAI
+            gemini_input = build_gemini_parts(test_video_frames, self.task_instruction)
+            openai_input = build_openai_responses_input_from_gemini_parts(gemini_input)
+            
+            # Get reward predictions
+            resp = self.openai_client.responses.create(
+                model="gpt-5.2",
+                input=openai_input,
+            )
+            reward_pred_result_raw = resp.output_text
+            reward_pred = self._parse_reward_from_result(test_video_frames, reward_pred_result_raw)
         
-        # Run inference with batch_size=1 to avoid batching issues
-        reward_pred = run_inference(self.qwen_model, self.qwen_tokenizer, test_video_data, inference_batch_size=1)
+        else:
+            raise ValueError(f"Unknown reward method: {self.reward_method}")
         
         # Interpolate to get dense rewards for all frames
         anchor_idx = np.array([fr.src_idx for fr in test_video_frames], dtype=int)
@@ -175,6 +222,39 @@ class ActionChunkAdvantageComputer:
         dense_r = np.interp(np.arange(len(ego_images)), anchor_idx, anchor_r)
         
         return dense_r
+    
+    def _parse_reward_from_result(self, rollout_frames: List, raw_result: str) -> List[int]:
+        """Parse reward predictions from GVL response."""
+        import re
+        import json
+        
+        arr_text = raw_result
+        try:
+            data = json.loads(arr_text)
+        except json.JSONDecodeError:
+            # Try to repair JSON
+            repaired = re.sub(r",\s*([}\]])", r"\1", arr_text)
+            try:
+                data = json.loads(repaired)
+            except json.JSONDecodeError:
+                print(f"Warning: Failed to parse GVL reward result, using zeros")
+                return [0] * len(rollout_frames)
+        
+        # Sort by shuffled order and extract percentages
+        by_shuf = sorted(rollout_frames, key=lambda f: f.shuf_idx)
+        reward_pred = []
+        
+        for i, item in enumerate(data):
+            if i >= len(by_shuf):
+                break
+            percent = int(max(0, min(100, int(item.get("task_completion_percentage", 0)))))
+            reward_pred.append(percent)
+        
+        # Ensure we have the right number of predictions
+        while len(reward_pred) < len(rollout_frames):
+            reward_pred.append(0)
+        
+        return reward_pred
     
     def query_action_chunk_advantage(
         self,
@@ -255,7 +335,8 @@ def main():
     parser = argparse.ArgumentParser(description="Compute action chunk advantages")
     parser.add_argument("--data-dir", required=True, help="Directory containing episode parquet files")
     parser.add_argument("--task-instruction", required=True, help="Task instruction for reward model")
-    parser.add_argument("--checkpoint-path", required=True, help="Path to Qwen checkpoint")
+    parser.add_argument("--checkpoint-path", default="", help="Path to Qwen checkpoint (required for 'Ours' method)")
+    parser.add_argument("--reward-method", default="Ours", choices=["Ours", "GVL"], help="Reward model method: 'Ours' or 'GVL'")
     parser.add_argument("--output-dir", default=None, help="Output directory (defaults to data-dir)")
     parser.add_argument("--max-frames", type=int, default=30, help="Max frames for reward sampling")
     parser.add_argument("--look-ahead-window", type=int, default=80, help="Frames to look ahead for advantage")
@@ -264,6 +345,19 @@ def main():
     parser.add_argument("--force-recompute", action="store_true", help="Recompute even if cache files exist")
     
     args = parser.parse_args()
+    
+    # Validate arguments based on reward method
+    if args.reward_method == "Ours":
+        if not args.checkpoint_path:
+            print("Error: --checkpoint-path is required for reward method 'Ours'")
+            sys.exit(1)
+        if not os.path.exists(args.checkpoint_path):
+            print(f"Error: Checkpoint path does not exist: {args.checkpoint_path}")
+            sys.exit(1)
+    elif args.reward_method == "GVL":
+        if not os.environ.get("OPENAI_API_KEY"):
+            print("Error: OPENAI_API_KEY environment variable is required for reward method 'GVL'")
+            sys.exit(1)
     
     # Setup
     data_dir = Path(args.data_dir)
@@ -281,6 +375,7 @@ def main():
     # Initialize computer
     computer = ActionChunkAdvantageComputer(
         task_instruction=args.task_instruction,
+        reward_method=args.reward_method,
         qwen_checkpoint_path=args.checkpoint_path,
         max_frames=args.max_frames,
         look_ahead_window=args.look_ahead_window,
@@ -295,7 +390,8 @@ def main():
     
     all_episode_rewards = []
     for ep_file in tqdm(episode_files, desc="Computing rewards"):
-        reward_cache = ep_file.replace('.parquet', '_reward.pkl')
+        # Include reward method in cache filename
+        reward_cache = ep_file.replace('.parquet', f'_{args.reward_method}_reward.pkl')
         
         if os.path.exists(reward_cache) and not args.force_recompute:
             rewards = pickle.load(open(reward_cache, 'rb'))

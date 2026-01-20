@@ -23,7 +23,7 @@ training:
   labeling_mode: "action_chunk_advantage"  # Changed from "human_labeling"
 
 reward:
-  checkpoint_path: "/path/to/qwen/checkpoint-750"
+  checkpoint_path: "/path/to/qwen/FT-checkpoint-750"
   task_instruction: "Fold the towel into a small square."
   max_frames: 30
   advantage_threshold: 0.33      # Top 33% get Advantage=True
@@ -122,7 +122,7 @@ These are cached, so re-running is fast!
 python examples/h1_control_client/compute_action_chunk_advantages.py \
     --data-dir examples/h1_control_client/h1_data_lerobot/fold_towel/epoch_0/data/chunk-000 \
     --task-instruction "Fold the towel into a small square." \
-    --checkpoint-path third_party/emboided_reward/checkpoint-750
+    --checkpoint-path third_party/emboided_reward/FT-checkpoint-750
 
 # 2. Check the results
 python -c "
@@ -304,7 +304,7 @@ export CUDA_VISIBLE_DEVICES=1
 
 Make sure you have the Qwen reward model checkpoint:
 ```bash
-ls -la third_party/emboided_reward/checkpoint-750/
+ls -la third_party/emboided_reward/FT-checkpoint-750/
 # Should contain: adapter_config.json, adapter_model.safetensors, etc.
 ```
 

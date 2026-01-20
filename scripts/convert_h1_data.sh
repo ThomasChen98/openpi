@@ -47,6 +47,10 @@ while [[ $# -gt 0 ]]; do
             CONFIG_NAME="$2"
             shift 2
             ;;
+        --reward-method)
+            REWARD_METHOD="$2"
+            shift 2
+            ;;
         --reward-task-instruction)
             REWARD_TASK_INSTRUCTION="$2"
             shift 2
@@ -91,6 +95,7 @@ NUM_REPEATS="${NUM_REPEATS:-1}"
 CONFIG_NAME="${CONFIG_NAME:-pi05_h1_auto}"
 
 # Reward labeling parameters (used for reward_labeling and action_chunk_advantage modes)
+REWARD_METHOD="${REWARD_METHOD:-Ours}"  # Options: Ours, GVL
 REWARD_TASK_INSTRUCTION="${REWARD_TASK_INSTRUCTION:-}"
 REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
 REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
@@ -212,7 +217,8 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
                 --checkpoint-path "$QWEN_REWARD_CHECKPOINT_PATH" \
                 --max-frames "$REWARD_MAX_FRAMES" \
                 --look-ahead-window "$REWARD_LOOK_AHEAD_WINDOW" \
-                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD"
+                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD" \
+                --reward-method "$REWARD_METHOD"
             
             echo "✓ Action chunk advantages computed!"
         fi
@@ -260,6 +266,7 @@ if [ "$LABELING_MODE" != "none" ]; then
     
     # Add reward labeling parameters if in reward_labeling mode
     if [ "$LABELING_MODE" = "reward_labeling" ]; then
+        CONVERT_CMD="$CONVERT_CMD --reward_method $REWARD_METHOD"
         if [ -n "$REWARD_TASK_INSTRUCTION" ]; then
             CONVERT_CMD="$CONVERT_CMD --reward_task_instruction \"$REWARD_TASK_INSTRUCTION\""
         fi
@@ -270,6 +277,7 @@ if [ "$LABELING_MODE" != "none" ]; then
     
     # Add parameters for action_chunk_advantage mode
     if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
+        CONVERT_CMD="$CONVERT_CMD --reward_method $REWARD_METHOD"
         if [ -n "$REWARD_TASK_INSTRUCTION" ]; then
             CONVERT_CMD="$CONVERT_CMD --reward_task_instruction \"$REWARD_TASK_INSTRUCTION\""
         fi

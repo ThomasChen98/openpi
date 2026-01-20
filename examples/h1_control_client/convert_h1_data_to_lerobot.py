@@ -158,6 +158,7 @@ def main(
     push_to_hub: bool = False,
     save_dir: str = None,
     labeling_mode: LabelingMode = "none",
+    reward_method: str = "Ours",
     reward_task_instruction: str = None,
     reward_max_frames: int = 30,
     reward_image_rotation: int = 0,
@@ -180,6 +181,9 @@ def main(
             - "human_labeling": Read advantage from HDF5 metadata
             - "reward_labeling": Use embodied reward model to label advantage (episode-level)
             - "action_chunk_advantage": Fine-grained advantage labeling per action chunk
+        reward_method: Reward model method ('Ours' or 'GVL')
+            - "Ours": Use fine-tuned Qwen model (requires checkpoint_path)
+            - "GVL": Use OpenAI GPT-5.2 (requires OPENAI_API_KEY)
         reward_task_instruction: Detailed task instruction for reward model (required for reward_labeling)
         reward_max_frames: Maximum frames to sample for reward labeling
         reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
@@ -221,19 +225,12 @@ def main(
     reward_labels = {}
     if labeling_mode == "reward_labeling":
         print("\nRunning reward labeling...")
+        print(f"  Reward Method: {reward_method}")
         print(f"  Task instruction: {reward_task_instruction}")
         print(f"  Max frames: {reward_max_frames}")
         print(f"  Image rotation: {reward_image_rotation}")
         print(f"  Advantage threshold: {reward_advantage_threshold:.1%} (top {reward_advantage_threshold:.1%} episodes)")
         print(f"  Ranking frames: {reward_ranking_frames if reward_ranking_frames > 0 else 'all'}")
-        
-        # Import Qwen-based reward labeling
-        try:
-            from qwen_reward_labeling import label_episodes
-        except ImportError:
-            print("Error: Could not import qwen_reward_labeling module")
-            print("Make sure qwen_reward_labeling.py is in the same directory")
-            raise
         
         # Determine the directory to label
         data_path = Path(data_dir)
@@ -242,30 +239,73 @@ def main(
         else:
             label_dir = data_path
         
-        # Get checkpoint path from environment variable
-        checkpoint_path = os.environ.get("QWEN_REWARD_CHECKPOINT_PATH")
-        if not checkpoint_path:
-            print("Error: QWEN_REWARD_CHECKPOINT_PATH environment variable not set!")
-            print("Set it with: export QWEN_REWARD_CHECKPOINT_PATH='/path/to/checkpoint'")
-            raise ValueError("QWEN_REWARD_CHECKPOINT_PATH not set")
-        
-        if not os.path.exists(checkpoint_path):
-            print(f"Error: Checkpoint path does not exist: {checkpoint_path}")
-            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-        
-        print(f"  Checkpoint path: {checkpoint_path}")
-        
-        # Run labeling
-        reward_labels = label_episodes(
-            data_dir=str(label_dir),
-            task_instruction=reward_task_instruction,
-            checkpoint_path=checkpoint_path,
-            max_frames=reward_max_frames,
-            image_rotation=reward_image_rotation,
-            advantage_threshold=reward_advantage_threshold,
-            inference_batch_size=30,
-            ranking_frames=reward_ranking_frames,
-        )
+        # Import appropriate reward labeling module based on method
+        if reward_method == "Ours":
+            # Use Qwen-based reward labeling
+            try:
+                from qwen_reward_labeling import label_episodes
+            except ImportError:
+                print("Error: Could not import qwen_reward_labeling module")
+                print("Make sure qwen_reward_labeling.py is in the same directory")
+                raise
+            
+            # Get checkpoint path from environment variable
+            checkpoint_path = os.environ.get("QWEN_REWARD_CHECKPOINT_PATH")
+            if not checkpoint_path:
+                print("Error: QWEN_REWARD_CHECKPOINT_PATH environment variable not set!")
+                print("Set it with: export QWEN_REWARD_CHECKPOINT_PATH='/path/to/checkpoint'")
+                raise ValueError("QWEN_REWARD_CHECKPOINT_PATH not set")
+            
+            if not os.path.exists(checkpoint_path):
+                print(f"Error: Checkpoint path does not exist: {checkpoint_path}")
+                raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+            
+            print(f"  Checkpoint path: {checkpoint_path}")
+            
+            # Run Qwen labeling
+            reward_labels = label_episodes(
+                data_dir=str(label_dir),
+                task_instruction=reward_task_instruction,
+                checkpoint_path=checkpoint_path,
+                max_frames=reward_max_frames,
+                image_rotation=reward_image_rotation,
+                advantage_threshold=reward_advantage_threshold,
+                inference_batch_size=30,
+                ranking_frames=reward_ranking_frames,
+            )
+            
+        elif reward_method == "GVL":
+            # Use OpenAI GVL-based reward labeling
+            try:
+                from embodied_reward_labeling import label_episodes
+            except ImportError:
+                print("Error: Could not import embodied_reward_labeling module")
+                print("Make sure embodied_reward_labeling.py is in the same directory")
+                raise
+            
+            # Check for OpenAI API key
+            if not os.environ.get("OPENAI_API_KEY"):
+                print("Error: OPENAI_API_KEY environment variable not set!")
+                print("Set it with: export OPENAI_API_KEY='your-key-here'")
+                raise ValueError("OPENAI_API_KEY not set")
+            
+            print("  Using OpenAI GPT-5.1/5.2 for GVL reward labeling")
+            
+            # Run GVL labeling
+            reward_labels = label_episodes(
+                data_dir=str(label_dir),
+                task_instruction=reward_task_instruction,
+                max_frames=reward_max_frames,
+                image_rotation=reward_image_rotation,
+                advantage_threshold=reward_advantage_threshold,
+                use_reflection=True,
+                max_workers=16,
+            )
+            
+        else:
+            print(f"Error: Unknown reward method: {reward_method}")
+            print("Supported methods: 'Ours', 'GVL'")
+            raise ValueError(f"Unknown reward method: {reward_method}")
         
         print(f"\nReward labeling complete. Labeled {len(reward_labels)} episodes.")
     

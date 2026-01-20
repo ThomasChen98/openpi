@@ -85,7 +85,7 @@ This happens automatically during the convert step, but you can run it manually:
 python examples/h1_control_client/compute_action_chunk_advantages.py \
     --data-dir examples/h1_control_client/h1_data_lerobot/fold_towel/epoch_0/data/chunk-000 \
     --task-instruction "Fold the towel into a small square." \
-    --checkpoint-path third_party/emboided_reward/checkpoint-750 \
+    --checkpoint-path third_party/emboided_reward/FT-checkpoint-750 \
     --look-ahead-window 80 \
     --advantage-threshold 0.33
 ```

@@ -13,7 +13,7 @@ Usage:
     python examples/h1_control_client/utils/analyze_reward_alignment.py \
         --data_dir examples/h1_control_client/h1_data_auto/fold_towel_reward_2/epoch_2/raw \
         --task_instruction "Fold the towel into a small square" \
-        --checkpoint_path third_party/emboided_reward/checkpoint-1240 \
+        --checkpoint_path third_party/emboided_reward/FT-checkpoint-1240 \
         --output_dir results/analysis \
         --ranking_frames 5 \
         --save_videos \

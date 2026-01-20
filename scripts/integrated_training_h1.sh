@@ -97,6 +97,7 @@ LABELING_MODE=$(yq -r '.training.labeling_mode // "human_labeling"' "$CONFIG_FIL
 GPU_ID=$(yq -r '.training.gpu_id // 0' "$CONFIG_FILE")
 
 # Reward labeling (used for reward_labeling and action_chunk_advantage modes)
+REWARD_METHOD=$(yq -r '.reward.method // "Ours"' "$CONFIG_FILE")
 REWARD_TASK_INSTRUCTION=$(yq -r '.reward.task_instruction // ""' "$CONFIG_FILE")
 REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
 REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
@@ -566,14 +567,28 @@ convert_epoch_data() {
         if [ -d "$parquet_dir" ]; then
             log_info "  Phase 2: Computing action chunk advantages..."
             
-            # Check if checkpoint path is set
-            if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
-                log_error "reward.checkpoint_path not set in config file!"
-                return 1
-            fi
-            
-            if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
-                log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+            # Check if checkpoint path is set (only required for "Ours" method)
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
+                    log_error "reward.checkpoint_path not set in config file!"
+                    log_error "Qwen checkpoint path is required for reward.method='Ours'"
+                    return 1
+                fi
+                
+                if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
+                    log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+                    return 1
+                fi
+            elif [ "$REWARD_METHOD" = "GVL" ]; then
+                # Check for OpenAI API key
+                if [ -z "$OPENAI_API_KEY" ]; then
+                    log_error "OPENAI_API_KEY not set in environment!"
+                    log_error "OpenAI API key is required for reward.method='GVL'"
+                    return 1
+                fi
+            else
+                log_error "Unknown reward.method: $REWARD_METHOD"
+                log_error "Supported methods: 'Ours', 'GVL'"
                 return 1
             fi
             
@@ -595,7 +610,8 @@ convert_epoch_data() {
                 --checkpoint-path "$REWARD_CHECKPOINT_PATH" \
                 --max-frames "$REWARD_MAX_FRAMES" \
                 --look-ahead-window "$REWARD_LOOK_AHEAD_WINDOW" \
-                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD"
+                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD" \
+                --reward-method "$REWARD_METHOD"
             
             log_info "  Switching back to project .venv for training"
             
@@ -665,17 +681,23 @@ convert_epoch_data() {
         
         if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
             log_info "Using action chunk advantage labeling with:"
+            log_info "  Reward Method: $REWARD_METHOD"
             log_info "  Mode: Fine-grained per-frame advantages"
-            log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            fi
             log_info "  Max frames: $REWARD_MAX_FRAMES"
             log_info "  Look-ahead window: $REWARD_LOOK_AHEAD_WINDOW frames"
             log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (top ${REWARD_ADVANTAGE_THRESHOLD} percentile)"
             log_info "  Random drop rate: ${REWARD_RANDOM_DROP_RATE} (keep original prompt without advantage)"
             log_info "  GPU: $GPU_ID"
         else
-            log_info "Using Qwen-based reward labeling with:"
+            log_info "Using reward labeling with:"
+            log_info "  Reward Method: $REWARD_METHOD"
             log_info "  Mode: Episode-level advantages"
-            log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            fi
             log_info "  Max frames: $REWARD_MAX_FRAMES"
             log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
             log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
@@ -683,6 +705,7 @@ convert_epoch_data() {
         fi
         
         convert_cmd="$convert_cmd \
+            --reward-method \"$REWARD_METHOD\" \
             --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \
             --reward-max-frames \"$REWARD_MAX_FRAMES\" \
             --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \

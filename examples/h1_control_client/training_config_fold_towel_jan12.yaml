@@ -43,7 +43,7 @@ training:
 # =============================================================================
 reward:
   # Path to Qwen reward model checkpoint (required for reward_labeling and action_chunk_advantage modes)
-  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/checkpoint-750"
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/FT-checkpoint-750"
   
   # Detailed task instruction for reward model
   task_instruction: "Fold the towel into a small square."
