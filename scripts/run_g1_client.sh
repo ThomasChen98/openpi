@@ -1,11 +1,15 @@
 #!/bin/bash
 # G1 Policy Client - visualization and robot execution
 #
+# Supports both data formats:
+#   - 29 DOF (new): 14 arm + 14 hand + 1 waist yaw (recommended)
+#   - 28 DOF (legacy): 14 arm + 14 hand (auto-detected)
+#
 # Usage:
 #   ./scripts/run_g1_client.sh [OPTIONS]
 #
 # Environment variables (optional):
-#   DATA_PATH      - HDF5 episode file for visualization (default: g1_data/cabinetbottle/episode_2.hdf5)
+#   DATA_PATH      - HDF5 episode file for visualization (supports 28 or 29 DOF)
 #   HOST           - Policy server hostname/IP (default: localhost)
 #   PORT           - Policy server port (default: 8000)
 #   PROMPT         - Task prompt (default: "pick up the bottle and put it in the cabinet")
@@ -16,7 +20,7 @@
 #   VISER_PORT     - Viser web UI port (default: 8080)
 #
 # Modes:
-#   viz          - Visualization only (replay HDF5 in browser)
+#   viz          - Visualization only (replay HDF5 in browser, shows waist yaw for 29 DOF)
 #   viz-robot    - Visualization with robot execution enabled (best for testing)
 #   robot        - Direct robot control (connect to policy server, execute on robot)
 #   listen       - Robot listens for commands from viz client (run on robot station)
@@ -47,10 +51,10 @@ OPENPI_DIR="$(dirname "$SCRIPT_DIR")"
 G1_CLIENT_DIR="${OPENPI_DIR}/examples/g1_control_client"
 
 # Default values
-DATA_PATH="${DATA_PATH:-${G1_CLIENT_DIR}/g1_data_processed/loco_place_bottle_overfit/episode_02.hdf5}"
+DATA_PATH="${DATA_PATH:-${G1_CLIENT_DIR}/g1_data_processed/insert_plate_jan16/episode_02.hdf5}"
 HOST="${HOST:-localhost}"
 PORT="${PORT:-8001}"
-PROMPT="${PROMPT:-Walk to the table, grab the bottle, put the bottle into the cabinet, and close the drawer}"
+PROMPT="${PROMPT:-Pull the plate towards you, grab it with your right hand, turn to the left, place the plate into the plate rack, and turn back right.}"
 MODE="${MODE:-viz-robot}"
 ROBOT_IP="${ROBOT_IP:-192.168.123.164}"
 ROBOT_HOST="${ROBOT_HOST:-localhost}"
@@ -100,6 +104,7 @@ case "$MODE" in
     viz)
         echo -e "${YELLOW}Note: Visualization only mode (no robot execution)${NC}"
         echo -e "${YELLOW}For robot execution, use: MODE=viz-robot ./scripts/run_g1_client.sh${NC}"
+        echo -e "${YELLOW}Supports both 28 DOF (legacy) and 29 DOF (with waist yaw) data${NC}"
         echo ""
         echo -e "${GREEN}Starting visualization client...${NC}"
         echo -e "${GREEN}Open http://localhost:${VISER_PORT} in browser to view${NC}"
@@ -117,6 +122,7 @@ case "$MODE" in
     viz-robot)
         echo -e "${YELLOW}============================================${NC}"
         echo -e "${YELLOW}VISUALIZATION + ROBOT EXECUTION MODE${NC}"
+        echo -e "${YELLOW}(Supports 28 DOF and 29 DOF with waist yaw)${NC}"
         echo -e "${YELLOW}============================================${NC}"
         echo ""
         echo -e "${YELLOW}Prerequisites (2 terminals):${NC}"

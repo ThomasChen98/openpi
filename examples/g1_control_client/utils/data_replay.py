@@ -2,14 +2,18 @@
 
 Data loading and joint mapping utilities for G1 robot visualization.
 
-G1 Data Format:
-- qpos/action: 28 DOF (14 arm + 14 hand)
+G1 Data Format (NEW - 29 DOF):
+- qpos/action: 29 DOF (14 arm + 14 hand + 1 waist yaw)
   - [0:7] left arm (shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll, wrist_pitch, wrist_yaw)
   - [7:14] right arm
   - [14:21] left hand (thumb_0, thumb_1, thumb_2, middle_0, middle_1, index_0, index_1)
   - [21:28] right hand
+  - [28] waist yaw
 
-- loco_state: 17 DOF
+G1 Data Format (LEGACY - 28 DOF):
+- qpos/action: 28 DOF (14 arm + 14 hand) - no waist yaw
+
+- loco_state: 17 DOF (LEGACY - may not be present in new data)
   [0] mode_machine (robot state: 0=damping, 1=stand, 5=walk, etc.)
   [1:4] imu rpy (roll, pitch, yaw in radians)
   [4:8] imu quaternion (w, x, y, z)
@@ -17,7 +21,7 @@ G1 Data Format:
   [11:14] gyroscope (x, y, z in rad/s)
   [14:17] leg joints (left_knee, right_knee, avg_knee - proxy for body height)
 
-- loco_action: 20 DOF
+- loco_action: 20 DOF (LEGACY - may not be present in new data)
   [0:4] joysticks (Lx, Ly, Rx, Ry in range [-1, 1])
   [4:20] buttons (L1, L2, R1, R2, A, B, X, Y, Up, Down, Left, Right, Select, Start, F1, F3)
 
@@ -61,22 +65,25 @@ MODE_MACHINE_NAMES = {
 def load_hdf5_data(hdf5_path: str) -> dict:
     """Load data from G1 HDF5 file.
     
+    Supports both legacy 28 DOF format and new 29 DOF format (with waist yaw).
+    
     Args:
         hdf5_path: Path to HDF5 file
         
     Returns:
         Dictionary containing:
-            - actions: (N, 28) array for arm+hand joints
-            - qpos: (N, 28) array
-            - qvel: (N, 28) array if available
-            - loco_state: (N, 17) array if available
-            - loco_action: (N, 20) array if available
+            - actions: (N, 28) or (N, 29) array for arm+hand(+waist) joints
+            - qpos: (N, 28) or (N, 29) array
+            - qvel: (N, 28) or (N, 29) array if available
+            - loco_state: (N, 17) array if available (legacy format only)
+            - loco_action: (N, 20) array if available (legacy format only)
             - camera_data: dict of camera images
             - image_formats: dict of image formats per camera
             - camera_topics: list of available camera names
             - num_frames: total number of frames
-            - num_joints: action dimensions (28)
+            - num_joints: action dimensions (28 or 29)
             - has_loco_data: boolean indicating if locomotion data exists
+            - has_waist_yaw: boolean indicating if waist yaw is in the data (29 DOF)
             - robot_name: robot name from attributes
             - fps: recording FPS from attributes
     """
@@ -143,8 +150,14 @@ def load_hdf5_data(hdf5_path: str) -> dict:
         
         num_frames = len(actions)
         
-    print(f"Loaded {num_frames} frames with {actions.shape[1]} joints")
-    print(f"Robot: {robot_name}, FPS: {fps}, Has loco data: {has_loco_data}")
+    # Detect if this is 29 DOF format (with waist yaw)
+    num_joints = actions.shape[1]
+    has_waist_yaw = num_joints == 29
+    
+    print(f"Loaded {num_frames} frames with {num_joints} joints")
+    print(f"Robot: {robot_name}, FPS: {fps}")
+    print(f"Data format: {'29 DOF (with waist yaw)' if has_waist_yaw else '28 DOF (legacy)'}")
+    print(f"Has loco data: {has_loco_data}")
     
     return {
         'actions': actions,
@@ -156,8 +169,9 @@ def load_hdf5_data(hdf5_path: str) -> dict:
         'image_formats': image_formats,
         'camera_topics': camera_topics,
         'num_frames': num_frames,
-        'num_joints': actions.shape[1],
+        'num_joints': num_joints,
         'has_loco_data': has_loco_data or (loco_state is not None),
+        'has_waist_yaw': has_waist_yaw,
         'robot_name': robot_name,
         'fps': fps,
     }
@@ -208,11 +222,72 @@ def euler_to_quaternion(pitch: float, yaw: float, roll: float) -> tuple[float, f
     return (w, x, y, z)
 
 
+def extract_joints_for_urdf_g1_29dof(
+    joint_positions: np.ndarray,
+    loco_state: np.ndarray | None = None,
+) -> np.ndarray:
+    """Map 29 DOF G1 joint positions to 43 DOF URDF joint order.
+    
+    G1 data format (29 DOF):
+    - [0:7] left arm joints
+    - [7:14] right arm joints  
+    - [14:21] left hand joints
+    - [21:28] right hand joints
+    - [28] waist yaw
+    
+    G1 URDF joint order (43 DOF):
+    - [0:6] left leg (hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll)
+    - [6:12] right leg
+    - [12:15] waist (yaw, roll, pitch)
+    - [15:22] left arm
+    - [22:29] left hand
+    - [29:36] right arm
+    - [36:43] right hand
+    
+    Args:
+        joint_positions: Raw joint positions from HDF5 data (29 dims)
+        loco_state: Optional locomotion state (17 dims) for leg joint positions
+        
+    Returns:
+        Joint positions for URDF visualization (43 dims)
+    """
+    if len(joint_positions) != 29:
+        raise ValueError(f"Expected 29 DoF input, got {len(joint_positions)} DoF")
+    
+    # Initialize all joints to zero
+    urdf_joints = np.zeros(43)
+    
+    # If loco_state is available, use knee joint positions for leg visualization
+    if loco_state is not None and len(loco_state) >= 17:
+        urdf_joints[3] = loco_state[14]  # left_knee_joint
+        urdf_joints[9] = loco_state[15]  # right_knee_joint
+    
+    # Extract arm joints
+    left_arm = joint_positions[0:7]
+    right_arm = joint_positions[7:14]
+    
+    # Extract hand joints
+    left_hand = joint_positions[14:21]
+    right_hand = joint_positions[21:28]
+    
+    # Extract waist yaw
+    waist_yaw = joint_positions[28]
+    
+    # Map to URDF order
+    urdf_joints[12] = waist_yaw      # waist yaw (URDF waist order: yaw, roll, pitch)
+    urdf_joints[15:22] = left_arm    # left arm
+    urdf_joints[22:29] = left_hand   # left hand
+    urdf_joints[29:36] = right_arm   # right arm
+    urdf_joints[36:43] = right_hand  # right hand
+    
+    return urdf_joints
+
+
 def extract_joints_for_urdf_g1_28dof(
     joint_positions: np.ndarray,
     loco_state: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Map 28 DOF G1 joint positions to 43 DOF URDF joint order.
+    """Map 28 DOF G1 joint positions to 43 DOF URDF joint order (legacy format).
     
     G1 data format (28 DOF):
     - [0:7] left arm joints
@@ -266,6 +341,27 @@ def extract_joints_for_urdf_g1_28dof(
     urdf_joints[36:43] = right_hand  # right hand
     
     return urdf_joints
+
+
+def extract_joints_for_urdf_g1(
+    joint_positions: np.ndarray,
+    loco_state: np.ndarray | None = None,
+) -> np.ndarray:
+    """Map G1 joint positions to URDF joint order (auto-detects 28 or 29 DOF).
+    
+    Args:
+        joint_positions: Raw joint positions from HDF5 data (28 or 29 dims)
+        loco_state: Optional locomotion state (17 dims) for leg joint positions
+        
+    Returns:
+        Joint positions for URDF visualization (43 dims)
+    """
+    if len(joint_positions) == 29:
+        return extract_joints_for_urdf_g1_29dof(joint_positions, loco_state)
+    elif len(joint_positions) == 28:
+        return extract_joints_for_urdf_g1_28dof(joint_positions, loco_state)
+    else:
+        raise ValueError(f"Expected 28 or 29 DoF input, got {len(joint_positions)} DoF")
 
 
 def get_mode_machine_name(mode: int) -> str:
