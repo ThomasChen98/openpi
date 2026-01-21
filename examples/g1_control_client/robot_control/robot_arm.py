@@ -75,7 +75,7 @@ class G1_29_ArmController:
         self.waist_yaw_limits = [-2.618, 2.618]  # From URDF: approx +/- 150 degrees
 
         self.all_motor_q = None
-        self.arm_velocity_limit = 20.0
+        self.arm_velocity_limit = 40.0  # Was 20.0 - doubled to allow faster tracking
         self.control_dt = 1.0 / 250.0
 
         self._speed_gradual_max = False
@@ -208,7 +208,7 @@ class G1_29_ArmController:
 
             if self._speed_gradual_max is True:
                 t_elapsed = start_time - self._gradual_start_time
-                self.arm_velocity_limit = 20.0 + (10.0 * min(1.0, t_elapsed / 5.0))
+                self.arm_velocity_limit = 40.0 + (10.0 * min(1.0, t_elapsed / 5.0))  # Base 40 + gradual
 
             current_time = time.time()
             all_t_elapsed = current_time - start_time
@@ -297,7 +297,7 @@ class G1_29_ArmController:
 
     def speed_instant_max(self):
         '''Set arms velocity to maximum immediately.'''
-        self.arm_velocity_limit = 30.0
+        self.arm_velocity_limit = 50.0  # Increased max velocity
 
     def _Is_weak_motor(self, motor_index):
         weak_motors = [
