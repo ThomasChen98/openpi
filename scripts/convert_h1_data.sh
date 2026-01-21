@@ -169,16 +169,25 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
     echo "  > Checking for action chunk advantages..."
     echo "========================================================"
     
-    # Check if checkpoint path is set
-    if [ -z "$QWEN_REWARD_CHECKPOINT_PATH" ]; then
-        echo "ERROR: QWEN_REWARD_CHECKPOINT_PATH not set for action_chunk_advantage mode!"
-        echo "Set it with: export QWEN_REWARD_CHECKPOINT_PATH='/path/to/checkpoint'"
-        exit 1
-    fi
-    
-    if [ ! -d "$QWEN_REWARD_CHECKPOINT_PATH" ]; then
-        echo "ERROR: Checkpoint path does not exist: $QWEN_REWARD_CHECKPOINT_PATH"
-        exit 1
+    # Check if checkpoint path is set (only required for "Ours" method)
+    if [ "$REWARD_METHOD" = "Ours" ]; then
+        if [ -z "$QWEN_REWARD_CHECKPOINT_PATH" ]; then
+            echo "ERROR: QWEN_REWARD_CHECKPOINT_PATH not set for action_chunk_advantage mode with method='Ours'!"
+            echo "Set it with: export QWEN_REWARD_CHECKPOINT_PATH='/path/to/checkpoint'"
+            exit 1
+        fi
+        
+        if [ ! -d "$QWEN_REWARD_CHECKPOINT_PATH" ]; then
+            echo "ERROR: Checkpoint path does not exist: $QWEN_REWARD_CHECKPOINT_PATH"
+            exit 1
+        fi
+    elif [ "$REWARD_METHOD" = "GVL" ]; then
+        # Check for OpenAI API key
+        if [ -z "$OPENAI_API_KEY" ]; then
+            echo "ERROR: OPENAI_API_KEY not set in environment!"
+            echo "Action chunk advantage mode with method='GVL' requires OpenAI API key."
+            exit 1
+        fi
     fi
     
     # Find parquet data directory (from previous conversion)
@@ -201,8 +210,11 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
             echo "✓ Action chunk advantages already computed ($ADVANTAGE_FILES files)"
         else
             echo "Computing action chunk advantages..."
+            echo "  Reward method: $REWARD_METHOD"
             echo "  Parquet directory: $PARQUET_DIR"
-            echo "  Checkpoint: $QWEN_REWARD_CHECKPOINT_PATH"
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                echo "  Checkpoint: $QWEN_REWARD_CHECKPOINT_PATH"
+            fi
             echo "  Task instruction: $REWARD_TASK_INSTRUCTION"
             
             # Use conda base environment for Qwen reward computation

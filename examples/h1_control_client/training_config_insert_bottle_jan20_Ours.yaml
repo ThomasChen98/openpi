@@ -22,7 +22,7 @@
 # TASK CONFIGURATION
 # =============================================================================
 task:
-  name: "insert_bottle_jan20_SFT"                          # Different name to avoid checkpoint conflicts
+  name: "insert_bottle_jan20_Ours"                          # Different name to avoid checkpoint conflicts
   description: "Insert the bottle into the cupholder"
 
 # =============================================================================
@@ -31,7 +31,7 @@ task:
 policy:
   config_name: "pi05_h1_auto"
   # Use same warmup checkpoint as action chunk advantage for fair comparison
-  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan20_SFT/1199"
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan20_Ours/1199"
 
 # =============================================================================
 # TRAINING CONFIGURATION
@@ -41,8 +41,8 @@ training:
   save_interval: 1200
   keep_period: 1200
   num_repeats: 1
-  labeling_mode: "human_labeling"                      # SFT: Use human episode-level labels
-  gpu_id: 1
+  labeling_mode: "action_chunk_advantage"                      # SFT: Use human episode-level labels
+  gpu_id: 0
 
 # =============================================================================
 # REWARD CONFIGURATION (Not used in SFT mode, but kept for compatibility)
@@ -50,14 +50,15 @@ training:
 # SFT mode uses human_labeling, so reward parameters are not needed.
 # These are kept for script compatibility but will be ignored.
 reward:
-  checkpoint_path: ""
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/IB-checkpoint-750"
   task_instruction: |
-    Insert the bottle into the cupholder.
+    Pick up the bottle and insert it into the tray. Keep the bottle perfectly upright (vertical) and aligned straight.
   max_frames: 30
   image_rotation: 0
-  advantage_threshold: 0.5                              # Not used in human_labeling
-  look_ahead_window: 80                                 # Not used in human_labeling
-  random_drop_rate: 0.0                                 # Not used in human_labeling
+  # Advantage labeling parameters
+  advantage_threshold: 0.33         # Top percentile for advantage (e.g., 0.33 = top 33%)
+  look_ahead_window: 80             # Frames to look ahead for action chunk advantage (only for action_chunk_advantage mode)
+  random_drop_rate: 0.1             # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
 
 # =============================================================================
 # SERVER CONFIGURATION
@@ -103,7 +104,7 @@ recording:
 # =============================================================================
 pipeline:
   start_phase: "data_collection"
-  start_epoch: 3
+  start_epoch: 1
   auto_sync: true
 
 # =============================================================================

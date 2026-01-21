@@ -69,8 +69,8 @@ def process_hdf5_to_mp4(
         
         # Apply transformations to get final dimensions
         if apply_transforms:
-            first_array = np.flipud(first_array)
-            first_array = np.rot90(first_array, k=1)  # Counterclockwise
+            first_array = np.rot90(first_array, k=1)  # Rotate CCW 90 degrees
+            first_array = np.fliplr(first_array)      # Mirror (horizontal flip)
         
         height, width = first_array.shape[:2]
         print(f"  Video dimensions: {width}x{height}")
@@ -100,8 +100,8 @@ def process_hdf5_to_mp4(
             
             # Apply transformations (same as data_replay.py)
             if apply_transforms:
-                img_array = np.flipud(img_array)
-                img_array = np.rot90(img_array, k=1)  # Counterclockwise
+                img_array = np.rot90(img_array, k=1)  # Rotate CCW 90 degrees
+                img_array = np.fliplr(img_array)      # Mirror (horizontal flip)
             
             # Convert RGB to BGR for OpenCV
             img_bgr = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
@@ -174,7 +174,7 @@ def process_directory(
 def main(
     input_dirs: list[str],
     fps: int = 30,
-    apply_transforms: bool = True
+    apply_transforms: bool = False
 ) -> None:
     """
     Extract ego_cam videos from HDF5 datasets.

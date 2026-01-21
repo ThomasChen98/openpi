@@ -113,6 +113,9 @@ class Args:
     
     robot_port: int = 5008
     """Robot client port"""
+    
+    debug_camera: bool = False
+    """Enable debug output for camera image loading"""
 
 
 def get_observation_at_frame(
@@ -551,6 +554,12 @@ def main(args: Args) -> None:
                 hint="Use robot cameras for inference instead of dataset"
             )
             
+            refresh_camera_button = server.gui.add_button(
+                "🔄 Refresh Live Camera",
+                disabled=True,
+                hint="Fetch latest camera image from robot (without inference)"
+            )
+            
             single_step_button = server.gui.add_button(
                 "⏯️ Single Step Inference",
                 disabled=True,
@@ -620,6 +629,20 @@ def main(args: Args) -> None:
                 else:
                     waist_yaw_status.value = "Disabled"
             
+            server.gui.add_markdown("### 📊 Tracking Options")
+            
+            track_error_enabled = server.gui.add_checkbox(
+                "Track Position Error",
+                initial_value=False,
+                hint="Log tracking error during execution (helps diagnose drift)"
+            )
+            
+            wait_converge_enabled = server.gui.add_checkbox(
+                "Wait for Convergence",
+                initial_value=False,
+                hint="Wait for robot to reach target after each action chunk (reduces drift but slower)"
+            )
+            
             @waist_yaw_slider.on_update
             def _(_):
                 if waist_yaw_override_enabled.value:
@@ -676,6 +699,41 @@ def main(args: Args) -> None:
         def _(_):
             single_step_button.disabled = not use_live_cam.value
             continuous_button.disabled = not use_live_cam.value
+            refresh_camera_button.disabled = not use_live_cam.value
+        
+        # Refresh camera button callback - fetch live image without inference
+        @refresh_camera_button.on_click
+        def _(_):
+            nonlocal last_live_observation
+            
+            async def do_refresh():
+                refresh_camera_button.disabled = True
+                robot_status.value = "📷 Fetching live camera..."
+                
+                try:
+                    obs = await get_live_observation_from_robot(
+                        args.robot_host, args.robot_port, args.prompt
+                    )
+                    last_live_observation = obs
+                    
+                    # Debug output
+                    if args.debug_camera:
+                        print(f"[REFRESH CAMERA] Got observation with keys: {obs.keys()}")
+                        if 'images' in obs:
+                            for key, img in obs['images'].items():
+                                print(f"[REFRESH CAMERA] {key}: shape={img.shape}, "
+                                      f"min={img.min()}, max={img.max()}")
+                    
+                    # Update camera display
+                    update_camera_displays(debug=args.debug_camera)
+                    robot_status.value = "✓ Live camera refreshed"
+                except Exception as e:
+                    print(f"[REFRESH CAMERA] Error: {e}")
+                    robot_status.value = f"❌ Camera error: {str(e)}"
+                finally:
+                    refresh_camera_button.disabled = not use_live_cam.value
+            
+            run_async(do_refresh())
     
     # Inference button callback
     @infer_button.on_click
@@ -849,11 +907,20 @@ def main(args: Args) -> None:
                             result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "execute", "actions": actions_to_send.tolist()}
+                                {
+                                    "command": "execute",
+                                    "actions": actions_to_send.tolist(),
+                                    "track_error": track_error_enabled.value,
+                                    "wait_converge": wait_converge_enabled.value
+                                }
                             )
                             
+                            track_info = ""
+                            if result.get("tracking_stats"):
+                                stats = result["tracking_stats"]
+                                track_info = f" [err: {stats['arm_mean_error_deg']:.1f}°]"
                             if result["status"] == "success":
-                                robot_status.value = f"✓ Execution complete"
+                                robot_status.value = f"✓ Execution complete{track_info}"
                             else:
                                 robot_status.value = f"❌ Execution failed: {result.get('message')}"
                         except Exception as e:
@@ -873,25 +940,23 @@ def main(args: Args) -> None:
         # Replay teleop button callback
         @replay_teleop_button.on_click
         def _(event):
-            # Get current frame and determine replay window
-            current_frame_val = int(frame_slider.value)
-            
-            # Replay 50 frames starting from current frame (or until end of data)
-            end_frame = min(current_frame_val + 50, len(data['actions']))
-            num_frames = end_frame - current_frame_val
+            # Replay ENTIRE episode from beginning to end
+            start_frame = 0
+            end_frame = len(data['actions'])
+            num_frames = end_frame - start_frame
             
             if num_frames < 10:
                 robot_status.value = f"Not enough frames to replay (need at least 10, have {num_frames})"
                 return
             
-            # Get raw teleop actions from HDF5
-            teleop_actions = data['actions'][current_frame_val:end_frame]
+            # Get raw teleop actions from HDF5 (entire episode)
+            teleop_actions = data['actions'][start_frame:end_frame]
             
             # Create confirmation modal
             with server.gui.add_modal("🎮 Confirm Teleop Replay") as modal:
                 server.gui.add_markdown(
-                    f"**⚠️ About to replay {num_frames} teleop frames**\n\n"
-                    f"Frame range: {current_frame_val} → {end_frame-1}\n\n"
+                    f"**⚠️ About to replay ENTIRE episode ({num_frames} frames)**\n\n"
+                    f"Frame range: {start_frame} → {end_frame-1}\n\n"
                     f"This will execute the **raw recorded joint commands** from the HDF5 file.\n\n"
                     f"**This bypasses the policy entirely** - good for testing if the robot "
                     f"can physically perform the recorded motions.\n\n"
@@ -996,12 +1061,21 @@ def main(args: Args) -> None:
                     result = await send_robot_command(
                         args.robot_host,
                         args.robot_port,
-                        {"command": "execute", "actions": actions_to_send.tolist()}
+                        {
+                            "command": "execute",
+                            "actions": actions_to_send.tolist(),
+                            "track_error": track_error_enabled.value,
+                            "wait_converge": wait_converge_enabled.value
+                        }
                     )
                     
                     waist_info = f" (waist_yaw={waist_yaw_slider.value:.2f})" if waist_yaw_override_enabled.value else ""
+                    track_info = ""
+                    if result.get("tracking_stats"):
+                        stats = result["tracking_stats"]
+                        track_info = f" [err: {stats['arm_mean_error_deg']:.1f}°]"
                     if result["status"] == "success":
-                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms){waist_info}"
+                        robot_status.value = f"✓ Single-step complete ({inference_time*1000:.1f}ms){waist_info}{track_info}"
                     else:
                         robot_status.value = f"❌ Error: {result.get('message')}"
                     
@@ -1122,11 +1196,21 @@ def main(args: Args) -> None:
                             exec_result = await send_robot_command(
                                 args.robot_host,
                                 args.robot_port,
-                                {"command": "execute", "actions": actions_to_send.tolist()}
+                                {
+                                    "command": "execute",
+                                    "actions": actions_to_send.tolist(),
+                                    "track_error": track_error_enabled.value,
+                                    "wait_converge": wait_converge_enabled.value
+                                }
                             )
                             
+                            track_info = ""
+                            if exec_result.get("tracking_stats"):
+                                stats = exec_result["tracking_stats"]
+                                track_info = f" [err: {stats['arm_mean_error_deg']:.1f}°]"
+                            
                             if exec_result["status"] == "success":
-                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms){waist_info}"
+                                robot_status.value = f"✓ Continuous #{loop_count} complete ({inference_time*1000:.1f}ms){waist_info}{track_info}"
                             else:
                                 robot_status.value = f"❌ Error in loop #{loop_count}: {exec_result.get('message')}"
                                 is_continuous_running = False
@@ -1373,13 +1457,20 @@ def main(args: Args) -> None:
         # Update camera images
         update_camera_displays()
     
-    def update_camera_displays():
+    def update_camera_displays(debug: bool = False):
         """Update camera image displays."""
         nonlocal image_handles
         
         # Check if we should use live camera feeds
         use_live = args.robot_execution and hasattr(args, 'robot_execution') and use_live_cam.value if args.robot_execution else False
         use_live = use_live and last_live_observation is not None
+        
+        if debug:
+            print(f"[CAMERA DEBUG] use_live={use_live}, topics={data['camera_topics']}")
+            if last_live_observation is not None:
+                print(f"[CAMERA DEBUG] last_live_observation keys: {last_live_observation.keys()}")
+                if 'images' in last_live_observation:
+                    print(f"[CAMERA DEBUG] live images keys: {last_live_observation['images'].keys()}")
         
         for topic in data['camera_topics']:
             if not camera_checkboxes[topic].value:
@@ -1388,6 +1479,9 @@ def main(args: Args) -> None:
                     image_handles[topic].remove()
                     image_handles[topic] = None
                 continue
+            
+            img_array = None
+            source = "unknown"
             
             # Get image data - either from live observation or HDF5
             if use_live:
@@ -1398,23 +1492,44 @@ def main(args: Args) -> None:
                 
                 if live_key and live_key in last_live_observation['images']:
                     img_array = last_live_observation['images'][live_key]
+                    source = f"live:{live_key}"
                     if img_array.dtype != np.uint8:
                         img_array = (img_array * 255).astype(np.uint8)
                 else:
+                    if debug:
+                        print(f"[CAMERA DEBUG] No live image for topic={topic}, live_key={live_key}")
                     continue  # Skip if no matching live image
             else:
                 # Get image from HDF5
+                source = f"hdf5:{topic}[{current_frame}]"
                 if data['image_formats'][topic] == 'array':
                     img_array = data['camera_data'][topic][current_frame]
+                    if debug:
+                        print(f"[CAMERA DEBUG] HDF5 array: shape={img_array.shape}, dtype={img_array.dtype}, "
+                              f"min={img_array.min()}, max={img_array.max()}")
                     if img_array.dtype != np.uint8:
                         img_array = (img_array * 255).astype(np.uint8)
-                    # Convert BGR to RGB if needed
+                    # Convert BGR to RGB if needed (OpenCV stores as BGR)
                     if len(img_array.shape) == 3 and img_array.shape[2] == 3:
                         img_array = img_array[:, :, [2, 1, 0]]
                 else:  # JPEG format
                     img_data = data['camera_data'][topic][current_frame]
+                    if debug:
+                        print(f"[CAMERA DEBUG] JPEG data: len={len(img_data) if img_data else 0} bytes")
                     img = decode_jpeg_image(img_data)
                     img_array = np.array(img)
+                    if debug:
+                        print(f"[CAMERA DEBUG] Decoded JPEG: shape={img_array.shape}, "
+                              f"min={img_array.min()}, max={img_array.max()}")
+            
+            if img_array is None:
+                if debug:
+                    print(f"[CAMERA DEBUG] No image for topic={topic}")
+                continue
+            
+            if debug:
+                print(f"[CAMERA DEBUG] Displaying {source}: shape={img_array.shape}, "
+                      f"min={img_array.min()}, max={img_array.max()}")
             
             # Apply transformations
             img_array = np.flipud(img_array)
@@ -1441,7 +1556,28 @@ def main(args: Args) -> None:
                 image_handles[topic].image = img_array
     
     # Set initial configuration
+    if args.debug_camera:
+        print(f"\n[CAMERA DEBUG] === Initial camera setup ===")
+        print(f"[CAMERA DEBUG] Camera topics: {data['camera_topics']}")
+        for topic in data['camera_topics']:
+            fmt = data['image_formats'][topic]
+            cam_data = data['camera_data'][topic]
+            if fmt == 'array':
+                print(f"[CAMERA DEBUG] {topic}: format=array, shape={cam_data.shape}, dtype={cam_data.dtype}")
+                # Check first frame
+                first_frame = cam_data[0]
+                print(f"[CAMERA DEBUG]   Frame 0: min={first_frame.min()}, max={first_frame.max()}")
+            else:
+                print(f"[CAMERA DEBUG] {topic}: format=jpeg, num_frames={len(cam_data)}")
+                # Check first frame size
+                if len(cam_data) > 0:
+                    print(f"[CAMERA DEBUG]   Frame 0 JPEG size: {len(cam_data[0])} bytes")
+    
     update_visualization()
+    
+    # Debug output for initial camera display
+    if args.debug_camera:
+        update_camera_displays(debug=True)
     
     print(f"\n{'='*80}")
     print("G1 Policy Inference Visualization Client Started!")
@@ -1450,6 +1586,29 @@ def main(args: Args) -> None:
     print(f"Number of joints: {data['num_joints']} (28 DOF: 14 arm + 14 hand)")
     print(f"Robot: {data['robot_name']}")
     print(f"FPS: {fps}")
+    
+    # Print camera image validation
+    print(f"\nCamera images:")
+    for topic in data['camera_topics']:
+        fmt = data['image_formats'][topic]
+        cam_data = data['camera_data'][topic]
+        if fmt == 'array':
+            first_frame = cam_data[0]
+            is_valid = first_frame.max() > first_frame.min()  # Check if image has actual content
+            status = "✓" if is_valid else "⚠️ GREY/EMPTY"
+            print(f"  {topic}: {cam_data.shape}, range=[{first_frame.min()}, {first_frame.max()}] {status}")
+        else:
+            if len(cam_data) > 0:
+                # Decode first JPEG to check
+                try:
+                    test_img = decode_jpeg_image(cam_data[0])
+                    test_arr = np.array(test_img)
+                    is_valid = test_arr.max() > test_arr.min()
+                    status = "✓" if is_valid else "⚠️ GREY/EMPTY"
+                    print(f"  {topic}: JPEG, {len(cam_data)} frames, decoded={test_arr.shape}, "
+                          f"range=[{test_arr.min()}, {test_arr.max()}] {status}")
+                except Exception as e:
+                    print(f"  {topic}: JPEG, {len(cam_data)} frames, ❌ decode error: {e}")
     print(f"Has locomotion data: {data['has_loco_data']}")
     print(f"Policy server: {args.host}:{args.port} ({'connected' if policy else 'not connected'})")
     if args.robot_execution:

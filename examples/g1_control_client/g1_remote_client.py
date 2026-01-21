@@ -543,7 +543,7 @@ class G1RemoteClient:
             "prompt": self.prompt,
         }
 
-    def execute_action_chunk(self, policy_actions: np.ndarray):
+    def execute_action_chunk(self, policy_actions: np.ndarray, track_error: bool = False):
         """
         Execute a chunk of policy actions on the robot.
         
@@ -554,10 +554,19 @@ class G1RemoteClient:
         
         Args:
             policy_actions: (N, 28) or (N, 29) array of actions
+            track_error: If True, log tracking error at each step
+            
+        Returns:
+            dict with tracking statistics if track_error=True, else None
         """
         action_dim = policy_actions.shape[1]
         
         logger.info(f"Executing {len(policy_actions)} actions ({action_dim} DOF)")
+        
+        # Track position errors if requested
+        if track_error:
+            arm_errors = []
+            waist_errors = []
         
         # Execute at control_fps
         for i, action in enumerate(policy_actions):
@@ -572,6 +581,24 @@ class G1RemoteClient:
             
             # Extract waist yaw (1 DOF)
             waist_yaw = action[28] if action_dim >= 29 else 0.0
+            
+            # Track position error before sending command
+            if track_error:
+                current_arm = self.robot.get_current_dual_arm_q()
+                current_waist = self.robot.get_current_waist_yaw()
+                
+                # Compare current position to what we're about to command
+                arm_error = np.abs(current_arm - arm_joints)
+                waist_error = abs(current_waist - waist_yaw)
+                
+                arm_errors.append(arm_error)
+                waist_errors.append(waist_error)
+                
+                # Log significant errors
+                max_arm_error = np.max(arm_error)
+                if max_arm_error > 0.03 or waist_error > 0.05:  # ~1.7 deg or ~2.8 deg
+                    logger.warning(f"  Step {i}: Large tracking error - arm_max={np.degrees(max_arm_error):.2f}°, "
+                                   f"waist={np.degrees(waist_error):.2f}°")
             
             # Send arm command
             self.robot.ctrl_dual_arm(
@@ -591,13 +618,74 @@ class G1RemoteClient:
             # Forward wireless controller locomotion (human control only)
             self._forward_controller_locomotion()
             
-            # Log every 10th action
-            if i % 10 == 0:
+            # Log every 10th action (without error tracking spam)
+            if i % 10 == 0 and not track_error:
                 logger.info(f"  Step {i}/{len(policy_actions)}")
             
             time.sleep(1.0 / self.control_fps)
         
+        # Report tracking statistics
+        if track_error:
+            arm_errors = np.array(arm_errors)
+            waist_errors = np.array(waist_errors)
+            
+            stats = {
+                "arm_mean_error_deg": float(np.degrees(np.mean(arm_errors))),
+                "arm_max_error_deg": float(np.degrees(np.max(arm_errors))),
+                "waist_mean_error_deg": float(np.degrees(np.mean(waist_errors))),
+                "waist_max_error_deg": float(np.degrees(np.max(waist_errors))),
+                "arm_per_joint_mean_deg": [float(np.degrees(np.mean(arm_errors[:, j]))) for j in range(14)],
+            }
+            
+            logger.info(f"Tracking stats: arm_mean={stats['arm_mean_error_deg']:.2f}°, "
+                        f"arm_max={stats['arm_max_error_deg']:.2f}°, "
+                        f"waist_mean={stats['waist_mean_error_deg']:.2f}°")
+            
+            # Identify joints with worst tracking
+            worst_joints = np.argsort(stats['arm_per_joint_mean_deg'])[-3:][::-1]
+            joint_names = ['L_sh_pitch', 'L_sh_roll', 'L_sh_yaw', 'L_elbow', 'L_wr_roll', 'L_wr_pitch', 'L_wr_yaw',
+                           'R_sh_pitch', 'R_sh_roll', 'R_sh_yaw', 'R_elbow', 'R_wr_roll', 'R_wr_pitch', 'R_wr_yaw']
+            logger.info(f"Worst tracking joints: {[(joint_names[j], f'{stats[\"arm_per_joint_mean_deg\"][j]:.2f}°') for j in worst_joints]}")
+            
+            return stats
+        
         logger.info("Action chunk execution complete")
+        return None
+    
+    def wait_for_convergence(self, target_arm: np.ndarray, target_waist: float = None,
+                             threshold_rad: float = 0.02, timeout_s: float = 1.0) -> bool:
+        """
+        Wait for robot to converge to target position.
+        
+        Args:
+            target_arm: Target arm positions (14 DOF)
+            target_waist: Target waist yaw (optional)
+            threshold_rad: Convergence threshold in radians (~1.1 degrees)
+            timeout_s: Maximum time to wait
+            
+        Returns:
+            True if converged, False if timed out
+        """
+        start_time = time.time()
+        
+        while (time.time() - start_time) < timeout_s:
+            current_arm = self.robot.get_current_dual_arm_q()
+            arm_error = np.max(np.abs(current_arm - target_arm))
+            
+            if target_waist is not None:
+                current_waist = self.robot.get_current_waist_yaw()
+                waist_error = abs(current_waist - target_waist)
+            else:
+                waist_error = 0.0
+            
+            if arm_error < threshold_rad and waist_error < threshold_rad:
+                return True
+            
+            time.sleep(0.01)  # Check at 100Hz
+        
+        logger.warning(f"Convergence timeout: arm_error={np.degrees(arm_error):.2f}°, "
+                       f"waist_error={np.degrees(waist_error):.2f}°")
+        return False
 
     def _forward_controller_locomotion(self):
         """Forward wireless controller joystick input to locomotion."""
@@ -645,8 +733,27 @@ class G1RemoteClient:
                         
                         elif cmd == "execute":
                             actions = np.array(data["actions"], dtype=np.float32)
-                            self.execute_action_chunk(actions)
-                            response = {"status": "success", "message": f"Executed {len(actions)} actions"}
+                            track_error = data.get("track_error", False)
+                            wait_converge = data.get("wait_converge", False)
+                            
+                            stats = self.execute_action_chunk(actions, track_error=track_error)
+                            
+                            # Optionally wait for convergence after chunk
+                            if wait_converge and len(actions) > 0:
+                                last_action = actions[-1]
+                                waist_target = last_action[28] if len(last_action) >= 29 else None
+                                converged = self.wait_for_convergence(
+                                    last_action[:14], waist_target,
+                                    threshold_rad=0.02, timeout_s=0.5
+                                )
+                                if not converged:
+                                    logger.warning("Did not converge after action chunk")
+                            
+                            response = {
+                                "status": "success",
+                                "message": f"Executed {len(actions)} actions",
+                                "tracking_stats": stats
+                            }
                         
                         elif cmd == "reset":
                             target = np.array(data["joints"], dtype=np.float32)
@@ -654,30 +761,38 @@ class G1RemoteClient:
                             
                             logger.info(f"Resetting to joints over {duration}s...")
                             
-                            # Extract arm target (first 14)
+                            # Extract targets
                             arm_target = target[:14]
+                            waist_target = target[28] if len(target) >= 29 else None
                             
-                            # Smooth interpolation for arms
-                            current = self.robot.get_current_dual_arm_q()
+                            # Get current positions
+                            current_arm = self.robot.get_current_dual_arm_q()
+                            current_waist = self.robot.get_current_waist_yaw() if waist_target is not None else None
+                            
+                            # Smooth interpolation for arms AND waist together
                             steps = int(duration * 250)
                             
                             for i in range(steps):
                                 alpha = (i + 1) / steps
-                                interp = current * (1 - alpha) + arm_target * alpha
+                                
+                                # Interpolate arm
+                                interp_arm = current_arm * (1 - alpha) + arm_target * alpha
                                 self.robot.ctrl_dual_arm(
-                                    q_target=interp,
+                                    q_target=interp_arm,
                                     tauff_target=np.zeros(14, dtype=np.float32)
                                 )
+                                
+                                # Interpolate waist (slower, smoother motion)
+                                if waist_target is not None:
+                                    interp_waist = current_waist * (1 - alpha) + waist_target * alpha
+                                    self.robot.ctrl_waist_yaw(interp_waist)
+                                
                                 await asyncio.sleep(1.0 / 250)
                             
                             # Set hand target if provided (indices 14-28)
                             if len(target) >= 28 and self.hand_ctrl is not None:
                                 hand_target = target[14:28]
                                 self.hand_ctrl.ctrl_dual_hand(hand_target[:7], hand_target[7:])
-                            
-                            # Set waist yaw target if provided (index 28)
-                            if len(target) >= 29:
-                                self.robot.ctrl_waist_yaw(target[28])
                             
                             response = {"status": "success", "message": "Reset complete"}
                         

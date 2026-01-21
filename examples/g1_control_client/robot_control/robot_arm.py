@@ -58,18 +58,19 @@ class G1_29_ArmController:
         self.tauff_target = np.zeros(14)
         self.motion_mode = motion_mode
         self.simulation_mode = simulation_mode
-        # Moderately increased gains for firmer position tracking
+        # Increased gains for tight position tracking (reduces drift during inference)
         # Original: kp_high=300, kd_high=3, kp_low=80, kd_low=3, kp_wrist=40, kd_wrist=1.5
-        self.kp_high = 300.0
-        self.kd_high = 3.0
-        self.kp_low = 120.0   # Was 80.0 - moderately increased for gravity resistance
-        self.kd_low = 3.5     # Was 3.0
-        self.kp_wrist = 55.0  # Was 40.0
-        self.kd_wrist = 2.0   # Was 1.5
+        # If oscillation occurs, reduce kp values by 20-30%
+        self.kp_high = 350.0   # Was 300 - strong motors (shoulders)
+        self.kd_high = 5.0     # Was 3 - increased damping to prevent oscillation
+        self.kp_low = 200.0    # Was 120 - significantly increased for elbows
+        self.kd_low = 5.0      # Was 3.5 - more damping
+        self.kp_wrist = 100.0  # Was 55 - doubled for wrists
+        self.kd_wrist = 3.0    # Was 2.0 - more damping
         
         # Waist yaw control gains
-        self.kp_waist = 60.0
-        self.kd_waist = 1.5
+        self.kp_waist = 100.0  # Was 60 - increased for tighter tracking
+        self.kd_waist = 3.0    # Was 1.5 - more damping
         self.waist_yaw_target = 0.0
         self.waist_yaw_limits = [-2.618, 2.618]  # From URDF: approx +/- 150 degrees
 

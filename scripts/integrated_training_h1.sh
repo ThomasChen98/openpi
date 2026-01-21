@@ -120,6 +120,7 @@ else
 fi
 
 # Pipeline
+# Valid phases: data_collection, convert, training
 START_PHASE=$(yq -r '.pipeline.start_phase // "data_collection"' "$CONFIG_FILE")
 START_EPOCH=$(yq -r '.pipeline.start_epoch // 0' "$CONFIG_FILE")
 
@@ -656,17 +657,26 @@ convert_epoch_data() {
     
     # Add reward labeling parameters if in reward_labeling or action_chunk_advantage mode
     if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        # Check if QWEN_REWARD_CHECKPOINT_PATH is set
-        if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
-            log_error "reward.checkpoint_path not set in config file!"
-            log_error "Reward labeling requires Qwen checkpoint path."
-            log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
-            return 1
-        fi
-        
-        if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
-            log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
-            return 1
+        # Check if checkpoint path is set (only required for "Ours" method)
+        if [ "$REWARD_METHOD" = "Ours" ]; then
+            if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
+                log_error "reward.checkpoint_path not set in config file!"
+                log_error "Reward labeling with method='Ours' requires Qwen checkpoint path."
+                log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
+                return 1
+            fi
+            
+            if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
+                log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+                return 1
+            fi
+        elif [ "$REWARD_METHOD" = "GVL" ]; then
+            # Check for OpenAI API key
+            if [ -z "$OPENAI_API_KEY" ]; then
+                log_error "OPENAI_API_KEY not set in environment!"
+                log_error "Reward labeling with method='GVL' requires OpenAI API key."
+                return 1
+            fi
         fi
         
         # Note: We use miniconda Python for Qwen operations
@@ -821,8 +831,9 @@ show_menu() {
     echo "Select starting phase:"
     echo ""
     echo -e "  ${GREEN}1${NC}) Data Collection - Start server, robot collects data"
-    echo -e "  ${GREEN}2${NC}) Training - Convert existing data and train"
-    echo -e "  ${GREEN}3${NC}) Resume from state file"
+    echo -e "  ${GREEN}2${NC}) Convert Data - Convert existing HDF5 data to LeRobot format"
+    echo -e "  ${GREEN}3${NC}) Training - Train policy on converted data"
+    echo -e "  ${GREEN}4${NC}) Resume from state file"
     echo -e "  ${GREEN}q${NC}) Quit"
     echo ""
 }
@@ -933,6 +944,13 @@ run_data_collection_phase() {
     stop_server
 }
 
+run_convert_phase() {
+    save_state "converting"
+    convert_epoch_data
+    save_state "convert_complete"
+    log_info "Data conversion complete for epoch $EPOCH"
+}
+
 run_training_phase() {
     local checkpoint=""
     
@@ -949,9 +967,6 @@ run_training_phase() {
         fi
         log_info "Epoch $EPOCH: Fine-tuning from checkpoint: $checkpoint"
     fi
-    
-    save_state "converting"
-    convert_epoch_data
     
     save_state "training"
     train_epoch "$checkpoint"
@@ -1005,15 +1020,21 @@ main() {
                 phase="data_collection"
                 ;;
             2)
+                phase="convert"
+                ;;
+            3)
                 phase="training"
                 ;;
-            3|"")
+            4|"")
                 # Resume from state
                 case "$STATUS" in
                     collecting_data|idle)
                         phase="data_collection"
                         ;;
-                    converting|training|epoch_complete)
+                    converting|convert_complete)
+                        phase="convert"
+                        ;;
+                    training|epoch_complete)
                         phase="training"
                         ;;
                     *)
@@ -1039,6 +1060,9 @@ main() {
                 phase="data_collection"
                 ;;
             2)
+                phase="convert"
+                ;;
+            3)
                 phase="training"
                 ;;
             q|Q)
@@ -1059,6 +1083,11 @@ main() {
         
         if [ "$phase" = "data_collection" ]; then
             run_data_collection_phase
+            phase="convert"
+        fi
+        
+        if [ "$phase" = "convert" ]; then
+            run_convert_phase
             phase="training"
         fi
         
