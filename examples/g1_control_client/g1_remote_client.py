@@ -645,7 +645,9 @@ class G1RemoteClient:
             worst_joints = np.argsort(stats['arm_per_joint_mean_deg'])[-3:][::-1]
             joint_names = ['L_sh_pitch', 'L_sh_roll', 'L_sh_yaw', 'L_elbow', 'L_wr_roll', 'L_wr_pitch', 'L_wr_yaw',
                            'R_sh_pitch', 'R_sh_roll', 'R_sh_yaw', 'R_elbow', 'R_wr_roll', 'R_wr_pitch', 'R_wr_yaw']
-            logger.info(f"Worst tracking joints: {[(joint_names[j], f'{stats[\"arm_per_joint_mean_deg\"][j]:.2f}°') for j in worst_joints]}")
+            per_joint = stats['arm_per_joint_mean_deg']
+            worst_info = [(joint_names[j], f"{per_joint[j]:.2f}°") for j in worst_joints]
+            logger.info(f"Worst tracking joints: {worst_info}")
             
             return stats
         
