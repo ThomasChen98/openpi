@@ -31,8 +31,7 @@ policy:
   config_name: "pi05_g1_auto"
   # Warmup checkpoint: trained on teleoperation data, used for epoch 0 data collection
   # Leave empty to start from scratch (random policy)
-  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_g1_auto/cabinet_bottle/1199"
-
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_g1_auto/insert_plate_jan16/4999"
 # =============================================================================
 # TRAINING CONFIGURATION - How to train
 # =============================================================================
