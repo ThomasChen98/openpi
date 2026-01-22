@@ -89,6 +89,15 @@ reward:
   # No checkpoint_path needed
   max_frames: 30
   advantage_threshold: 0.3
+
+# Option 3: Use RoboDopamine GRM model
+reward:
+  method: "RoboDopamine"
+  task_instruction: "Pick up the bottle and insert it into the tray."
+  goal_image_path: "RoboDopamine/goal_images/insert_bottle_goal_image.png"
+  # No checkpoint_path needed
+  max_frames: 30
+  advantage_threshold: 0.3
 ```
 
 ### Environment Variables
@@ -114,15 +123,17 @@ export OPENAI_API_KEY='your-api-key-here'
 
 ## Method Comparison
 
-| Feature | Ours (Qwen) | GVL (GPT-5.2) |
-|---------|-------------|---------------|
-| **Requires** | Checkpoint path | OpenAI API key |
-| **Model** | Fine-tuned Qwen3VL | OpenAI GPT-5.2 |
-| **Environment** | Conda base | Any |
-| **Speed** | Fast (local GPU) | Slower (API calls) |
-| **Parallelization** | Limited (GPU batch) | High (API workers) |
-| **Cost** | Free (local) | Pay per API call |
-| **Customization** | Fully customizable | Fixed model |
+| Feature | Ours (Qwen) | GVL (GPT-5.2) | RoboDopamine |
+|---------|-------------|---------------|--------------|
+| **Requires** | Checkpoint path | OpenAI API key | Goal image |
+| **Model** | Fine-tuned Qwen3VL | OpenAI GPT-5.2 | RoboDopamine GRM-3B |
+| **Input** | Task description | Task description | Task + Goal image |
+| **Environment** | Conda base | Any | Conda base |
+| **Speed** | Fast (local GPU) | Slower (API calls) | Fast (vLLM) |
+| **Parallelization** | Limited (GPU batch) | High (API workers) | Limited |
+| **Cost** | Free (local) | Pay per API call | Free (local) |
+| **Customization** | Fully customizable | Fixed model | Fixed model |
+| **Modes Supported** | Both | Both | action_chunk only |
 
 ## Cache File System
 
@@ -186,10 +197,16 @@ ERROR: OPENAI_API_KEY not set in environment!
 OpenAI API key is required for reward.method='GVL'
 ```
 
+**"RoboDopamine" method without goal image:**
+```
+ERROR: reward.goal_image_path not set in config file!
+Goal image path is required for reward.method='RoboDopamine'
+```
+
 **Invalid method:**
 ```
 ERROR: Unknown reward.method: InvalidMethod
-Supported methods: 'Ours', 'GVL'
+Supported methods: 'Ours', 'GVL', 'RoboDopamine'
 ```
 
 ## Testing

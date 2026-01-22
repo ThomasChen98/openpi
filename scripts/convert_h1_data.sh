@@ -71,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             REWARD_RANDOM_DROP_RATE="$2"
             shift 2
             ;;
+        --reward-goal-image-path)
+            REWARD_GOAL_IMAGE_PATH="$2"
+            shift 2
+            ;;
         --action-dim)
             ACTION_DIM="$2"
             shift 2
@@ -95,13 +99,14 @@ NUM_REPEATS="${NUM_REPEATS:-1}"
 CONFIG_NAME="${CONFIG_NAME:-pi05_h1_auto}"
 
 # Reward labeling parameters (used for reward_labeling and action_chunk_advantage modes)
-REWARD_METHOD="${REWARD_METHOD:-Ours}"  # Options: Ours, GVL
+REWARD_METHOD="${REWARD_METHOD:-Ours}"  # Options: Ours, GVL, RoboDopamine
 REWARD_TASK_INSTRUCTION="${REWARD_TASK_INSTRUCTION:-}"
 REWARD_MAX_FRAMES="${REWARD_MAX_FRAMES:-30}"
 REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
 REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
 REWARD_LOOK_AHEAD_WINDOW="${REWARD_LOOK_AHEAD_WINDOW:-80}"
 REWARD_RANDOM_DROP_RATE="${REWARD_RANDOM_DROP_RATE:-0.0}"
+REWARD_GOAL_IMAGE_PATH="${REWARD_GOAL_IMAGE_PATH:-}"
 
 # Action dimension (empty = auto-detect from HDF5, 14=arms, 26=arms+hands)
 ACTION_DIM="${ACTION_DIM:-}"
@@ -188,6 +193,18 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
             echo "Action chunk advantage mode with method='GVL' requires OpenAI API key."
             exit 1
         fi
+    elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+        # Check for goal image path
+        if [ -z "$REWARD_GOAL_IMAGE_PATH" ]; then
+            echo "ERROR: REWARD_GOAL_IMAGE_PATH not set for action_chunk_advantage mode with method='RoboDopamine'!"
+            echo "Pass it with: --reward-goal-image-path '/path/to/goal_image.png'"
+            exit 1
+        fi
+        
+        if [ ! -f "$REWARD_GOAL_IMAGE_PATH" ]; then
+            echo "ERROR: Goal image path does not exist: $REWARD_GOAL_IMAGE_PATH"
+            exit 1
+        fi
     fi
     
     # Find parquet data directory (from previous conversion)
@@ -214,23 +231,34 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
             echo "  Parquet directory: $PARQUET_DIR"
             if [ "$REWARD_METHOD" = "Ours" ]; then
                 echo "  Checkpoint: $QWEN_REWARD_CHECKPOINT_PATH"
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                echo "  Goal image: $REWARD_GOAL_IMAGE_PATH"
             fi
             echo "  Task instruction: $REWARD_TASK_INSTRUCTION"
             
-            # Use conda base environment for Qwen reward computation
-            # (same environment that works in your notebooks)
-            QWEN_PYTHON="/home/yuxin/miniconda/bin/python"
-            echo "  Using conda base Python: $QWEN_PYTHON"
+            # Use conda base environment for reward computation
+            # All methods (Ours/GVL/RoboDopamine) need specialized vision models
+            REWARD_PYTHON="/home/yuxin/miniconda/bin/python"
+            echo "  Using conda base Python: $REWARD_PYTHON"
+            
+            # Build advantage computation command
+            ADV_CMD="$REWARD_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
+                --data-dir \"$PARQUET_DIR\" \
+                --task-instruction \"$REWARD_TASK_INSTRUCTION\" \
+                --max-frames \"$REWARD_MAX_FRAMES\" \
+                --look-ahead-window \"$REWARD_LOOK_AHEAD_WINDOW\" \
+                --advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
+                --reward-method \"$REWARD_METHOD\""
+            
+            # Add method-specific parameters
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                ADV_CMD="$ADV_CMD --checkpoint-path \"$QWEN_REWARD_CHECKPOINT_PATH\""
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                ADV_CMD="$ADV_CMD --goal-image-path \"$REWARD_GOAL_IMAGE_PATH\""
+            fi
             
             # Run action chunk advantage computation
-            $QWEN_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
-                --data-dir "$PARQUET_DIR" \
-                --task-instruction "$REWARD_TASK_INSTRUCTION" \
-                --checkpoint-path "$QWEN_REWARD_CHECKPOINT_PATH" \
-                --max-frames "$REWARD_MAX_FRAMES" \
-                --look-ahead-window "$REWARD_LOOK_AHEAD_WINDOW" \
-                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD" \
-                --reward-method "$REWARD_METHOD"
+            eval "$ADV_CMD"
             
             echo "✓ Action chunk advantages computed!"
         fi
@@ -253,17 +281,19 @@ if [ "$LABELING_MODE" = "action_chunk_advantage" ]; then
 fi
 
 # Build the convert command with optional labeling mode
-# Use conda base Python for reward_labeling (needs Qwen), otherwise use .venv
+# Use conda base Python for all reward-based modes (Ours/GVL/RoboDopamine need special vision models)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # Choose Python environment based on labeling mode
+# reward_labeling needs conda base for vision models (Ours, GVL, RoboDopamine)
+# action_chunk_advantage uses pre-computed advantages, so it just needs project .venv for lerobot
 if [ "$LABELING_MODE" = "reward_labeling" ]; then
-    # Use conda base environment for Qwen reward labeling (same as notebooks)
+    # Use conda base environment for reward computation (all methods use specialized vision models)
     PYTHON_CMD="/home/yuxin/miniconda/bin/python"
-    echo "Using conda base Python for reward_labeling mode: $PYTHON_CMD"
+    echo "Using conda base Python for reward-based labeling (method=$REWARD_METHOD): $PYTHON_CMD"
 else
-    # Use project .venv for other modes
+    # Use project .venv for other modes (including action_chunk_advantage)
     PYTHON_CMD="$PROJECT_ROOT/.venv/bin/python"
 fi
 
@@ -285,6 +315,10 @@ if [ "$LABELING_MODE" != "none" ]; then
         CONVERT_CMD="$CONVERT_CMD --reward_max_frames $REWARD_MAX_FRAMES"
         CONVERT_CMD="$CONVERT_CMD --reward_image_rotation $REWARD_IMAGE_ROTATION"
         CONVERT_CMD="$CONVERT_CMD --reward_advantage_threshold $REWARD_ADVANTAGE_THRESHOLD"
+        # Add goal image path for RoboDopamine
+        if [ "$REWARD_METHOD" = "RoboDopamine" ] && [ -n "$REWARD_GOAL_IMAGE_PATH" ]; then
+            CONVERT_CMD="$CONVERT_CMD --reward_goal_image_path \"$REWARD_GOAL_IMAGE_PATH\""
+        fi
     fi
     
     # Add parameters for action_chunk_advantage mode
@@ -295,6 +329,10 @@ if [ "$LABELING_MODE" != "none" ]; then
         fi
         # Pass random drop rate (default 0.0 means no dropping)
         CONVERT_CMD="$CONVERT_CMD --reward_random_drop_rate $REWARD_RANDOM_DROP_RATE"
+        # Add goal image path for RoboDopamine
+        if [ "$REWARD_METHOD" = "RoboDopamine" ] && [ -n "$REWARD_GOAL_IMAGE_PATH" ]; then
+            CONVERT_CMD="$CONVERT_CMD --reward_goal_image_path \"$REWARD_GOAL_IMAGE_PATH\""
+        fi
         # Note: action chunk advantages are already pre-computed, just pass task instruction
     fi
 fi

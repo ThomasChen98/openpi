@@ -165,6 +165,7 @@ def main(
     reward_advantage_threshold: float = 0.3,
     reward_ranking_frames: int = 5,
     reward_random_drop_rate: float = 0.0,
+    reward_goal_image_path: str = None,
     action_dim: int = None,
     filter_good_only: bool = False,
 ):
@@ -181,15 +182,17 @@ def main(
             - "human_labeling": Read advantage from HDF5 metadata
             - "reward_labeling": Use embodied reward model to label advantage (episode-level)
             - "action_chunk_advantage": Fine-grained advantage labeling per action chunk
-        reward_method: Reward model method ('Ours' or 'GVL')
+        reward_method: Reward model method ('Ours', 'GVL', or 'RoboDopamine')
             - "Ours": Use fine-tuned Qwen model (requires checkpoint_path)
             - "GVL": Use OpenAI GPT-5.2 (requires OPENAI_API_KEY)
+            - "RoboDopamine": Use RoboDopamine GRM-3B (requires goal_image_path)
         reward_task_instruction: Detailed task instruction for reward model (required for reward_labeling)
         reward_max_frames: Maximum frames to sample for reward labeling
         reward_image_rotation: Image rotation angle for reward labeling (0, 90, 180, 270)
         reward_advantage_threshold: Percentile threshold for advantage labeling (0.0-1.0)
                                    e.g., 0.3 means top 30% episodes get Advantage=True
         reward_ranking_frames: Number of frames from the end to use for ranking (default: 5, use 0 for all frames)
+        reward_goal_image_path: Path to goal image (required for 'RoboDopamine' method)
         action_dim: Expected action dimension (14=arms, 26=arms+hands). If provided, validates against HDF5 data.
                    If not provided, auto-detects from HDF5 files.
         filter_good_only: If True, only keep episodes with Advantage=True (for epoch 0 training from warmup checkpoint)
@@ -199,6 +202,11 @@ def main(
         if not reward_task_instruction:
             print("Warning: reward_task_instruction not provided, using task_description")
             reward_task_instruction = task_description
+        # Validate reward method for reward_labeling mode
+        if reward_method == "RoboDopamine":
+            print("ERROR: RoboDopamine is currently only supported for action_chunk_advantage mode")
+            print("       For episode-level reward labeling, use 'Ours' or 'GVL' method")
+            sys.exit(1)
     elif labeling_mode == "action_chunk_advantage":
         if not reward_task_instruction:
             print("Warning: reward_task_instruction not provided, using task_description")

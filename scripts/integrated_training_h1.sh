@@ -11,8 +11,8 @@
 #   ./scripts/integrated_training.sh --config my.yaml   # Use custom config
 #
 # Environment Notes:
-#   - Qwen reward computations use conda base environment (/home/yuxin/miniconda/bin/python)
-#     This environment has the correct transformers/unsloth versions for Qwen3VL
+#   - All reward computations use conda base environment (/home/yuxin/miniconda/bin/python)
+#     This environment has specialized vision models (Qwen3VL, DINOv3, RoboDopamine)
 #   - Policy training uses project .venv environment
 #   - The script automatically switches between environments as needed
 #
@@ -105,6 +105,7 @@ REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG
 REWARD_LOOK_AHEAD_WINDOW=$(yq -r '.reward.look_ahead_window // 80' "$CONFIG_FILE")
 REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
 REWARD_RANDOM_DROP_RATE=$(yq -r '.reward.random_drop_rate // 0.0' "$CONFIG_FILE")
+REWARD_GOAL_IMAGE_PATH=$(yq -r '.reward.goal_image_path // ""' "$CONFIG_FILE")
 
 # Server
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
@@ -587,32 +588,60 @@ convert_epoch_data() {
                     log_error "OpenAI API key is required for reward.method='GVL'"
                     return 1
                 fi
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                # Check for goal image path
+                if [ -z "$REWARD_GOAL_IMAGE_PATH" ]; then
+                    log_error "reward.goal_image_path not set in config file!"
+                    log_error "Action chunk advantage mode with method='RoboDopamine' requires goal image path."
+                    log_error "Add to config: reward.goal_image_path: '/path/to/goal_image.png'"
+                    return 1
+                fi
+                
+                if [ ! -f "$REWARD_GOAL_IMAGE_PATH" ]; then
+                    log_error "Goal image path does not exist: $REWARD_GOAL_IMAGE_PATH"
+                    return 1
+                fi
             else
                 log_error "Unknown reward.method: $REWARD_METHOD"
-                log_error "Supported methods: 'Ours', 'GVL'"
+                log_error "Supported methods: 'Ours', 'GVL', 'RoboDopamine'"
                 return 1
             fi
             
-            # Use the miniconda base environment Python that has Qwen dependencies
-            # (your notebooks use this environment with proper transformers/unsloth versions)
-            QWEN_PYTHON="/home/yuxin/miniconda/bin/python"
-            log_info "Switching to conda base environment for Qwen reward computation"
-            log_info "  Python: $QWEN_PYTHON"
+            # Use the miniconda base environment Python that has vision model dependencies
+            # (all reward methods need specialized models: Qwen, DINOv3, RoboDopamine)
+            REWARD_PYTHON="/home/yuxin/miniconda/bin/python"
+            log_info "Switching to conda base environment for reward computation (method=$REWARD_METHOD)"
+            log_info "  Python: $REWARD_PYTHON"
             
             # Export environment variables
             export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
             export CUDA_VISIBLE_DEVICES=$GPU_ID
             
+            # Set LD_LIBRARY_PATH to use PyTorch's CUDA 13 libraries
+            # This fixes cuBLAS version mismatch issues
+            NVIDIA_LIB_PATH="/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cublas/lib:/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cu13/lib"
+            export LD_LIBRARY_PATH="$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}"
+            
             # Run advantage computation (will use cache if already computed)
             log_info "  Running compute_action_chunk_advantages.py with conda base..."
-            $QWEN_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
-                --data-dir "$parquet_dir" \
-                --task-instruction "$REWARD_TASK_INSTRUCTION" \
-                --checkpoint-path "$REWARD_CHECKPOINT_PATH" \
-                --max-frames "$REWARD_MAX_FRAMES" \
-                --look-ahead-window "$REWARD_LOOK_AHEAD_WINDOW" \
-                --advantage-threshold "$REWARD_ADVANTAGE_THRESHOLD" \
-                --reward-method "$REWARD_METHOD"
+            
+            # Build command with method-specific parameters
+            ADV_CMD="$REWARD_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
+                --data-dir \"$parquet_dir\" \
+                --task-instruction \"$REWARD_TASK_INSTRUCTION\" \
+                --max-frames \"$REWARD_MAX_FRAMES\" \
+                --look-ahead-window \"$REWARD_LOOK_AHEAD_WINDOW\" \
+                --advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
+                --reward-method \"$REWARD_METHOD\""
+            
+            # Add method-specific parameters
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                ADV_CMD="$ADV_CMD --checkpoint-path \"$REWARD_CHECKPOINT_PATH\""
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                ADV_CMD="$ADV_CMD --goal-image-path \"$REWARD_GOAL_IMAGE_PATH\""
+            fi
+            
+            eval "$ADV_CMD"
             
             log_info "  Switching back to project .venv for training"
             
@@ -657,27 +686,44 @@ convert_epoch_data() {
     
     # Add reward labeling parameters if in reward_labeling or action_chunk_advantage mode
     if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        # Check if checkpoint path is set (only required for "Ours" method)
-        if [ "$REWARD_METHOD" = "Ours" ]; then
-            if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
-                log_error "reward.checkpoint_path not set in config file!"
-                log_error "Reward labeling with method='Ours' requires Qwen checkpoint path."
-                log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
+            # Check if checkpoint path is set (only required for "Ours" method)
+            if [ "$REWARD_METHOD" = "Ours" ]; then
+                if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
+                    log_error "reward.checkpoint_path not set in config file!"
+                    log_error "Reward labeling with method='Ours' requires Qwen checkpoint path."
+                    log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
+                    return 1
+                fi
+                
+                if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
+                    log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
+                    return 1
+                fi
+            elif [ "$REWARD_METHOD" = "GVL" ]; then
+                # Check for OpenAI API key
+                if [ -z "$OPENAI_API_KEY" ]; then
+                    log_error "OPENAI_API_KEY not set in environment!"
+                    log_error "Reward labeling with method='GVL' requires OpenAI API key."
+                    return 1
+                fi
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                # Check for goal image path
+                if [ -z "$REWARD_GOAL_IMAGE_PATH" ]; then
+                    log_error "reward.goal_image_path not set in config file!"
+                    log_error "Reward labeling with method='RoboDopamine' requires goal image path."
+                    log_error "Add to config: reward.goal_image_path: '/path/to/goal_image.png'"
+                    return 1
+                fi
+                
+                if [ ! -f "$REWARD_GOAL_IMAGE_PATH" ]; then
+                    log_error "Goal image path does not exist: $REWARD_GOAL_IMAGE_PATH"
+                    return 1
+                fi
+            else
+                log_error "Unknown reward.method: $REWARD_METHOD"
+                log_error "Supported methods: 'Ours', 'GVL', 'RoboDopamine'"
                 return 1
             fi
-            
-            if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
-                log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
-                return 1
-            fi
-        elif [ "$REWARD_METHOD" = "GVL" ]; then
-            # Check for OpenAI API key
-            if [ -z "$OPENAI_API_KEY" ]; then
-                log_error "OPENAI_API_KEY not set in environment!"
-                log_error "Reward labeling with method='GVL' requires OpenAI API key."
-                return 1
-            fi
-        fi
         
         # Note: We use miniconda Python for Qwen operations
         # No need to install Qwen dependencies to .venv
@@ -695,6 +741,8 @@ convert_epoch_data() {
             log_info "  Mode: Fine-grained per-frame advantages"
             if [ "$REWARD_METHOD" = "Ours" ]; then
                 log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                log_info "  Goal Image: $REWARD_GOAL_IMAGE_PATH"
             fi
             log_info "  Max frames: $REWARD_MAX_FRAMES"
             log_info "  Look-ahead window: $REWARD_LOOK_AHEAD_WINDOW frames"
@@ -707,6 +755,8 @@ convert_epoch_data() {
             log_info "  Mode: Episode-level advantages"
             if [ "$REWARD_METHOD" = "Ours" ]; then
                 log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
+            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
+                log_info "  Goal Image: $REWARD_GOAL_IMAGE_PATH"
             fi
             log_info "  Max frames: $REWARD_MAX_FRAMES"
             log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
@@ -721,7 +771,19 @@ convert_epoch_data() {
             --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \
             --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
             --reward-random-drop-rate \"$REWARD_RANDOM_DROP_RATE\""
+        
+        # Add goal image path for RoboDopamine
+        if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
+            if [ "$REWARD_METHOD" = "RoboDopamine" ] && [ -n "$REWARD_GOAL_IMAGE_PATH" ]; then
+                convert_cmd="$convert_cmd --reward-goal-image-path \"$REWARD_GOAL_IMAGE_PATH\""
+            fi
+        fi
     fi
+    
+    # Set LD_LIBRARY_PATH to use PyTorch's CUDA 13 libraries
+    # This fixes cuBLAS version mismatch issues for reward-based labeling
+    NVIDIA_LIB_PATH="/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cublas/lib:/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cu13/lib"
+    export LD_LIBRARY_PATH="$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}"
     
     # Execute conversion
     eval "$convert_cmd"

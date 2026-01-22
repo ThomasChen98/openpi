@@ -31,6 +31,20 @@ reward:
 #   random_drop_rate: 0.0
 
 # =============================================================================
+# Using "RoboDopamine" Method (RoboDopamine GRM-3B)
+# =============================================================================
+# reward:
+#   method: "RoboDopamine"  # Use RoboDopamine GRM-3B model
+#   task_instruction: "Pick up the bottle and insert it into the tray."
+#   goal_image_path: "RoboDopamine/goal_images/insert_bottle_goal_image.png"
+#   # No checkpoint_path needed for RoboDopamine
+#   max_frames: 30
+#   advantage_threshold: 0.3
+#   look_ahead_window: 80
+#   random_drop_rate: 0.0
+#   # Note: RoboDopamine requires a goal image showing the desired end state
+
+# =============================================================================
 # Notes
 # =============================================================================
 # 
@@ -46,12 +60,22 @@ reward:
 #   - No checkpoint needed
 #   - Can run in parallel with multiple workers (faster for many episodes)
 #
-# Both methods support:
-#   - reward_labeling: Episode-level advantage labels
+# "RoboDopamine" Method:
+#   - Uses RoboDopamine GRM-3B model (goal-conditioned reward model)
+#   - Requires: reward.goal_image_path pointing to a goal image file
+#   - Uses vLLM for fast inference
+#   - Currently only supports action_chunk_advantage mode (not reward_labeling)
+#   - Converts episodes to MP4 format for processing
+#
+# All methods support:
 #   - action_chunk_advantage: Fine-grained per-frame advantage labels
+#
+# "Ours" and "GVL" also support:
+#   - reward_labeling: Episode-level advantage labels
 #
 # Cache files are method-specific:
 #   - Ours: episode_000000_Ours_reward.pkl
 #   - GVL: episode_000000_GVL_reward.pkl
+#   - RoboDopamine: episode_000000_RoboDopamine_reward.pkl
 #
 # This allows you to switch between methods without recomputing cached rewards.

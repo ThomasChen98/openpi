@@ -95,6 +95,7 @@ class ActionChunkAdvantageComputer:
         task_instruction: str,
         reward_method: str = "Ours",
         qwen_checkpoint_path: str = "",
+        goal_image_path: str = "",
         dinov3_model_id: str = "facebook/dinov3-vits16-pretrain-lvd1689m",
         max_frames: int = 30,
         look_ahead_window: int = 80,
@@ -104,8 +105,9 @@ class ActionChunkAdvantageComputer:
         """
         Args:
             task_instruction: Task description for reward model
-            reward_method: Reward model method ('Ours' or 'GVL')
+            reward_method: Reward model method ('Ours', 'GVL', or 'RoboDopamine')
             qwen_checkpoint_path: Path to fine-tuned Qwen checkpoint (for 'Ours' method)
+            goal_image_path: Path to goal image (for 'RoboDopamine' method)
             dinov3_model_id: HuggingFace model ID for DINOv3
             max_frames: Max frames to sample for reward prediction
             look_ahead_window: Number of future frames to consider for advantage
@@ -114,6 +116,7 @@ class ActionChunkAdvantageComputer:
         """
         self.task_instruction = task_instruction
         self.reward_method = reward_method
+        self.goal_image_path = goal_image_path
         self.max_frames = max_frames
         self.look_ahead_window = look_ahead_window
         self.advantage_threshold = advantage_threshold
@@ -129,6 +132,7 @@ class ActionChunkAdvantageComputer:
             print(f"  Loading Qwen from: {qwen_checkpoint_path}")
             self.qwen_model, self.qwen_tokenizer = load_model_and_tokenizer(qwen_checkpoint_path)
             self.openai_client = None
+            self.robodopamine_model = None
         elif reward_method == "GVL":
             # Load OpenAI client
             from openai import OpenAI
@@ -139,6 +143,22 @@ class ActionChunkAdvantageComputer:
             self.openai_client = OpenAI(api_key=api_key)
             self.qwen_model = None
             self.qwen_tokenizer = None
+            self.robodopamine_model = None
+        elif reward_method == "RoboDopamine":
+            # Load RoboDopamine model
+            print(f"  Loading RoboDopamine GRM-3B model...")
+            print(f"  Goal image: {goal_image_path}")
+            # Import RoboDopamine here to avoid dependency issues
+            try:
+                from RoboDopamine.examples.inference import GRMInference
+                self.robodopamine_model = GRMInference("tanhuajie2001/Robo-Dopamine-GRM-3B")
+            except ImportError as e:
+                print(f"Error: Could not import RoboDopamine: {e}")
+                print("Make sure RoboDopamine is installed and in the Python path")
+                raise
+            self.qwen_model = None
+            self.qwen_tokenizer = None
+            self.openai_client = None
         else:
             raise ValueError(f"Unknown reward method: {reward_method}")
         
@@ -164,7 +184,7 @@ class ActionChunkAdvantageComputer:
             outs.append(F.normalize(x, dim=-1).cpu())
         return torch.cat(outs, 0)
     
-    def compute_episode_rewards(self, ego_images: List[Image.Image]) -> np.ndarray:
+    def compute_episode_rewards(self, ego_images: List[Image.Image], episode_file_path: str = None) -> np.ndarray:
         """Compute dense reward predictions for all frames in an episode."""
         # Sample frames for reward prediction
         test_video_frames = sample_even_frames_from_images(ego_images, max_frames=self.max_frames, rotate_angle=0)
@@ -212,6 +232,48 @@ class ActionChunkAdvantageComputer:
             )
             reward_pred_result_raw = resp.output_text
             reward_pred = self._parse_reward_from_result(test_video_frames, reward_pred_result_raw)
+        
+        elif self.reward_method == "RoboDopamine":
+            # Use RoboDopamine model
+            if episode_file_path is None:
+                raise ValueError("episode_file_path is required for RoboDopamine method")
+            
+            from embodied_reward_util import save_images_to_mp4
+            
+            # Save ego_images as MP4
+            mp4_save_path = episode_file_path.replace('.parquet', '_ego_images.mp4')
+            os.makedirs(os.path.dirname(mp4_save_path) or ".", exist_ok=True)
+            save_images_to_mp4(ego_images, mp4_save_path)
+            
+            # Run RoboDopamine pipeline
+            OUTPUT_ROOT = 'RoboDopamine/results/'
+            reward_results = self.robodopamine_model.run_pipeline(
+                cam_high_path=mp4_save_path,
+                cam_left_path=mp4_save_path,
+                cam_right_path=mp4_save_path,
+                out_root=OUTPUT_ROOT,
+                task=self.task_instruction,
+                frame_interval=30,
+                batch_size=30,
+                goal_image=self.goal_image_path,
+                eval_mode="incremental",
+                visualize=False
+            )
+            
+            # Extract progress scores
+            rewd_pred = []
+            for result in reward_results:
+                id = result['id'].split('_')[-1]
+                id = int(id)
+                rewd_pred.append([id, result['progress']])
+            
+            # Sort by id
+            rewd_pred.sort(key=lambda x: x[0])
+            rewd_pred = np.array(rewd_pred)
+            reward_pred = rewd_pred[:, 1]
+            
+            # Add one more element to the end (same as last value)
+            reward_pred = np.append(reward_pred, reward_pred[-1])
         
         else:
             raise ValueError(f"Unknown reward method: {self.reward_method}")
@@ -336,7 +398,8 @@ def main():
     parser.add_argument("--data-dir", required=True, help="Directory containing episode parquet files")
     parser.add_argument("--task-instruction", required=True, help="Task instruction for reward model")
     parser.add_argument("--checkpoint-path", default="", help="Path to Qwen checkpoint (required for 'Ours' method)")
-    parser.add_argument("--reward-method", default="Ours", choices=["Ours", "GVL"], help="Reward model method: 'Ours' or 'GVL'")
+    parser.add_argument("--reward-method", default="Ours", choices=["Ours", "GVL", "RoboDopamine"], help="Reward model method: 'Ours', 'GVL', or 'RoboDopamine'")
+    parser.add_argument("--goal-image-path", default="", help="Path to goal image (required for 'RoboDopamine' method)")
     parser.add_argument("--output-dir", default=None, help="Output directory (defaults to data-dir)")
     parser.add_argument("--max-frames", type=int, default=30, help="Max frames for reward sampling")
     parser.add_argument("--look-ahead-window", type=int, default=80, help="Frames to look ahead for advantage")
@@ -358,6 +421,13 @@ def main():
         if not os.environ.get("OPENAI_API_KEY"):
             print("Error: OPENAI_API_KEY environment variable is required for reward method 'GVL'")
             sys.exit(1)
+    elif args.reward_method == "RoboDopamine":
+        if not args.goal_image_path:
+            print("Error: --goal-image-path is required for reward method 'RoboDopamine'")
+            sys.exit(1)
+        if not os.path.exists(args.goal_image_path):
+            print(f"Error: Goal image path does not exist: {args.goal_image_path}")
+            sys.exit(1)
     
     # Setup
     data_dir = Path(args.data_dir)
@@ -377,6 +447,7 @@ def main():
         task_instruction=args.task_instruction,
         reward_method=args.reward_method,
         qwen_checkpoint_path=args.checkpoint_path,
+        goal_image_path=args.goal_image_path,
         max_frames=args.max_frames,
         look_ahead_window=args.look_ahead_window,
         advantage_threshold=args.advantage_threshold,
@@ -397,7 +468,7 @@ def main():
             rewards = pickle.load(open(reward_cache, 'rb'))
         else:
             images = load_episode_images(ep_file)
-            rewards = computer.compute_episode_rewards(images)
+            rewards = computer.compute_episode_rewards(images, episode_file_path=ep_file)
             pickle.dump(rewards, open(reward_cache, 'wb'))
         
         all_episode_rewards.append(rewards)

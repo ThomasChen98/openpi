@@ -6,7 +6,7 @@ Add this to your `training_config.yaml`:
 
 ```yaml
 reward:
-  method: "Ours"  # or "GVL"
+  method: "Ours"  # or "GVL" or "RoboDopamine"
   # ... rest of your reward config
 ```
 
@@ -48,6 +48,22 @@ export OPENAI_API_KEY='your-api-key-here'
 - Can parallelize across many workers
 - Requires API key and costs money
 
+### "RoboDopamine" - Goal-Conditioned Reward Model
+
+```yaml
+reward:
+  method: "RoboDopamine"
+  goal_image_path: "RoboDopamine/goal_images/insert_bottle_goal_image.png"
+  task_instruction: "Pick up the bottle and insert it into the tray."
+  max_frames: 30
+  advantage_threshold: 0.3
+```
+
+- Uses RoboDopamine GRM-3B model
+- Goal-conditioned (requires goal image)
+- Fast with vLLM
+- Only supports `action_chunk_advantage` mode (not `reward_labeling`)
+
 ## That's All!
 
 The training script handles everything else automatically:
@@ -74,8 +90,9 @@ training:
   gpu_id: 0
 
 reward:
-  method: "Ours"  # ← NEW! Choose "Ours" or "GVL"
+  method: "Ours"  # ← NEW! Choose "Ours", "GVL", or "RoboDopamine"
   checkpoint_path: "/path/to/qwen/checkpoint"  # Only for "Ours"
+  goal_image_path: "/path/to/goal_image.png"  # Only for "RoboDopamine"
   task_instruction: "Pick up the bottle and insert it into the tray."
   max_frames: 20
   advantage_threshold: 0.3
