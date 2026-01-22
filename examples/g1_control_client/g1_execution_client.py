@@ -347,14 +347,19 @@ class G1TrainingClient:
         # Position hold state
         self._hold_position_background = False
         
+        # Gravity compensation (reduces arm dropping)
+        self.use_gravity_compensation = self.config.get('execution', {}).get('gravity_compensation', True)
+        if self.use_gravity_compensation:
+            logger.info("Gravity compensation ENABLED - arms should track better")
+        
         # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw)
         # Zeros for home position
         self.reset_pose = np.array([
-            -1.0154713,  0.9747841,  -0.21311548,  0.6276259,   0.7616694,  -0.79021585,
-            -0.05857889, -0.7146913,  -0.75419044,  0.21216872,  0.12022575, -1.0280188,
-            -0.08254734, -0.25468877, -0.85025257,  0.89425945,  0.46076134, -0.13218975,
-            -0.02066085, -0.07476317, -0.41315883, -0.99179614, -0.91256917, -1.1086341,
-            -0.21867633,  0.07615697,  0.01578115,  0.25729185, -0.39915884
+            -0.8327958,   0.68337566, -0.15583088,  0.65219355,  0.6835083,  -0.90980643
+            0.40519863, -0.63599086, -0.6096487,   0.1507975,   0.20780647, -0.9646822
+            -0.12156798, -0.7018801,  -0.8908997,   0.884532,    0.56234354, -0.30448544
+            -0.1900528,  -0.07469787, -0.45043802, -0.99141276, -0.8881592,  -1.1634055
+            0.13551766,  0.01854079,  0.03298719,  0.20263577, -0.18577237
         ])
         
         # Signal handling
@@ -693,7 +698,8 @@ class G1TrainingClient:
             
             self.robot.ctrl_dual_arm(
                 q_target=target_q,
-                tauff_target=np.zeros(14, dtype=np.float32)
+                tauff_target=np.zeros(14, dtype=np.float32),
+                use_gravity_compensation=self.use_gravity_compensation
             )
             
             # Move hands to reset pose
@@ -783,10 +789,11 @@ class G1TrainingClient:
                 if arm_max_error > 0.035 or waist_error > 0.035:  # ~2 degrees
                     logger.warning(f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°, waist={np.degrees(waist_error):.2f}°")
             
-            # Send arm command
+            # Send arm command with optional gravity compensation
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14, dtype=np.float32)
+                tauff_target=np.zeros(14, dtype=np.float32),
+                use_gravity_compensation=self.use_gravity_compensation
             )
             
             # Send hand command
@@ -892,7 +899,8 @@ class G1TrainingClient:
             # Keep commanding target while waiting
             self.robot.ctrl_dual_arm(
                 q_target=target_arm,
-                tauff_target=np.zeros(14, dtype=np.float32)
+                tauff_target=np.zeros(14, dtype=np.float32),
+                use_gravity_compensation=self.use_gravity_compensation
             )
             self.robot.ctrl_waist_yaw(target_waist)
             
@@ -1151,7 +1159,8 @@ class G1TrainingClient:
                 
                 self.robot.ctrl_dual_arm(
                     q_target=current_q,
-                    tauff_target=np.zeros(14, dtype=np.float32)
+                    tauff_target=np.zeros(14, dtype=np.float32),
+                    use_gravity_compensation=self.use_gravity_compensation
                 )
                 
                 elapsed = time.time() - loop_start

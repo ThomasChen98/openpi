@@ -215,11 +215,83 @@ class G1_29_ArmController:
             sleep_time = max(0, (self.control_dt - all_t_elapsed))
             time.sleep(sleep_time)
 
-    def ctrl_dual_arm(self, q_target, tauff_target):
-        '''Set control target values q & tau of the left and right arm motors.'''
+    def ctrl_dual_arm(self, q_target, tauff_target, use_gravity_compensation: bool = False):
+        '''Set control target values q & tau of the left and right arm motors.
+        
+        Args:
+            q_target: Target joint positions (14 DOF)
+            tauff_target: Feedforward torques (14 DOF) - added to gravity comp if enabled
+            use_gravity_compensation: If True, add gravity compensation torques
+        '''
         with self.ctrl_lock:
             self.q_target = q_target
-            self.tauff_target = tauff_target
+            if use_gravity_compensation:
+                gravity_torques = self.compute_gravity_compensation(q_target)
+                self.tauff_target = tauff_target + gravity_torques
+            else:
+                self.tauff_target = tauff_target
+    
+    def compute_gravity_compensation(self, arm_q: np.ndarray) -> np.ndarray:
+        """
+        Compute feedforward torques to compensate for gravity on arm joints.
+        
+        This uses a simplified model based on joint angles. The key insight is that
+        gravity torque on a joint depends on the sine of the angle between the link
+        and vertical (gravity direction).
+        
+        Joint mapping (14 DOF):
+            [0]  L_sh_pitch  - main gravity load when arm extended forward
+            [1]  L_sh_roll   - gravity load when arm abducted
+            [2]  L_sh_yaw    - minimal gravity load (rotation around arm axis)
+            [3]  L_elbow     - gravity load on forearm
+            [4-6] L_wrist    - minimal gravity load
+            [7-13] Right arm (same pattern)
+        
+        Args:
+            arm_q: Current or target arm joint positions (14 DOF)
+            
+        Returns:
+            tauff: Feedforward torques (14 DOF) to counteract gravity
+        """
+        tauff = np.zeros(14, dtype=np.float32)
+        
+        # Empirical torque constants (Nm) - these need tuning on the real robot
+        # Values represent approximate torque needed at 90° from vertical
+        # Start conservative and increase if arms still drop
+        SHOULDER_PITCH_TORQUE = 8.0   # Full upper arm + forearm + hand (~3kg at 0.3m)
+        SHOULDER_ROLL_TORQUE = 3.0    # Lateral load (less than pitch)
+        ELBOW_TORQUE = 3.0            # Forearm + hand (~1.5kg at 0.25m)
+        
+        # Left arm gravity compensation
+        L_sh_pitch = arm_q[0]   # Positive = forward/down
+        L_sh_roll = arm_q[1]    # Positive = outward
+        L_elbow = arm_q[3]      # Positive = flexion
+        
+        # Shoulder pitch: torque needed depends on how far forward the arm is
+        # sin(pitch) gives the moment arm relative to gravity
+        tauff[0] = SHOULDER_PITCH_TORQUE * np.sin(L_sh_pitch)
+        
+        # Shoulder roll: when arm is abducted, gravity pulls it down
+        # This is more complex due to interaction with pitch, simplified here
+        tauff[1] = SHOULDER_ROLL_TORQUE * np.sin(L_sh_roll) * np.cos(L_sh_pitch)
+        
+        # Elbow: torque depends on the total angle of forearm from vertical
+        # Simplified: consider forearm angle relative to upper arm direction
+        forearm_angle_L = L_sh_pitch + L_elbow
+        tauff[3] = ELBOW_TORQUE * np.sin(forearm_angle_L)
+        
+        # Right arm gravity compensation (same logic)
+        R_sh_pitch = arm_q[7]
+        R_sh_roll = arm_q[8]
+        R_elbow = arm_q[10]
+        
+        tauff[7] = SHOULDER_PITCH_TORQUE * np.sin(R_sh_pitch)
+        tauff[8] = SHOULDER_ROLL_TORQUE * np.sin(R_sh_roll) * np.cos(R_sh_pitch)
+        
+        forearm_angle_R = R_sh_pitch + R_elbow
+        tauff[10] = ELBOW_TORQUE * np.sin(forearm_angle_R)
+        
+        return tauff
 
     def ctrl_waist_yaw(self, yaw_target: float):
         '''Set control target value q of the waist yaw motor.

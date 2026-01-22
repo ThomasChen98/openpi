@@ -337,7 +337,11 @@ class G1RemoteClient:
         self.loco_velocity_scale = 0.3
         self.loco_client = None
         
+        # Gravity compensation (reduces arm dropping during inference)
+        self.use_gravity_compensation = True
+        
         logger.info(f"Control frequency: {self.control_fps}Hz")
+        logger.info(f"Gravity compensation: {'ENABLED' if self.use_gravity_compensation else 'disabled'}")
         
         # IK solver uses relative paths, so we need to change directory
         original_cwd = os.getcwd()
@@ -600,10 +604,11 @@ class G1RemoteClient:
                     logger.warning(f"  Step {i}: Large tracking error - arm_max={np.degrees(max_arm_error):.2f}°, "
                                    f"waist={np.degrees(waist_error):.2f}°")
             
-            # Send arm command
+            # Send arm command with gravity compensation
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14, dtype=np.float32)
+                tauff_target=np.zeros(14, dtype=np.float32),
+                use_gravity_compensation=self.use_gravity_compensation
             )
             
             # Send hand command (direct joint angles)
@@ -781,7 +786,8 @@ class G1RemoteClient:
                                 interp_arm = current_arm * (1 - alpha) + arm_target * alpha
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp_arm,
-                                    tauff_target=np.zeros(14, dtype=np.float32)
+                                    tauff_target=np.zeros(14, dtype=np.float32),
+                                    use_gravity_compensation=self.use_gravity_compensation
                                 )
                                 
                                 # Interpolate waist (slower, smoother motion)
