@@ -4,7 +4,7 @@
   "config_name": "pi05_h1_auto",
   "epoch": 3,
   "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan21_GVL/epoch_2/1199",
-  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan21_GVL/1199",
-  "status": "collecting_data",
-  "updated_at": "2026-01-21T18:46:25-08:00"
+  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan20_GVL/1199",
+  "status": "training",
+  "updated_at": "2026-01-21T22:56:58-08:00"
 }

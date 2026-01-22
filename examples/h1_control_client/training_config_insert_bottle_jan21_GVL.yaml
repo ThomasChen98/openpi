@@ -41,7 +41,7 @@ training:
   save_interval: 1200
   keep_period: 1200
   num_repeats: 1
-  labeling_mode: "reward_labeling"                      # SFT: Use human episode-level labels
+  labeling_mode: "action_chunk_advantage"                      # SFT: Use human episode-level labels
   gpu_id: 1
 
 # =============================================================================

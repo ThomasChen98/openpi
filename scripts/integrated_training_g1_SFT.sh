@@ -1,25 +1,28 @@
 #!/bin/bash
 # =============================================================================
-# Integrated Training Pipeline for G1 Robot
+# Integrated Training Pipeline for G1 Robot - SFT (Supervised Fine-Tuning) Mode
 # =============================================================================
 #
-# This script reads ALL configuration from training_config_g1.yaml
-# Edit that file to configure your training run.
+# This is an ABLATION STUDY version of the training pipeline.
 #
-# Key differences from H1 pipeline:
+# Key Difference from integrated_training_g1.sh:
+#   - This version FILTERS and keeps ONLY GOOD trajectories
+#   - No action chunk advantage labeling - uses episode-level filtering
+#   - Trains on a subset of data (good episodes only)
+#   - Use this for comparison with the full action_chunk_advantage approach
+#
+# G1-specific configuration:
 #   - Port 8001 for policy server (H1 uses 8000)
 #   - Port 8081 for Viser visualizer (H1 uses 8080)
 #   - 29-dim action space (28 upper body + 1 waist_yaw)
 #   - G1-specific data paths and conversion
-#   - Single head camera (no wrist cameras)
 #
 # Usage:
-#   ./scripts/integrated_training_g1.sh                       # Use default config
-#   ./scripts/integrated_training_g1.sh --config my.yaml      # Use custom config
+#   ./scripts/integrated_training_g1_SFT.sh                    # Use default config
+#   ./scripts/integrated_training_g1_SFT.sh --config my.yaml   # Use custom config
 #
 # Environment Notes:
-#   - All reward computations use conda base environment (/home/yuxin/miniconda/bin/python)
-#     This environment has specialized vision models (Qwen3VL, DINOv3, RoboDopamine)
+#   - Qwen reward computations use conda base environment (/home/yuxin/miniconda/bin/python)
 #   - Policy training uses project .venv environment
 #   - The script automatically switches between environments as needed
 #
@@ -100,16 +103,13 @@ NUM_REPEATS=$(yq -r '.training.num_repeats // 2' "$CONFIG_FILE")
 LABELING_MODE=$(yq -r '.training.labeling_mode // "human_labeling"' "$CONFIG_FILE")
 GPU_ID=$(yq -r '.training.gpu_id // 0' "$CONFIG_FILE")
 
-# Reward labeling (used for reward_labeling and action_chunk_advantage modes)
-REWARD_METHOD=$(yq -r '.reward.method // "Ours"' "$CONFIG_FILE")
+# Reward labeling (read but not used in SFT mode)
 REWARD_TASK_INSTRUCTION=$(yq -r '.reward.task_instruction // ""' "$CONFIG_FILE")
 REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
 REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
 REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
 REWARD_LOOK_AHEAD_WINDOW=$(yq -r '.reward.look_ahead_window // 80' "$CONFIG_FILE")
 REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
-REWARD_RANDOM_DROP_RATE=$(yq -r '.reward.random_drop_rate // 0.0' "$CONFIG_FILE")
-REWARD_GOAL_IMAGE_PATH=$(yq -r '.reward.goal_image_path // ""' "$CONFIG_FILE")
 
 # Server (G1 uses different ports from H1)
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
@@ -497,51 +497,15 @@ convert_epoch_data() {
     fi
     
     log_info "Converting $count G1 episodes..."
-    log_info "Labeling mode: $LABELING_MODE"
+    log_info "Labeling mode: human_labeling (SFT mode - filtering good episodes only)"
     log_info "Action dim: $ACTION_DIM (G1 fixed)"
     
-    # Determine effective labeling mode
-    local effective_labeling_mode="$LABELING_MODE"
+    # SFT MODE: Use human_labeling for all epochs and filter to keep only good episodes
+    # This removes the action_chunk_advantage logic and uses human labels from HDF5 files
+    local effective_labeling_mode="human_labeling"
     
-    # For epoch 0, use human_labeling (warmup epoch - all good episodes)
-    if [ "$EPOCH" -eq 0 ]; then
-        log_info "Epoch 0 (Warmup): Using human_labeling mode (all episodes are baseline data)"
-        log_info "  Action chunk advantages will be applied from epoch 1 onwards"
-        effective_labeling_mode="human_labeling"
-    fi
-    
-    # Special handling for action_chunk_advantage mode (only for epoch 1+)
-    # Need parquet files to compute advantages, so do two-phase conversion if needed
-    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        local lerobot_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
-        local parquet_dir="$lerobot_dir/data/chunk-000"
-        
-        # Check if parquet files exist (from previous run or phase 1)
-        if [ ! -d "$parquet_dir" ] || [ -z "$(ls -A "$parquet_dir"/*.parquet 2>/dev/null)" ]; then
-            log_info "ACTION CHUNK ADVANTAGE: First-time conversion"
-            log_info "  Phase 1: Creating parquet files (without advantages)..."
-            
-            # Do initial conversion without advantages
-            local initial_convert_cmd="./scripts/convert_g1_data.sh \
-                --task-name \"$TASK_NAME\" \
-                --task-description \"$TASK_DESCRIPTION\" \
-                --epoch \"$EPOCH\" \
-                --labeling-mode \"none\" \
-                --num-repeats \"$NUM_REPEATS\" \
-                --config-name \"$CONFIG_NAME\" \
-                --data-dir \"$raw_dir\""
-            
-            if [ "$EPOCH" -eq 0 ]; then
-                initial_convert_cmd="$initial_convert_cmd --filter-good-only"
-            fi
-            
-            eval "$initial_convert_cmd"
-            
-            log_info "  Phase 1 complete: Parquet files created"
-        else
-            log_info "ACTION CHUNK ADVANTAGE: Parquet files already exist"
-        fi
-    fi
+    log_info "SFT Mode: Using human_labeling (episode-level labels from HDF5 metadata)"
+    log_info "  Will filter to keep only episodes labeled as 'good' by humans"
     
     # Build convert command (use G1-specific script)
     local convert_cmd="./scripts/convert_g1_data.sh \
@@ -553,264 +517,26 @@ convert_epoch_data() {
         --config-name \"$CONFIG_NAME\" \
         --data-dir \"$raw_dir\""
     
-    # For epoch 0, force filtering to only good episodes
-    if [ "$EPOCH" -eq 0 ]; then
-        convert_cmd="$convert_cmd --filter-good-only"
-    fi
+    # SFT MODE: Always filter to keep only good episodes (for all epochs)
+    log_info "SFT Mode: Filtering enabled - will keep only good episodes"
+    convert_cmd="$convert_cmd --filter-good-only"
     
-    # Compute action chunk advantages if needed (after parquet files exist)
-    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        local parquet_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH/data/chunk-000"
-        
-        if [ -d "$parquet_dir" ]; then
-            log_info "  Phase 2: Computing action chunk advantages..."
-            
-            # Check if checkpoint path is set (only required for "Ours" method)
-            if [ "$REWARD_METHOD" = "Ours" ]; then
-                if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
-                    log_error "reward.checkpoint_path not set in config file!"
-                    log_error "Qwen checkpoint path is required for reward.method='Ours'"
-                    return 1
-                fi
-                
-                if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
-                    log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
-                    return 1
-                fi
-            elif [ "$REWARD_METHOD" = "GVL" ]; then
-                # Check for OpenAI API key
-                if [ -z "$OPENAI_API_KEY" ]; then
-                    log_error "OPENAI_API_KEY not set in environment!"
-                    log_error "OpenAI API key is required for reward.method='GVL'"
-                    return 1
-                fi
-            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
-                # Check for goal image path
-                if [ -z "$REWARD_GOAL_IMAGE_PATH" ]; then
-                    log_error "reward.goal_image_path not set in config file!"
-                    log_error "Action chunk advantage mode with method='RoboDopamine' requires goal image path."
-                    log_error "Add to config: reward.goal_image_path: '/path/to/goal_image.png'"
-                    return 1
-                fi
-                
-                if [ ! -f "$REWARD_GOAL_IMAGE_PATH" ]; then
-                    log_error "Goal image path does not exist: $REWARD_GOAL_IMAGE_PATH"
-                    return 1
-                fi
-            else
-                log_error "Unknown reward.method: $REWARD_METHOD"
-                log_error "Supported methods: 'Ours', 'GVL', 'RoboDopamine'"
-                return 1
-            fi
-            
-            # Use the miniconda base environment Python that has vision model dependencies
-            # (all reward methods need specialized models: Qwen, DINOv3, RoboDopamine)
-            REWARD_PYTHON="/home/yuxin/miniconda/bin/python"
-            log_info "Switching to conda base environment for reward computation (method=$REWARD_METHOD)"
-            log_info "  Python: $REWARD_PYTHON"
-            
-            # Export environment variables
-            export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
-            export CUDA_VISIBLE_DEVICES=$GPU_ID
-            
-            # Set LD_LIBRARY_PATH to use PyTorch's CUDA 13 libraries
-            # This fixes cuBLAS version mismatch issues
-            NVIDIA_LIB_PATH="/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cublas/lib:/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cu13/lib"
-            export LD_LIBRARY_PATH="$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}"
-            
-            # Run advantage computation (will use cache if already computed)
-            log_info "  Running compute_action_chunk_advantages.py with conda base..."
-            
-            # Build command with method-specific parameters
-            # Note: G1 uses the same compute_action_chunk_advantages.py as H1
-            ADV_CMD="$REWARD_PYTHON examples/h1_control_client/compute_action_chunk_advantages.py \
-                --data-dir \"$parquet_dir\" \
-                --task-instruction \"$REWARD_TASK_INSTRUCTION\" \
-                --max-frames \"$REWARD_MAX_FRAMES\" \
-                --look-ahead-window \"$REWARD_LOOK_AHEAD_WINDOW\" \
-                --advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
-                --reward-method \"$REWARD_METHOD\""
-            
-            # Add method-specific parameters
-            if [ "$REWARD_METHOD" = "Ours" ]; then
-                ADV_CMD="$ADV_CMD --checkpoint-path \"$REWARD_CHECKPOINT_PATH\""
-            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
-                ADV_CMD="$ADV_CMD --goal-image-path \"$REWARD_GOAL_IMAGE_PATH\""
-            fi
-            
-            eval "$ADV_CMD"
-            
-            log_info "  Switching back to project .venv for training"
-            
-            log_info "  Phase 2 complete: Advantages computed"
-            
-            # Copy advantages to raw/ directory with HDF5-compatible names
-            # Parquet uses episode_000000, HDF5 uses episode_0
-            log_info "  Copying advantages to raw/ directory..."
-            for adv_file in "$parquet_dir"/episode_*_action_chunk_advantages.pkl; do
-                if [ -f "$adv_file" ]; then
-                    # Convert episode_000000_action_chunk_advantages.pkl -> episode_0_action_chunk_advantages.pkl
-                    basename_file=$(basename "$adv_file")
-                    # Extract the number (e.g., 000000 from episode_000000_action_chunk_advantages.pkl)
-                    if [[ $basename_file =~ episode_([0-9]+)_action_chunk_advantages\.pkl ]]; then
-                        episode_num="${BASH_REMATCH[1]}"
-                        # Remove leading zeros
-                        episode_num_stripped=$((10#$episode_num))
-                        new_name="episode_${episode_num_stripped}_action_chunk_advantages.pkl"
-                        cp "$adv_file" "$raw_dir/$new_name"
-                        log_info "    Copied $basename_file -> $new_name"
-                    fi
-                fi
-            done
-            
-            # Save norm_stats.json to temp before deleting directory
-            local norm_stats_file="$lerobot_dir/norm_stats.json"
-            local temp_norm_stats="/tmp/openpi_g1_norm_stats_epoch${EPOCH}.json"
-            if [ -f "$norm_stats_file" ]; then
-                log_info "  Saving norm_stats.json to temp location..."
-                cp "$norm_stats_file" "$temp_norm_stats"
-            fi
-            
-            # Clean up old parquet dataset to re-convert with advantages
-            log_info "  Phase 3: Re-converting with advantages..."
-            rm -rf "$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
-        else
-            log_error "Parquet directory not found: $parquet_dir"
-            log_error "Phase 1 conversion may have failed"
-            return 1
-        fi
-    fi
-    
-    # Add reward labeling parameters if in reward_labeling or action_chunk_advantage mode
-    if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-            # Check if checkpoint path is set (only required for "Ours" method)
-            if [ "$REWARD_METHOD" = "Ours" ]; then
-                if [ -z "$REWARD_CHECKPOINT_PATH" ]; then
-                    log_error "reward.checkpoint_path not set in config file!"
-                    log_error "Reward labeling with method='Ours' requires Qwen checkpoint path."
-                    log_error "Add to config: reward.checkpoint_path: '/path/to/checkpoint'"
-                    return 1
-                fi
-                
-                if [ ! -d "$REWARD_CHECKPOINT_PATH" ]; then
-                    log_error "Reward checkpoint path does not exist: $REWARD_CHECKPOINT_PATH"
-                    return 1
-                fi
-            elif [ "$REWARD_METHOD" = "GVL" ]; then
-                # Check for OpenAI API key
-                if [ -z "$OPENAI_API_KEY" ]; then
-                    log_error "OPENAI_API_KEY not set in environment!"
-                    log_error "Reward labeling with method='GVL' requires OpenAI API key."
-                    return 1
-                fi
-            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
-                # Check for goal image path
-                if [ -z "$REWARD_GOAL_IMAGE_PATH" ]; then
-                    log_error "reward.goal_image_path not set in config file!"
-                    log_error "Reward labeling with method='RoboDopamine' requires goal image path."
-                    log_error "Add to config: reward.goal_image_path: '/path/to/goal_image.png'"
-                    return 1
-                fi
-                
-                if [ ! -f "$REWARD_GOAL_IMAGE_PATH" ]; then
-                    log_error "Goal image path does not exist: $REWARD_GOAL_IMAGE_PATH"
-                    return 1
-                fi
-            else
-                log_error "Unknown reward.method: $REWARD_METHOD"
-                log_error "Supported methods: 'Ours', 'GVL', 'RoboDopamine'"
-                return 1
-            fi
-        
-        # Note: We use miniconda Python for Qwen operations
-        # No need to install Qwen dependencies to .venv
-        
-        # Export checkpoint path for the convert script
-        export QWEN_REWARD_CHECKPOINT_PATH="$REWARD_CHECKPOINT_PATH"
-        export REWARD_LOOK_AHEAD_WINDOW="$REWARD_LOOK_AHEAD_WINDOW"
-        
-        # Set CUDA_VISIBLE_DEVICES for reward labeling (use same GPU as training)
-        export CUDA_VISIBLE_DEVICES=$GPU_ID
-        
-        if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-            log_info "Using action chunk advantage labeling with:"
-            log_info "  Reward Method: $REWARD_METHOD"
-            log_info "  Mode: Fine-grained per-frame advantages"
-            if [ "$REWARD_METHOD" = "Ours" ]; then
-                log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
-            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
-                log_info "  Goal Image: $REWARD_GOAL_IMAGE_PATH"
-            fi
-            log_info "  Max frames: $REWARD_MAX_FRAMES"
-            log_info "  Look-ahead window: $REWARD_LOOK_AHEAD_WINDOW frames"
-            log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (top ${REWARD_ADVANTAGE_THRESHOLD} percentile)"
-            log_info "  Random drop rate: ${REWARD_RANDOM_DROP_RATE} (keep original prompt without advantage)"
-            log_info "  GPU: $GPU_ID"
-        else
-            log_info "Using reward labeling with:"
-            log_info "  Reward Method: $REWARD_METHOD"
-            log_info "  Mode: Episode-level advantages"
-            if [ "$REWARD_METHOD" = "Ours" ]; then
-                log_info "  Checkpoint: $REWARD_CHECKPOINT_PATH"
-            elif [ "$REWARD_METHOD" = "RoboDopamine" ]; then
-                log_info "  Goal Image: $REWARD_GOAL_IMAGE_PATH"
-            fi
-            log_info "  Max frames: $REWARD_MAX_FRAMES"
-            log_info "  Image rotation: $REWARD_IMAGE_ROTATION"
-            log_info "  Advantage threshold: ${REWARD_ADVANTAGE_THRESHOLD} (percentile)"
-            log_info "  GPU: $GPU_ID"
-        fi
-        
-        convert_cmd="$convert_cmd \
-            --reward-method \"$REWARD_METHOD\" \
-            --reward-task-instruction \"$REWARD_TASK_INSTRUCTION\" \
-            --reward-max-frames \"$REWARD_MAX_FRAMES\" \
-            --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \
-            --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
-            --reward-random-drop-rate \"$REWARD_RANDOM_DROP_RATE\""
-        
-        # Add goal image path for RoboDopamine
-        if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-            if [ "$REWARD_METHOD" = "RoboDopamine" ] && [ -n "$REWARD_GOAL_IMAGE_PATH" ]; then
-                convert_cmd="$convert_cmd --reward-goal-image-path \"$REWARD_GOAL_IMAGE_PATH\""
-            fi
-        fi
-    fi
-    
-    # Set LD_LIBRARY_PATH to use PyTorch's CUDA 13 libraries
-    # This fixes cuBLAS version mismatch issues for reward-based labeling
-    NVIDIA_LIB_PATH="/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cublas/lib:/home/yuxin/miniconda/lib/python3.13/site-packages/nvidia/cu13/lib"
-    export LD_LIBRARY_PATH="$NVIDIA_LIB_PATH:${LD_LIBRARY_PATH:-}"
+    # SFT mode uses human_labeling - no reward parameters needed
+    log_info "Using human labeling (SFT mode):"
+    log_info "  Mode: Episode-level filtering (human-labeled episodes)"
+    log_info "  Source: Advantage labels from HDF5 metadata"
+    log_info "  Filtering: Keep only episodes marked as 'good' (g) by humans"
+    log_info "  SFT: Training on human-verified high-quality trajectories only"
     
     # Execute conversion
     eval "$convert_cmd"
     
-    # Restore norm_stats.json from temp if it was saved (for action_chunk_advantage mode)
-    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        local lerobot_data_dir="$LEROBOT_BASE_DIR/$TASK_NAME/epoch_$EPOCH"
-        local temp_norm_stats="/tmp/openpi_g1_norm_stats_epoch${EPOCH}.json"
-        local norm_stats_file="$lerobot_data_dir/norm_stats.json"
-        
-        if [ -f "$temp_norm_stats" ]; then
-            log_info "  Restoring norm_stats.json from temp..."
-            cp "$temp_norm_stats" "$norm_stats_file"
-            rm -f "$temp_norm_stats"
-            log_info "    Restored to: $norm_stats_file"
-        fi
-    fi
-    
-    # Final message for action_chunk_advantage mode
-    if [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then
-        # Clean up temporary advantage files from raw/ directory
-        rm -f "$raw_dir"/*_action_chunk_advantages.pkl 2>/dev/null || true
-        
-        log_info "  Phase 3 complete: Dataset created with action chunk advantages"
-        log_info ""
-        log_info "  ✓ Three-phase conversion complete!"
-        log_info "    1. Parquet files created from HDF5"
-        log_info "    2. Action chunk advantages computed"
-        log_info "    3. Dataset re-created with advantages"
-    fi
+    # SFT mode: No special post-processing needed
+    log_info ""
+    log_info "  ✓ SFT conversion complete!"
+    log_info "    Mode: Supervised Fine-Tuning (good episodes only)"
+    log_info "    Filtering: Episodes with >50% good frames kept"
+    log_info "    Training: Will use only high-quality trajectories"
 }
 
 train_epoch() {
@@ -888,9 +614,8 @@ show_menu() {
     echo "Select starting phase:"
     echo ""
     echo -e "  ${GREEN}1${NC}) Data Collection - Start server, G1 robot collects data"
-    echo -e "  ${GREEN}2${NC}) Convert Data - Convert existing HDF5 data to LeRobot format"
-    echo -e "  ${GREEN}3${NC}) Training - Train policy on converted data"
-    echo -e "  ${GREEN}4${NC}) Resume from state file"
+    echo -e "  ${GREEN}2${NC}) Training - Convert existing data and train"
+    echo -e "  ${GREEN}3${NC}) Resume from state file"
     echo -e "  ${GREEN}q${NC}) Quit"
     echo ""
 }
@@ -991,13 +716,6 @@ run_data_collection_phase() {
     stop_server
 }
 
-run_convert_phase() {
-    save_state "converting"
-    convert_epoch_data
-    save_state "convert_complete"
-    log_info "Data conversion complete for epoch $EPOCH"
-}
-
 run_training_phase() {
     local checkpoint=""
     
@@ -1014,6 +732,9 @@ run_training_phase() {
         fi
         log_info "Epoch $EPOCH: Fine-tuning from checkpoint: $checkpoint"
     fi
+    
+    save_state "converting"
+    convert_epoch_data
     
     save_state "training"
     train_epoch "$checkpoint"
@@ -1066,21 +787,15 @@ main() {
                 phase="data_collection"
                 ;;
             2)
-                phase="convert"
-                ;;
-            3)
                 phase="training"
                 ;;
-            4|"")
+            3|"")
                 # Resume from state
                 case "$STATUS" in
                     collecting_data|idle)
                         phase="data_collection"
                         ;;
-                    converting|convert_complete)
-                        phase="convert"
-                        ;;
-                    training|epoch_complete)
+                    converting|training|epoch_complete)
                         phase="training"
                         ;;
                     *)
@@ -1106,9 +821,6 @@ main() {
                 phase="data_collection"
                 ;;
             2)
-                phase="convert"
-                ;;
-            3)
                 phase="training"
                 ;;
             q|Q)
@@ -1129,11 +841,6 @@ main() {
         
         if [ "$phase" = "data_collection" ]; then
             run_data_collection_phase
-            phase="convert"
-        fi
-        
-        if [ "$phase" = "convert" ]; then
-            run_convert_phase
             phase="training"
         fi
         

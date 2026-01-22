@@ -349,7 +349,13 @@ class G1TrainingClient:
         
         # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw)
         # Zeros for home position
-        self.reset_pose = np.zeros(29, dtype=np.float32)
+        self.reset_pose = np.array([
+            -1.0154713,  0.9747841,  -0.21311548,  0.6276259,   0.7616694,  -0.79021585,
+            -0.05857889, -0.7146913,  -0.75419044,  0.21216872,  0.12022575, -1.0280188,
+            -0.08254734, -0.25468877, -0.85025257,  0.89425945,  0.46076134, -0.13218975,
+            -0.02066085, -0.07476317, -0.41315883, -0.99179614, -0.91256917, -1.1086341,
+            -0.21867633,  0.07615697,  0.01578115,  0.25729185, -0.39915884
+        ])
         
         # Signal handling
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -715,7 +721,7 @@ class G1TrainingClient:
         
         return action_chunk
     
-    def execute_action_chunk(self, action_chunk: np.ndarray) -> int:
+    def execute_action_chunk(self, action_chunk: np.ndarray, track_error: bool = True) -> int:
         """
         Execute a full action chunk on the robot.
         
@@ -723,6 +729,10 @@ class G1TrainingClient:
             [0:14]  arm_joints
             [14:28] hand_joints
             [28]    waist_yaw
+            
+        Args:
+            action_chunk: Array of actions to execute
+            track_error: If True, log position tracking errors
         """
         control_period = 1.0 / self.control_freq
         actions_executed = 0
@@ -731,6 +741,11 @@ class G1TrainingClient:
         
         logger.info(f"   Executing {len(action_chunk)} actions at {self.control_freq}Hz ({action_dim} DOF)...")
         
+        # Tracking error statistics
+        arm_errors = []
+        waist_errors = []
+        per_joint_errors = [[] for _ in range(14)]  # Track each arm joint
+        
         for i, action in enumerate(action_chunk):
             loop_start = time.time()
             
@@ -738,7 +753,7 @@ class G1TrainingClient:
             key = self.keyboard.get_key(timeout=0.001)
             if key and key.lower() == 's':
                 logger.info(f"Stop signal received at action {i}/{len(action_chunk)}")
-                return actions_executed
+                break
             
             # Extract arm joints (14 DOF)
             arm_joints = action[:14]
@@ -748,6 +763,25 @@ class G1TrainingClient:
             
             # Extract waist yaw (1 DOF)
             waist_yaw = action[28] if action_dim >= 29 else 0.0
+            
+            # Track position error before sending new command
+            if track_error:
+                current_arm = self.robot.get_current_dual_arm_q()
+                current_waist = self.robot.get_current_waist_yaw()
+                
+                arm_error = np.abs(current_arm - arm_joints)
+                arm_max_error = np.max(arm_error)
+                waist_error = abs(current_waist - waist_yaw)
+                
+                arm_errors.append(arm_max_error)
+                waist_errors.append(waist_error)
+                
+                for j in range(14):
+                    per_joint_errors[j].append(arm_error[j])
+                
+                # Log warnings for large errors (threshold: 2 degrees)
+                if arm_max_error > 0.035 or waist_error > 0.035:  # ~2 degrees
+                    logger.warning(f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°, waist={np.degrees(waist_error):.2f}°")
             
             # Send arm command
             self.robot.ctrl_dual_arm(
@@ -791,6 +825,22 @@ class G1TrainingClient:
             sleep_time = max(0, control_period - elapsed)
             time.sleep(sleep_time)
         
+        # Log tracking statistics
+        if track_error and arm_errors:
+            arm_mean = np.degrees(np.mean(arm_errors))
+            arm_max = np.degrees(np.max(arm_errors))
+            waist_mean = np.degrees(np.mean(waist_errors))
+            
+            # Find worst joints
+            joint_names = ['L_sh_pitch', 'L_sh_roll', 'L_sh_yaw', 'L_elbow', 'L_wr_roll', 'L_wr_pitch', 'L_wr_yaw',
+                          'R_sh_pitch', 'R_sh_roll', 'R_sh_yaw', 'R_elbow', 'R_wr_roll', 'R_wr_pitch', 'R_wr_yaw']
+            joint_mean_errors = [np.degrees(np.mean(errs)) for errs in per_joint_errors]
+            worst_joints = np.argsort(joint_mean_errors)[-3:][::-1]
+            
+            logger.info(f"Tracking stats: arm_mean={arm_mean:.2f}°, arm_max={arm_max:.2f}°, waist_mean={waist_mean:.2f}°")
+            worst_info = [(joint_names[j], f'{joint_mean_errors[j]:.2f}°') for j in worst_joints]
+            logger.info(f"Worst tracking joints: {worst_info}")
+        
         logger.info(f"Executed {actions_executed} actions")
         return actions_executed
     
@@ -810,6 +860,52 @@ class G1TrainingClient:
                 )
         except Exception as e:
             logger.debug(f"Failed to forward controller locomotion: {e}")
+    
+    def wait_for_convergence(self, target_arm: np.ndarray, target_waist: float, 
+                             threshold_deg: float = 1.5, timeout: float = 0.5) -> bool:
+        """
+        Wait for robot to converge to target position.
+        
+        Args:
+            target_arm: Target arm joint positions (14 DOF)
+            target_waist: Target waist yaw position
+            threshold_deg: Convergence threshold in degrees
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            True if converged, False if timed out
+        """
+        threshold_rad = np.radians(threshold_deg)
+        start_time = time.time()
+        control_period = 1.0 / self.control_freq
+        
+        while time.time() - start_time < timeout:
+            current_arm = self.robot.get_current_dual_arm_q()
+            current_waist = self.robot.get_current_waist_yaw()
+            
+            arm_error = np.max(np.abs(current_arm - target_arm))
+            waist_error = abs(current_waist - target_waist)
+            
+            if arm_error < threshold_rad and waist_error < threshold_rad:
+                return True
+            
+            # Keep commanding target while waiting
+            self.robot.ctrl_dual_arm(
+                q_target=target_arm,
+                tauff_target=np.zeros(14, dtype=np.float32)
+            )
+            self.robot.ctrl_waist_yaw(target_waist)
+            
+            time.sleep(control_period)
+        
+        # Log final error on timeout
+        current_arm = self.robot.get_current_dual_arm_q()
+        current_waist = self.robot.get_current_waist_yaw()
+        arm_error = np.degrees(np.max(np.abs(current_arm - target_arm)))
+        waist_error = np.degrees(abs(current_waist - target_waist))
+        logger.warning(f"Convergence timeout: arm_error={arm_error:.2f}°, waist_error={waist_error:.2f}°")
+        
+        return False
     
     def rsync_to_remote(self) -> bool:
         """Sync recorded data to remote server using rsync."""
@@ -923,6 +1019,11 @@ class G1TrainingClient:
         chunk_count = 0
         total_actions = 0
         
+        # Wait for convergence between chunks to prevent drift accumulation
+        wait_for_convergence = self.config.get('execution', {}).get('wait_for_convergence', True)
+        convergence_threshold = self.config.get('execution', {}).get('convergence_threshold_deg', 1.5)
+        convergence_timeout = self.config.get('execution', {}).get('convergence_timeout', 0.5)
+        
         with self.keyboard:
             while self.running and self.state == TrainingState.EXECUTING:
                 try:
@@ -930,13 +1031,27 @@ class G1TrainingClient:
                     logger.info(f"Querying policy for chunk {chunk_count}...")
                     action_chunk = self.query_policy()
                     
-                    actions_executed = self.execute_action_chunk(action_chunk)
+                    actions_executed = self.execute_action_chunk(action_chunk, track_error=True)
                     total_actions += actions_executed
                     
                     if actions_executed < len(action_chunk):
                         logger.info(f"User stopped execution after {total_actions} total actions")
                         self.state = TrainingState.LABELING
                         break
+                    
+                    # Wait for robot to converge to final position before next chunk
+                    if wait_for_convergence and len(action_chunk) > 0:
+                        last_action = action_chunk[-1]
+                        target_arm = last_action[:14]
+                        target_waist = last_action[28] if len(last_action) >= 29 else 0.0
+                        
+                        converged = self.wait_for_convergence(
+                            target_arm, target_waist,
+                            threshold_deg=convergence_threshold,
+                            timeout=convergence_timeout
+                        )
+                        if not converged:
+                            logger.warning("Did not converge after action chunk")
                     
                 except Exception as e:
                     logger.error(f"Policy execution error: {e}")
