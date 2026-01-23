@@ -36,7 +36,7 @@ training:
   keep_period: 1200
   num_repeats: 1
   labeling_mode: "action_chunk_advantage"           # none, human_labeling, reward_labeling, action_chunk_advantage
-  gpu_id: 0
+  gpu_id: 1
 
 # =============================================================================
 # REWARD LABELING CONFIGURATION - For reward_labeling and action_chunk_advantage modes

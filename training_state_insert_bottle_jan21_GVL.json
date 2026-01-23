@@ -5,6 +5,6 @@
   "epoch": 4,
   "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan21_GVL/epoch_3/1199",
   "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan20_GVL/1199",
-  "status": "collecting_data",
-  "updated_at": "2026-01-22T00:09:40-08:00"
+  "status": "interrupted",
+  "updated_at": "2026-01-22T00:24:15-08:00"
 }

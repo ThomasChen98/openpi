@@ -47,7 +47,7 @@ EGO_ROLL = 0.0
 
 
 def main(
-    hdf5_path: str = "./g1_data_processed/insert_plate_jan16/episode_20.hdf5",
+    hdf5_path: str = "./g1_data_raw/insert_plate_jan22/episode_3.hdf5",
     urdf_path: str | None = None,
     fps: float | None = None,
     start_frame: int = 0,
