@@ -21,7 +21,7 @@
 # TASK CONFIGURATION - What task are we training?
 # =============================================================================
 task:
-  name: "insert_plate_jan16"
+  name: "insert_plate_jan22"
   description: "pick up the plate, turn the body and insert to the plate holder"
 
 # =============================================================================

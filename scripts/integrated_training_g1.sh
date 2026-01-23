@@ -107,8 +107,10 @@ REWARD_MAX_FRAMES=$(yq -r '.reward.max_frames // 30' "$CONFIG_FILE")
 REWARD_IMAGE_ROTATION=$(yq -r '.reward.image_rotation // 0' "$CONFIG_FILE")
 REWARD_ADVANTAGE_THRESHOLD=$(yq -r '.reward.advantage_threshold // 0.3' "$CONFIG_FILE")
 REWARD_LOOK_AHEAD_WINDOW=$(yq -r '.reward.look_ahead_window // 80' "$CONFIG_FILE")
+REWARD_DISTANCE_THRESHOLD=$(yq -r '.reward.distance_threshold // 0.45' "$CONFIG_FILE")
 REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
 REWARD_RANDOM_DROP_RATE=$(yq -r '.reward.random_drop_rate // 0.0' "$CONFIG_FILE")
+REWARD_REJECT_RATE=$(yq -r '.reward.reject_rate // 0.3' "$CONFIG_FILE")
 REWARD_GOAL_IMAGE_PATH=$(yq -r '.reward.goal_image_path // ""' "$CONFIG_FILE")
 
 # Server (G1 uses different ports from H1)
@@ -629,6 +631,7 @@ convert_epoch_data() {
                 --max-frames \"$REWARD_MAX_FRAMES\" \
                 --look-ahead-window \"$REWARD_LOOK_AHEAD_WINDOW\" \
                 --advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
+                --distance-threshold \"$REWARD_DISTANCE_THRESHOLD\" \
                 --reward-method \"$REWARD_METHOD\""
             
             # Add method-specific parameters
@@ -767,7 +770,8 @@ convert_epoch_data() {
             --reward-max-frames \"$REWARD_MAX_FRAMES\" \
             --reward-image-rotation \"$REWARD_IMAGE_ROTATION\" \
             --reward-advantage-threshold \"$REWARD_ADVANTAGE_THRESHOLD\" \
-            --reward-random-drop-rate \"$REWARD_RANDOM_DROP_RATE\""
+            --reward-random-drop-rate \"$REWARD_RANDOM_DROP_RATE\" \
+            --reward-reject-rate \"$REWARD_REJECT_RATE\""
         
         # Add goal image path for RoboDopamine
         if [ "$effective_labeling_mode" = "reward_labeling" ] || [ "$effective_labeling_mode" = "action_chunk_advantage" ]; then

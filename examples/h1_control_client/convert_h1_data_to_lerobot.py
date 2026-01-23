@@ -165,6 +165,7 @@ def main(
     reward_advantage_threshold: float = 0.3,
     reward_ranking_frames: int = 5,
     reward_random_drop_rate: float = 0.0,
+    reward_reject_rate: float = 0.3,
     reward_goal_image_path: str = None,
     action_dim: int = None,
     filter_good_only: bool = False,
@@ -192,6 +193,8 @@ def main(
         reward_advantage_threshold: Percentile threshold for advantage labeling (0.0-1.0)
                                    e.g., 0.3 means top 30% episodes get Advantage=True
         reward_ranking_frames: Number of frames from the end to use for ranking (default: 5, use 0 for all frames)
+        reward_random_drop_rate: For action_chunk_advantage: probability of keeping original prompt without advantage label
+        reward_reject_rate: For action_chunk_advantage: fraction of bad (Advantage=False) samples to reject from training (default: 0.3)
         reward_goal_image_path: Path to goal image (required for 'RoboDopamine' method)
         action_dim: Expected action dimension (14=arms, 26=arms+hands). If provided, validates against HDF5 data.
                    If not provided, auto-detects from HDF5 files.
@@ -531,8 +534,14 @@ def main(
     total_episodes = len(episodes_data) * num_repeats
     print(f"\nProcessing {total_episodes} episodes ({len(episodes_data)} files × {num_repeats} repeats)...")
     
-    # Track random drop statistics for action_chunk_advantage mode
-    random_drop_stats = {"dropped": 0, "kept_with_advantage": 0, "total_frames": 0}
+    # Track statistics for action_chunk_advantage mode
+    random_drop_stats = {
+        "total_frames": 0,
+        "rejected_bad": 0,  # Bad samples rejected by reject_rate
+        "kept_good": 0,     # Good samples kept
+        "kept_bad": 0,      # Bad samples kept (not rejected)
+        "dropped_advantage": 0,  # Samples with advantage label dropped by random_drop_rate
+    }
     
     episode_counter = 0
     for repeat_idx in range(num_repeats):
@@ -591,10 +600,22 @@ def main(
                 if labeling_mode == "action_chunk_advantage":
                     # Store per-frame advantage as a separate feature
                     # Task field remains clean (no advantage suffix)
-                    
-                    # Random drop: randomly select frames to keep original prompt (no advantage)
-                    # This creates a mix of: advantage=True, advantage=False, and no-advantage samples
                     random_drop_stats["total_frames"] += 1
+                    
+                    # Get the advantage label for this frame
+                    has_advantage = False
+                    if frame_advantages is not None and step_idx < len(frame_advantages):
+                        has_advantage = bool(frame_advantages[step_idx])
+                    
+                    # Step 1: Reject bad samples based on reject_rate
+                    # If advantage=False, randomly reject with probability reward_reject_rate
+                    if not has_advantage and random.random() < reward_reject_rate:
+                        # Reject this bad sample - skip adding to dataset
+                        random_drop_stats["rejected_bad"] += 1
+                        continue  # Skip this frame
+                    
+                    # Step 2: For non-rejected frames, apply random_drop_rate
+                    # Random drop: randomly select frames to keep original prompt (no advantage)
                     should_drop_advantage = random.random() < reward_random_drop_rate
                     
                     if should_drop_advantage:
@@ -603,19 +624,18 @@ def main(
                         frame_data["advantage"] = np.array([False], dtype=bool)  # Default value (ignored)
                         frame_data["drop_advantage"] = np.array([True], dtype=bool)
                         frame_data["task"] = task_description  # Original task, no advantage marker
-                        random_drop_stats["dropped"] += 1
-                    elif frame_advantages is not None and step_idx < len(frame_advantages):
-                        # Keep advantage label (True or False based on pre-computed advantages)
-                        frame_data["advantage"] = np.array([bool(frame_advantages[step_idx])], dtype=bool)
-                        frame_data["drop_advantage"] = np.array([False], dtype=bool)
-                        frame_data["task"] = task_description
-                        random_drop_stats["kept_with_advantage"] += 1
+                        random_drop_stats["dropped_advantage"] += 1
                     else:
-                        # Default to False if index out of bounds or no advantages
-                        frame_data["advantage"] = np.array([False], dtype=bool)
+                        # Keep advantage label (True or False based on pre-computed advantages)
+                        frame_data["advantage"] = np.array([has_advantage], dtype=bool)
                         frame_data["drop_advantage"] = np.array([False], dtype=bool)
                         frame_data["task"] = task_description
-                        random_drop_stats["kept_with_advantage"] += 1
+                    
+                    # Track statistics
+                    if has_advantage:
+                        random_drop_stats["kept_good"] += 1
+                    else:
+                        random_drop_stats["kept_bad"] += 1
                 elif use_advantage:
                     # Episode-level advantage: append to task string
                     advantage = episode_data["advantage"]
@@ -638,17 +658,26 @@ def main(
     print(f"Total frames: {episode_counter * len(actions)}")
     print(f"Dataset saved to: {output_path}")
     
-    # Print random drop statistics if applicable
-    if labeling_mode == "action_chunk_advantage" and reward_random_drop_rate > 0:
+    # Print statistics for action_chunk_advantage mode
+    if labeling_mode == "action_chunk_advantage":
         total = random_drop_stats["total_frames"]
-        dropped = random_drop_stats["dropped"]
-        kept = random_drop_stats["kept_with_advantage"]
+        rejected = random_drop_stats["rejected_bad"]
+        kept_good = random_drop_stats["kept_good"]
+        kept_bad = random_drop_stats["kept_bad"]
+        dropped_adv = random_drop_stats["dropped_advantage"]
+        
         if total > 0:
-            print(f"\nRandom Drop Statistics (rate={reward_random_drop_rate:.2%}):")
-            print(f"  Total frames: {total}")
-            print(f"  Dropped (no advantage): {dropped} ({100*dropped/total:.1f}%)")
-            print(f"  Kept with advantage: {kept} ({100*kept/total:.1f}%)")
-            print(f"    → These will be split into Advantage=True/False based on pre-computed advantages")
+            print(f"\nAction Chunk Advantage Statistics:")
+            print(f"  Total frames processed: {total}")
+            print(f"  Rejected bad samples (reject_rate={reward_reject_rate:.1%}): {rejected} ({100*rejected/total:.1f}%)")
+            print(f"  Kept samples: {kept_good + kept_bad} ({100*(kept_good + kept_bad)/total:.1f}%)")
+            print(f"    - Good samples (Advantage=True): {kept_good}")
+            print(f"    - Bad samples (Advantage=False): {kept_bad}")
+            if reward_random_drop_rate > 0:
+                print(f"  Random drop (random_drop_rate={reward_random_drop_rate:.1%}): {dropped_adv} ({100*dropped_adv/(kept_good + kept_bad):.1f}% of kept)")
+                print(f"    → These frames keep original prompt without advantage label")
+                final_with_advantage = kept_good + kept_bad - dropped_adv
+                print(f"  Final samples with advantage labels: {final_with_advantage}")
 
     # Optionally push to the Hugging Face Hub
     if push_to_hub:

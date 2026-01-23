@@ -59,7 +59,9 @@ reward:
   image_rotation: 0
   advantage_threshold: 0.33
   look_ahead_window: 80
-  random_drop_rate: 0.1                                  # Not used in human_labeling
+  distance_threshold: 0.45          # L2 distance threshold for filtering similar states
+  random_drop_rate: 0.1
+  reject_rate: 0.3                  # Reject this fraction of bad (Advantage=False) samples
 
 # =============================================================================
 # SERVER CONFIGURATION

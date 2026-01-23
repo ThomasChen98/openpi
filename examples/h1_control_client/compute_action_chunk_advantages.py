@@ -87,6 +87,13 @@ def topk_similar(q: torch.Tensor, db: torch.Tensor, k: int = 10) -> Tuple[List[i
     return idxs.tolist(), vals.tolist()
 
 
+def topk_l2(q: torch.Tensor, db: torch.Tensor, k: int = 10) -> Tuple[List[int], List[float]]:
+    """Find top-k most similar embeddings using L2 distance (lower is better)."""
+    dists = torch.norm(db - q, dim=-1)   # [N]
+    vals, idxs = torch.topk(dists, k=min(k, dists.numel()), largest=False)
+    return idxs.tolist(), vals.tolist()
+
+
 class ActionChunkAdvantageComputer:
     """Computes action chunk advantages using visual similarity and future rewards."""
     
@@ -100,6 +107,7 @@ class ActionChunkAdvantageComputer:
         max_frames: int = 30,
         look_ahead_window: int = 80,
         advantage_threshold: float = 1/3,
+        distance_threshold: float = 0.45,
         device: str = "cuda",
     ):
         """
@@ -112,6 +120,7 @@ class ActionChunkAdvantageComputer:
             max_frames: Max frames to sample for reward prediction
             look_ahead_window: Number of future frames to consider for advantage
             advantage_threshold: Top percentile threshold (e.g., 1/3 for top 33%)
+            distance_threshold: L2 distance threshold for filtering similar states (lower = more similar)
             device: cuda or cpu
         """
         self.task_instruction = task_instruction
@@ -120,6 +129,7 @@ class ActionChunkAdvantageComputer:
         self.max_frames = max_frames
         self.look_ahead_window = look_ahead_window
         self.advantage_threshold = advantage_threshold
+        self.distance_threshold = distance_threshold
         self.device = device
         
         print("Loading models...")
@@ -326,7 +336,7 @@ class ActionChunkAdvantageComputer:
         all_episode_rewards: np.ndarray,
     ) -> bool:
         """
-        Determine if an action chunk has advantage.
+        Determine if an action chunk has advantage using L2 distance and distance threshold filtering.
         
         Args:
             test_episode_idx: Index of the test episode
@@ -335,7 +345,7 @@ class ActionChunkAdvantageComputer:
             all_episode_rewards: Padded rewards array (N_episodes x T_max)
         
         Returns:
-            True if action chunk has advantage (in top 1/3), False otherwise
+            True if action chunk has advantage (in top threshold%), False otherwise
         """
         N_episodes = len(all_episode_embeddings)
         T_max = all_episode_rewards.shape[1]
@@ -349,16 +359,23 @@ class ActionChunkAdvantageComputer:
         
         test_embedding = test_embeddings[test_start_frame]
         
-        # Find most similar frame in each episode
+        # Find most similar frame in each episode using L2 distance
         episode_to_similar_idx = {}
         for ep_idx in range(N_episodes):
             ep_embeddings = all_episode_embeddings[ep_idx]
-            similar_idx, _ = topk_similar(test_embedding, ep_embeddings, k=1)
+            similar_idx, distance = topk_l2(test_embedding, ep_embeddings, k=1)
+            
+            # Filter out episodes with distance above threshold
+            if distance[0] > self.distance_threshold:
+                continue
+            
             episode_to_similar_idx[ep_idx] = similar_idx[0]
         
-        # Compute mean future rewards for each episode
+        # Compute mean future rewards for each episode (only for episodes passing distance threshold)
         future_rewards_per_episode = []
-        for ep_idx in range(N_episodes):
+        test_episode_reward_within_window = None
+        
+        for ep_idx in episode_to_similar_idx.keys():
             similar_idx = episode_to_similar_idx[ep_idx]
             end_idx = min(similar_idx + self.look_ahead_window, T_max)
             future_rewards = all_episode_rewards[ep_idx, similar_idx:end_idx]
@@ -369,6 +386,14 @@ class ActionChunkAdvantageComputer:
             
             mean_reward = np.nanmean(future_rewards)
             future_rewards_per_episode.append([ep_idx, mean_reward])
+            
+            # Track test episode's reward
+            if ep_idx == test_episode_idx:
+                test_episode_reward_within_window = mean_reward
+        
+        # If no valid episodes found (all filtered by distance threshold), return False
+        if len(future_rewards_per_episode) == 0:
+            return False
         
         # Rank episodes by future reward
         future_rewards_per_episode.sort(key=lambda x: x[1], reverse=True)
@@ -404,6 +429,7 @@ def main():
     parser.add_argument("--max-frames", type=int, default=30, help="Max frames for reward sampling")
     parser.add_argument("--look-ahead-window", type=int, default=80, help="Frames to look ahead for advantage")
     parser.add_argument("--advantage-threshold", type=float, default=1/3, help="Top percentile for advantage (e.g., 0.33)")
+    parser.add_argument("--distance-threshold", type=float, default=0.45, help="L2 distance threshold for filtering similar states (default: 0.45)")
     parser.add_argument("--device", default="cuda", help="Device (cuda/cpu)")
     parser.add_argument("--force-recompute", action="store_true", help="Recompute even if cache files exist")
     
@@ -451,6 +477,7 @@ def main():
         max_frames=args.max_frames,
         look_ahead_window=args.look_ahead_window,
         advantage_threshold=args.advantage_threshold,
+        distance_threshold=args.distance_threshold,
         device=args.device,
     )
     

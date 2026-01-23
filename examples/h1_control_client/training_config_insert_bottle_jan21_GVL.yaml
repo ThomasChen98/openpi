@@ -53,12 +53,15 @@ reward:
   method: "GVL"
   checkpoint_path: ""
   task_instruction: |
-    Insert the bottle into the cupholder.
+    Pick up the bottle and insert it into the tray. Keep the bottle perfectly upright (vertical) and aligned straight.
   max_frames: 30
   image_rotation: 0
   advantage_threshold: 0.5                              # Not used in human_labeling
   look_ahead_window: 80                                 # Not used in human_labeling
-  random_drop_rate: 0.0                                 # Not used in human_labeling
+  distance_threshold: 0.45          # L2 distance threshold for filtering similar states
+  random_drop_rate: 0.1       # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
+  reject_rate: 0.3                  # Reject this fraction of bad (Advantage=False) samples from training
+
 
 # =============================================================================
 # SERVER CONFIGURATION

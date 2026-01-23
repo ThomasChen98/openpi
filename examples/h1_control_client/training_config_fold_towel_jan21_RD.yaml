@@ -48,7 +48,9 @@ reward:
   max_frames: 30
   advantage_threshold: 0.33
   look_ahead_window: 80
+  distance_threshold: 0.45          # L2 distance threshold for filtering similar states
   random_drop_rate: 0.1       # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
+  reject_rate: 0.3                  # Reject this fraction of bad (Advantage=False) samples from training
 
 # =============================================================================
 # SERVER CONFIGURATION - Policy server settings
