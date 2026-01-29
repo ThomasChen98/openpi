@@ -41,7 +41,7 @@ training:
   keep_period: 1200          # Keep checkpoint every N steps (others are deleted)
   num_repeats: 1             # Number of data augmentation repeats
   labeling_mode: "human_labeling"  # none, human_labeling, reward_labeling
-  gpu_id: 0
+  gpu_id: 1
 
 # =============================================================================
 # REWARD LABELING CONFIGURATION - For reward_labeling mode

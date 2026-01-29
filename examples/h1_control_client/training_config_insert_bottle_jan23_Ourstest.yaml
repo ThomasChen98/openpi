@@ -1,0 +1,134 @@
+# =============================================================================
+# H1 Training Configuration - SFT Ablation Study (Baseline)
+# =============================================================================
+# 
+# This config is for the SFT (Supervised Fine-Tuning) baseline ablation study.
+# 
+# Key Differences from Action Chunk Advantage:
+#   - Uses human_labeling mode (episode-level labels from HDF5 metadata)
+#   - Filters to keep ONLY episodes labeled as "good" by humans
+#   - No action chunk advantage computation
+#   - Standard supervised learning approach
+#
+# Usage:
+#   ./scripts/integrated_training_h1_SFT.sh --config training_config_fold_towel_jan12_SFT.yaml
+#
+# Compare with:
+#   ./scripts/integrated_training_h1.sh --config training_config_fold_towel_jan12.yaml
+#
+# =============================================================================
+
+# =============================================================================
+# TASK CONFIGURATION
+# =============================================================================
+task:
+  name: "insert_bottle_jan23_Ourstest"                          # Different name to avoid checkpoint conflicts
+  description: "Insert the bottle into the cupholder"
+
+# =============================================================================
+# POLICY CONFIGURATION
+# =============================================================================
+policy:
+  config_name: "pi05_h1_auto"
+  # Use same warmup checkpoint as action chunk advantage for fair comparison
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan23_Ourstest/1199"
+
+# =============================================================================
+# TRAINING CONFIGURATION
+# =============================================================================
+training:
+  max_epochs: 1200
+  save_interval: 1200
+  keep_period: 1200
+  num_repeats: 1
+  labeling_mode: "action_chunk_advantage"                      # SFT: Use human episode-level labels
+  gpu_id: 0
+
+# =============================================================================
+# REWARD CONFIGURATION (Not used in SFT mode, but kept for compatibility)
+# =============================================================================
+# SFT mode uses human_labeling, so reward parameters are not needed.
+# These are kept for script compatibility but will be ignored.
+reward:
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/IB-checkpoint-1275"
+  task_instruction: |
+    Pick up the bottle and insert it into the tray. Keep the bottle perfectly upright (vertical) and aligned straight.
+  max_frames: 30
+  image_rotation: 0
+  # Advantage labeling parameters
+  advantage_threshold: 0.15         # Top percentile for advantage (e.g., 0.33 = top 33%)
+  look_ahead_window: 300             # Frames to look ahead for action chunk advantage (only for action_chunk_advantage mode)
+  distance_threshold: 0.45          # L2 distance threshold for filtering similar states (lower = more similar)
+  random_drop_rate: 0.1             # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
+  reject_rate: 0.3                  # Reject this fraction of bad (Advantage=False) samples from training (only for action_chunk_advantage mode)
+
+# =============================================================================
+# SERVER CONFIGURATION
+# =============================================================================
+policy_server:
+  host: "localhost"
+  port: 8000
+  poll_interval_sec: 5
+
+# =============================================================================
+# ROBOT CONFIGURATION
+# =============================================================================
+robot:
+  include_hands: true                                   # 26 DOF (14 arm + 12 hand)
+  
+  network_interface: "eno1"
+  left_hand_ip: "192.168.123.211"
+  right_hand_ip: "192.168.123.210"
+  head_camera_server_ip: "192.168.123.163"
+  head_camera_server_port: 5555
+
+# =============================================================================
+# DATA CONFIGURATION
+# =============================================================================
+data:
+  save_dir: "./h1_data_auto"
+  
+  rsync:
+    enabled: true
+    target: "P6000:/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_auto"
+    options: "-avz --progress"
+    ssh_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# RECORDING CONFIGURATION
+# =============================================================================
+recording:
+  fps: 30
+  image_quality: 85
+
+# =============================================================================
+# PIPELINE CONFIGURATION
+# =============================================================================
+pipeline:
+  start_phase: "data_collection"
+  start_epoch: 1
+  auto_sync: true
+
+# =============================================================================
+# ABLATION STUDY NOTES
+# =============================================================================
+#
+# This SFT baseline configuration:
+#   - Uses human_labeling: Episodes labeled as "good" (g) or "bad" (b) by humans
+#   - Filters data: ONLY good episodes are kept for training
+#   - Expected: ~18% of episodes kept (9 out of 50 in your case)
+#   - Smaller dataset but cleaner examples
+#
+# Compare with Action Chunk Advantage:
+#   - Uses action_chunk_advantage: Per-frame advantage labels
+#   - Keeps all data: Both good and bad examples
+#   - Expected: 100% of episodes used (all 50)
+#   - Larger dataset with both positive and negative examples
+#
+# Hypothesis: Action Chunk Advantage should perform better due to:
+#   1. More training data (5.6x more episodes)
+#   2. Contrastive learning (learns from failures)
+#   3. Better generalization (understands what NOT to do)
+#
+# =============================================================================
+

@@ -6,5 +6,5 @@
   "last_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan22_RD/epoch_1/1199",
   "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_h1_auto/insert_bottle_jan22_RD/1199",
   "status": "interrupted",
-  "updated_at": "2026-01-22T17:34:28-08:00"
+  "updated_at": "2026-01-23T13:11:05-08:00"
 }
