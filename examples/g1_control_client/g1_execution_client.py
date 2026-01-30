@@ -355,11 +355,11 @@ class G1TrainingClient:
         # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw)
         # Zeros for home position
         self.reset_pose = np.array([
-            -0.8327958,   0.68337566, -0.15583088,  0.65219355,  0.6835083,  -0.90980643
-            0.40519863, -0.63599086, -0.6096487,   0.1507975,   0.20780647, -0.9646822
-            -0.12156798, -0.7018801,  -0.8908997,   0.884532,    0.56234354, -0.30448544
-            -0.1900528,  -0.07469787, -0.45043802, -0.99141276, -0.8881592,  -1.1634055
-            0.13551766,  0.01854079,  0.03298719,  0.20263577, -0.18577237
+            -0.54445535,  0.80403286,  0.07707055,  0.2144577,   0.7221694,  -0.41270077,
+            0.52263206, -0.4834796,  -0.6733569,   0.03534148, -0.21908362, -1.328715,
+            0.1290701,  -0.3368646,  -0.8957139,   0.88443977,  0.68365633, -0.17486757,
+            -0.01879567, -0.0822694,  -0.17111236, -0.8242576,  -0.8970064,  -0.839932,
+            0.47695217,  0.02509532,  0.0332288,   0.9400982,  -0.5505542,
         ])
         
         # Signal handling
@@ -1148,20 +1148,32 @@ class G1TrainingClient:
             self.state = TrainingState.DAMPING
     
     def _hold_current_position(self):
-        """Background thread to hold robot at current position."""
+        """Background thread to hold robot at current position (29 DOF: arms + hands + waist)."""
         control_period = 1.0 / self.control_freq
         
         while self._hold_position_background and self.running:
             try:
                 loop_start = time.time()
                 
-                current_q = self.robot.get_current_dual_arm_q()
-                
+                # Hold arms (14 DOF)
+                current_arm_q = self.robot.get_current_dual_arm_q()
                 self.robot.ctrl_dual_arm(
-                    q_target=current_q,
+                    q_target=current_arm_q,
                     tauff_target=np.zeros(14, dtype=np.float32),
                     use_gravity_compensation=self.use_gravity_compensation
                 )
+                
+                # Hold hands (14 DOF)
+                if self.hand_ctrl is not None:
+                    current_hand_state = self.hand_ctrl.get_hand_state()
+                    self.hand_ctrl.ctrl_dual_hand(
+                        current_hand_state[:7], 
+                        current_hand_state[7:14]
+                    )
+                
+                # Hold waist yaw (1 DOF)
+                current_waist_yaw = self.robot.get_current_waist_yaw()
+                self.robot.ctrl_waist_yaw(current_waist_yaw)
                 
                 elapsed = time.time() - loop_start
                 sleep_time = max(0, control_period - elapsed)
@@ -1209,16 +1221,26 @@ class G1TrainingClient:
         print(f"[SAVING] Saving episode {self.episode_num} (Label: {advantage_str})...")
         print("=" * 60)
         
-        if self.episode_writer:
-            filepath = self.episode_writer.filepath
-            length = self.episode_writer.get_current_length()
-            
-            self.episode_writer.stop_recording()
-            
-            logger.info(f"Saved episode: {filepath}")
-            logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
-            logger.info(f"   Total frames: {length}")
-            logger.info(f"   Advantage: {advantage_str}")
+        # Hold robot position while saving (saving can take time with large files)
+        self._hold_position_background = True
+        hold_thread = threading.Thread(target=self._hold_current_position, daemon=True)
+        hold_thread.start()
+        
+        try:
+            if self.episode_writer:
+                filepath = self.episode_writer.filepath
+                length = self.episode_writer.get_current_length()
+                
+                self.episode_writer.stop_recording()
+                
+                logger.info(f"Saved episode: {filepath}")
+                logger.info(f"   Epoch: {self.epoch_num}, Episode: {self.episode_num}")
+                logger.info(f"   Total frames: {length}")
+                logger.info(f"   Advantage: {advantage_str}")
+        finally:
+            # Stop holding position after save completes
+            self._hold_position_background = False
+            hold_thread.join(timeout=0.5)
         
         self.current_advantage_label = None
         self.episode_rejected = False

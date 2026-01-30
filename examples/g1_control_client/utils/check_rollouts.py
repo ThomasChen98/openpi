@@ -85,7 +85,7 @@ def check_rollouts(directory_path):
 
 if __name__ == "__main__":
     # Default directory
-    default_dir = "/home/msc-locomanip/Projects/openpi/examples/g1_control_client/g1_data_auto/insert_plate_jan22/epoch_0/raw"
+    default_dir = "/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_auto/fold_towel_jan21_RD/epoch_2/raw"
     
     import sys
     if len(sys.argv) > 1:
