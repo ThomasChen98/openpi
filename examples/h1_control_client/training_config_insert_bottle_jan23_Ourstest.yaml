@@ -38,8 +38,8 @@ policy:
 # =============================================================================
 training:
   max_epochs: 1200
-  save_interval: 1200
-  keep_period: 1200
+  save_interval: 600
+  keep_period: 600
   num_repeats: 1
   labeling_mode: "action_chunk_advantage"                      # SFT: Use human episode-level labels
   gpu_id: 0
@@ -56,10 +56,10 @@ reward:
   max_frames: 30
   image_rotation: 0
   # Advantage labeling parameters
-  advantage_threshold: 0.15         # Top percentile for advantage (e.g., 0.33 = top 33%)
+  advantage_threshold: 0.25         # Top percentile for advantage (e.g., 0.33 = top 33%)
   look_ahead_window: 300             # Frames to look ahead for action chunk advantage (only for action_chunk_advantage mode)
   distance_threshold: 0.45          # L2 distance threshold for filtering similar states (lower = more similar)
-  random_drop_rate: 0.1             # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
+  random_drop_rate: 0.0             # Randomly drop this fraction of samples and keep original prompt (only for action_chunk_advantage mode)
   reject_rate: 0.3                  # Reject this fraction of bad (Advantage=False) samples from training (only for action_chunk_advantage mode)
 
 # =============================================================================

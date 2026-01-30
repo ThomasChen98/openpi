@@ -198,8 +198,8 @@ def create_annotated_video(episode_file: str, advantage_file: str,
 
 
 def main():
-    data_dir = "/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/insert_bottle_jan22_Ours/epoch_1/data/chunk-000"
-    output_dir = "/home/yuxin/Projects/openpi/advantage_analysis_insert_bottle_jan22_Ours/detailed_videos"
+    data_dir = "/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/insert_bottle_jan23_Ourstest/epoch_1/data/chunk-000"
+    output_dir = "/home/yuxin/Projects/openpi/insert_bottle_jan23_Ourstest_H80/detailed_videos"
     
     os.makedirs(output_dir, exist_ok=True)
     
@@ -216,7 +216,7 @@ def main():
     print(f"\n⚠️  Warning: This will take longer and create larger files!\n")
     
     # Process first 3 episodes with ALL frames
-    for ep_file in episode_files[:3]:
+    for ep_file in episode_files[:30]:
         episode_name = Path(ep_file).stem
         advantage_file = ep_file.replace('.parquet', '_action_chunk_advantages.pkl')
         reward_file = ep_file.replace('.parquet', '_Ours_reward.pkl')

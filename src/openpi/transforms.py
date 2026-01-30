@@ -389,7 +389,8 @@ class ActionChunkAdvantagePrompt(DataTransformFn):
                       f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%), "
                       f"Dropped={ActionChunkAdvantagePrompt._debug_dropped_count} ({dropped_pct:.1f}%)")
             
-            return data  # Return with original prompt (no advantage augmentation)
+            # For dropped samples, set advantage_label to None for tracking purposes
+            return {**data, "advantage_label": None}  # Return with original prompt (no advantage augmentation)
         
         # Get advantage for the START frame of this chunk
         # data["advantage"] has shape (chunk_length, 1) for action chunks
@@ -438,7 +439,8 @@ class ActionChunkAdvantagePrompt(DataTransformFn):
                   f"False={ActionChunkAdvantagePrompt._debug_false_count} ({false_pct:.1f}%), "
                   f"Dropped={ActionChunkAdvantagePrompt._debug_dropped_count} ({dropped_pct:.1f}%)")
         
-        return {**data, "prompt": augmented_prompt}
+        # Pass through advantage label for loss tracking
+        return {**data, "prompt": augmented_prompt, "advantage_label": start_advantage}
 
 
 @dataclasses.dataclass(frozen=True)

@@ -159,14 +159,14 @@ def train_step(
         model: _model.BaseModel, rng: at.KeyArrayLike, observation: _model.Observation, actions: _model.Actions
     ):
         chunked_loss = model.compute_loss(rng, observation, actions, train=True)
-        return jnp.mean(chunked_loss)
+        return jnp.mean(chunked_loss), chunked_loss
 
     train_rng = jax.random.fold_in(rng, state.step)
     observation, actions = batch
 
     # Filter out frozen params.
     diff_state = nnx.DiffState(0, config.trainable_filter)
-    loss, grads = nnx.value_and_grad(loss_fn, argnums=diff_state)(model, train_rng, observation, actions)
+    (loss, chunked_loss), grads = nnx.value_and_grad(loss_fn, has_aux=True, argnums=diff_state)(model, train_rng, observation, actions)
 
     params = state.params.filter(config.trainable_filter)
     updates, new_opt_state = state.tx.update(grads, state.opt_state, params)
@@ -196,6 +196,7 @@ def train_step(
     )
     info = {
         "loss": loss,
+        "chunked_loss": chunked_loss,  # Keep per-sample losses for post-processing
         "grad_norm": optax.global_norm(grads),
         "param_norm": optax.global_norm(kernel_params),
     }
@@ -298,13 +299,20 @@ def main(
         shuffle=True,
     )
     data_iter = iter(data_loader)
-    batch = next(data_iter)
+    batch_tuple = next(data_iter)
+    # Handle both 2-tuple (observation, actions) and 3-tuple (observation, actions, metadata)
+    if len(batch_tuple) == 3:
+        batch = (batch_tuple[0], batch_tuple[1])  # (observation, actions)
+    else:
+        batch = batch_tuple
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
     # Log images from first batch to sanity check.
+    # batch is (observation, actions) tuple
+    observation_for_logging = batch[0]
     images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
-        for i in range(min(5, len(next(iter(batch[0].images.values())))))
+        wandb.Image(np.concatenate([np.array(img[i]) for img in observation_for_logging.images.values()], axis=1))
+        for i in range(min(5, len(next(iter(observation_for_logging.images.values())))))
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
 
@@ -331,18 +339,99 @@ def main(
     )
 
     infos = []
+    logged_debug = False
     for step in pbar:
+        # Get next batch and extract metadata
+        batch_tuple = next(data_iter)
+        if len(batch_tuple) == 3:
+            observation, actions, metadata = batch_tuple
+            batch = (observation, actions)
+            advantage_labels_raw = metadata.get("advantage_label", None)
+        else:
+            observation, actions = batch_tuple
+            batch = batch_tuple
+            advantage_labels_raw = None
+        
+        # Debug logging on first step
+        if not logged_debug:
+            logging.info(f"Debug: advantage_labels_raw = {advantage_labels_raw is not None}")
+            if advantage_labels_raw is not None:
+                logging.info(f"Debug: advantage_labels shape/len: {advantage_labels_raw.shape if hasattr(advantage_labels_raw, 'shape') else len(advantage_labels_raw) if hasattr(advantage_labels_raw, '__len__') else 'scalar'}")
+            logged_debug = True
+        
+        if advantage_labels_raw is not None:
+            advantage_labels_raw = np.asarray(advantage_labels_raw)
+            batch_size = len(advantage_labels_raw) if hasattr(advantage_labels_raw, '__len__') else 1
+            
+            # Handle None values (dropped samples) - treat them as neither True nor False
+            advantage_true_mask = np.zeros(batch_size, dtype=bool)
+            advantage_false_mask = np.zeros(batch_size, dtype=bool)
+            
+            for i, label in enumerate(advantage_labels_raw):
+                if label is None:
+                    # Dropped sample - don't include in either mask
+                    continue
+                elif label:
+                    advantage_true_mask[i] = True
+                else:
+                    advantage_false_mask[i] = True
+        else:
+            # No advantage labels available
+            batch_size = next(iter(observation.images.values())).shape[0]
+            advantage_true_mask = np.zeros(batch_size, dtype=bool)
+            advantage_false_mask = np.zeros(batch_size, dtype=bool)
+        
         with sharding.set_mesh(mesh):
             train_state, info = ptrain_step(train_rng, train_state, batch)
+        
+        # Post-process info to compute advantage-specific losses
+        chunked_loss = jax.device_get(info["chunked_loss"])
+        
+        # Compute separate losses for advantage=True and advantage=False
+        if advantage_true_mask.any():
+            loss_adv_true = np.mean(chunked_loss[advantage_true_mask])
+            count_adv_true = int(advantage_true_mask.sum())
+        else:
+            loss_adv_true = np.nan
+            count_adv_true = 0
+        
+        if advantage_false_mask.any():
+            loss_adv_false = np.mean(chunked_loss[advantage_false_mask])
+            count_adv_false = int(advantage_false_mask.sum())
+        else:
+            loss_adv_false = np.nan
+            count_adv_false = 0
+        
+        # Add advantage-specific metrics to info
+        info["loss_adv_true"] = loss_adv_true
+        info["loss_adv_false"] = loss_adv_false
+        info["count_adv_true"] = count_adv_true
+        info["count_adv_false"] = count_adv_false
+        
+        # Remove chunked_loss from info (too large to log)
+        del info["chunked_loss"]
+        
         infos.append(info)
         if step % config.log_interval == 0:
             stacked_infos = common_utils.stack_forest(infos)
-            reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+            # Use nanmean for advantage-specific losses (they may have NaN values)
+            reduced_info = jax.device_get(jax.tree.map(
+                lambda x: jnp.nanmean(x) if x.dtype in (jnp.float32, jnp.float64) else jnp.mean(x), 
+                stacked_infos
+            ))
+            
+            # Create info string with advantage-specific losses
+            info_str_parts = []
+            for k, v in reduced_info.items():
+                if k.startswith("count_"):
+                    info_str_parts.append(f"{k}={v:.0f}")
+                else:
+                    info_str_parts.append(f"{k}={v:.4f}")
+            info_str = ", ".join(info_str_parts)
+            
             pbar.write(f"Step {step}: {info_str}")
             wandb.log(reduced_info, step=step)
             infos = []
-        batch = next(data_iter)
 
         if (step % config.save_interval == 0 and step > start_step) or step == config.num_train_steps - 1:
             _checkpoints.save_state(checkpoint_manager, train_state, data_loader, step)

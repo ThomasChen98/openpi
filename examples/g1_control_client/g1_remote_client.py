@@ -604,11 +604,18 @@ class G1RemoteClient:
                     logger.warning(f"  Step {i}: Large tracking error - arm_max={np.degrees(max_arm_error):.2f}°, "
                                    f"waist={np.degrees(waist_error):.2f}°")
             
-            # Send arm command with gravity compensation
+            # Compute feedforward torques for gravity compensation
+            # Use RNEA-based computation from IK solver (more accurate than simplified model)
+            if self.use_gravity_compensation and self.ik_solver is not None:
+                tauff = self.ik_solver.compute_gravity_compensation(arm_joints)
+            else:
+                tauff = np.zeros(14, dtype=np.float32)
+            
+            # Send arm command with feedforward torques
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14, dtype=np.float32),
-                use_gravity_compensation=self.use_gravity_compensation
+                tauff_target=tauff,
+                use_gravity_compensation=False
             )
             
             # Send hand command (direct joint angles)
@@ -784,10 +791,17 @@ class G1RemoteClient:
                                 
                                 # Interpolate arm
                                 interp_arm = current_arm * (1 - alpha) + arm_target * alpha
+                                
+                                # Compute RNEA-based gravity compensation
+                                if self.use_gravity_compensation and self.ik_solver is not None:
+                                    tauff = self.ik_solver.compute_gravity_compensation(interp_arm)
+                                else:
+                                    tauff = np.zeros(14, dtype=np.float32)
+                                
                                 self.robot.ctrl_dual_arm(
                                     q_target=interp_arm,
-                                    tauff_target=np.zeros(14, dtype=np.float32),
-                                    use_gravity_compensation=self.use_gravity_compensation
+                                    tauff_target=tauff,
+                                    use_gravity_compensation=False
                                 )
                                 
                                 # Interpolate waist (slower, smoother motion)

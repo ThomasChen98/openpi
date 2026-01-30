@@ -231,3 +231,28 @@ class G1_29_ArmIK:
                 self.vis.display(sol_q)
 
             return current_lr_arm_motor_q, np.zeros(self.reduced_robot.model.nv)
+
+    def compute_gravity_compensation(self, arm_q: np.ndarray) -> np.ndarray:
+        """
+        Compute feedforward torques to compensate for gravity using Pinocchio RNEA.
+        
+        This uses the full robot dynamics model (Recursive Newton-Euler Algorithm)
+        to accurately compute gravity compensation torques for any arm configuration.
+        Much more accurate than simplified trigonometric models.
+        
+        Args:
+            arm_q: Arm joint positions (14 DOF) in the order:
+                   [L_sh_pitch, L_sh_roll, L_sh_yaw, L_elbow, L_wr_roll, L_wr_pitch, L_wr_yaw,
+                    R_sh_pitch, R_sh_roll, R_sh_yaw, R_elbow, R_wr_roll, R_wr_pitch, R_wr_yaw]
+        
+        Returns:
+            tauff: Feedforward torques (14 DOF) to counteract gravity
+        """
+        # RNEA with zero velocity and zero acceleration gives gravity compensation
+        # tau = M(q)*0 + C(q,0)*0 + g(q) = g(q)
+        v = np.zeros(self.reduced_robot.model.nv)
+        a = np.zeros(self.reduced_robot.model.nv)
+        
+        tauff = pin.rnea(self.reduced_robot.model, self.reduced_robot.data, arm_q, v, a)
+        
+        return tauff

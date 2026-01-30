@@ -58,21 +58,53 @@ class G1_29_ArmController:
         self.tauff_target = np.zeros(14)
         self.motion_mode = motion_mode
         self.simulation_mode = simulation_mode
-        # Increased gains for tight position tracking (reduces drift during inference)
-        # Original: kp_high=300, kd_high=3, kp_low=80, kd_low=3, kp_wrist=40, kd_wrist=1.5
-        # If oscillation occurs, reduce kp values by 20-30%
-        self.kp_high = 350.0   # Was 300 - strong motors (shoulders)
-        self.kd_high = 5.0     # Was 3 - increased damping to prevent oscillation
-        self.kp_low = 200.0    # Was 120 - significantly increased for elbows
-        self.kd_low = 5.0      # Was 3.5 - more damping
-        self.kp_wrist = 100.0  # Was 55 - doubled for wrists
-        self.kd_wrist = 3.0    # Was 2.0 - more damping
+        # Physics-based PD gains derived from motor armature (BeyondMimic approach)
+        # Formula: kp = armature * (2*pi*freq)^2, kd = 2*damping_ratio*armature*(2*pi*freq)
+        # Using 10Hz natural frequency and 2.0 damping ratio for energy-efficient control
+        # Lower gains reduce heat generation; feedforward torques handle gravity compensation
+        NATURAL_FREQ = 10 * 2.0 * 3.1415926535  # 10Hz in rad/s (~62.83)
+        DAMPING_RATIO = 2.0
         
-        # Waist yaw control gains
-        self.kp_waist = 100.0  # Was 60 - increased for tighter tracking
-        self.kd_waist = 3.0    # Was 1.5 - more damping
+        # Motor armature values from G1 specs
+        ARMATURE_5020 = 0.003609725  # Shoulder/elbow/wrist_roll motors
+        ARMATURE_4010 = 0.00425      # Wrist pitch/yaw motors
+        ARMATURE_7520_14 = 0.010177520  # Waist yaw motor
+        
+        # 5020 motors: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow, wrist_roll
+        self.kp_5020 = ARMATURE_5020 * NATURAL_FREQ**2  # ~14.25
+        self.kd_5020 = 2.0 * DAMPING_RATIO * ARMATURE_5020 * NATURAL_FREQ  # ~0.91
+        
+        # 4010 motors: wrist_pitch, wrist_yaw (smaller motors)
+        self.kp_4010 = ARMATURE_4010 * NATURAL_FREQ**2  # ~16.78
+        self.kd_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ  # ~1.07
+        
+        # 7520 motors: waist_yaw (larger motor)
+        self.kp_7520 = ARMATURE_7520_14 * NATURAL_FREQ**2  # ~40.2
+        self.kd_7520 = 2.0 * DAMPING_RATIO * ARMATURE_7520_14 * NATURAL_FREQ  # ~2.56
+        
+        # Backward compatibility aliases (used in gain assignment logic)
+        self.kp_high = self.kp_7520   # For non-arm strong motors
+        self.kd_high = self.kd_7520
+        self.kp_low = self.kp_5020    # For arm motors (shoulder/elbow)
+        self.kd_low = self.kd_5020
+        self.kp_wrist = self.kp_4010  # For wrist pitch/yaw (use 5020 for wrist_roll)
+        self.kd_wrist = self.kd_4010
+        
+        # Waist yaw control gains (uses 7520 motor)
+        self.kp_waist = self.kp_7520
+        self.kd_waist = self.kd_7520
         self.waist_yaw_target = 0.0
         self.waist_yaw_limits = [-2.618, 2.618]  # From URDF: approx +/- 150 degrees
+        
+        # Torque limiting for safety (prevents sustained high torque that causes overheating)
+        # Based on BeyondMimic effort limits: shoulder/elbow ~25Nm, wrist ~5-25Nm
+        self.torque_limit_enabled = True
+        self.torque_limits = np.array([
+            25.0, 25.0, 25.0, 25.0,  # L: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow
+            25.0, 5.0, 5.0,          # L: wrist_roll, wrist_pitch, wrist_yaw
+            25.0, 25.0, 25.0, 25.0,  # R: shoulder_pitch, shoulder_roll, shoulder_yaw, elbow
+            25.0, 5.0, 5.0,          # R: wrist_roll, wrist_pitch, wrist_yaw
+        ], dtype=np.float32)
 
         self.all_motor_q = None
         self.arm_velocity_limit = 40.0  # Was 20.0 - doubled to allow faster tracking
@@ -126,17 +158,20 @@ class G1_29_ArmController:
         for id in G1_29_JointIndex:
             self.msg.motor_cmd[id].mode = 1
             if id == G1_29_JointIndex.kWaistYaw:
-                # Waist yaw with dedicated gains
+                # Waist yaw with 7520 motor gains
                 self.msg.motor_cmd[id].kp = self.kp_waist
                 self.msg.motor_cmd[id].kd = self.kd_waist
                 self.waist_yaw_target = self.all_motor_q[id]
             elif id.value in arm_indices:
-                if self._Is_wrist_motor(id):
-                    self.msg.motor_cmd[id].kp = self.kp_wrist
-                    self.msg.motor_cmd[id].kd = self.kd_wrist
+                # Arm motors use physics-based gains by motor type
+                if self._Is_wrist_pitch_yaw_motor(id):
+                    # Wrist pitch/yaw use 4010 motors
+                    self.msg.motor_cmd[id].kp = self.kp_4010
+                    self.msg.motor_cmd[id].kd = self.kd_4010
                 else:
-                    self.msg.motor_cmd[id].kp = self.kp_low
-                    self.msg.motor_cmd[id].kd = self.kd_low
+                    # Shoulder, elbow, wrist_roll use 5020 motors
+                    self.msg.motor_cmd[id].kp = self.kp_5020
+                    self.msg.motor_cmd[id].kd = self.kd_5020
             else:
                 if self._Is_weak_motor(id):
                     self.msg.motor_cmd[id].kp = self.kp_low
@@ -221,15 +256,22 @@ class G1_29_ArmController:
         Args:
             q_target: Target joint positions (14 DOF)
             tauff_target: Feedforward torques (14 DOF) - added to gravity comp if enabled
-            use_gravity_compensation: If True, add gravity compensation torques
+            use_gravity_compensation: If True, add simplified gravity compensation torques
+                                      (prefer RNEA-based torques from IK solver instead)
         '''
         with self.ctrl_lock:
             self.q_target = q_target
             if use_gravity_compensation:
                 gravity_torques = self.compute_gravity_compensation(q_target)
-                self.tauff_target = tauff_target + gravity_torques
+                final_tauff = tauff_target + gravity_torques
             else:
-                self.tauff_target = tauff_target
+                final_tauff = tauff_target
+            
+            # Apply torque limiting for safety (prevents overheating)
+            if self.torque_limit_enabled:
+                final_tauff = np.clip(final_tauff, -self.torque_limits, self.torque_limits)
+            
+            self.tauff_target = final_tauff
     
     def compute_gravity_compensation(self, arm_q: np.ndarray) -> np.ndarray:
         """
@@ -387,6 +429,7 @@ class G1_29_ArmController:
         return motor_index.value in weak_motors
 
     def _Is_wrist_motor(self, motor_index):
+        """Check if motor is any wrist motor (roll, pitch, or yaw)."""
         wrist_motors = [
             G1_29_JointIndex.kLeftWristRoll.value,
             G1_29_JointIndex.kLeftWristPitch.value,
@@ -396,6 +439,16 @@ class G1_29_ArmController:
             G1_29_JointIndex.kRightWristYaw.value,
         ]
         return motor_index.value in wrist_motors
+
+    def _Is_wrist_pitch_yaw_motor(self, motor_index):
+        """Check if motor is wrist pitch or yaw (4010 motors, smaller than 5020)."""
+        wrist_pitch_yaw_motors = [
+            G1_29_JointIndex.kLeftWristPitch.value,
+            G1_29_JointIndex.kLeftWristyaw.value,
+            G1_29_JointIndex.kRightWristPitch.value,
+            G1_29_JointIndex.kRightWristYaw.value,
+        ]
+        return motor_index.value in wrist_pitch_yaw_motors
 
 
 class G1_29_JointArmIndex(IntEnum):

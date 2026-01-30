@@ -400,15 +400,15 @@ def analyze_advantages(data_dir: str, output_dir: str, action_chunk_size: int = 
 def main():
     # Configuration parameters from training_config_insert_bottle_jan22_Ours.yaml
     config_params = {
-        'task_name': 'insert_bottle_jan22_Ours',
+        'task_name': 'insert_bottle_jan22_Ours_H300',
         'task_instruction': 'Pick up the bottle and insert it into the tray. Keep the bottle perfectly upright (vertical) and aligned straight.',
         'reward_method': 'Ours',
         'checkpoint_path': '/home/yuxin/Projects/openpi/third_party/emboided_reward/IB-checkpoint-1275',
         'max_frames': 30,
         'look_ahead_window': 80,
-        'advantage_threshold': 0.15,
+        'advantage_threshold': 0.33,
         'distance_threshold': 0.45,
-        'data_dir': '/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/insert_bottle_jan22_Ours/epoch_1/data/chunk-000',
+        'data_dir': '/home/yuxin/Projects/openpi/examples/h1_control_client/h1_data_lerobot/insert_bottle_jan23_Ourstest/epoch_1/data/chunk-000',
     }
     
     print("="*80)

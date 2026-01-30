@@ -51,12 +51,28 @@ class DataLoader(Protocol[T_co]):
 
 
 class TransformedDataset(Dataset[T_co]):
-    def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn]):
+    def __init__(self, dataset: Dataset, transforms: Sequence[_transforms.DataTransformFn], preserve_fields: list[str] | None = None):
         self._dataset = dataset
         self._transform = _transforms.compose(transforms)
+        self._preserve_fields = preserve_fields or []
 
     def __getitem__(self, index: SupportsIndex) -> T_co:
-        return self._transform(self._dataset[index])
+        item = self._dataset[index]
+        
+        # Save fields that should be preserved through transforms
+        preserved = {}
+        for field in self._preserve_fields:
+            if field in item:
+                preserved[field] = item[field]
+        
+        # Apply transforms
+        transformed = self._transform(item)
+        
+        # Restore preserved fields
+        for field, value in preserved.items():
+            transformed[field] = value
+        
+        return transformed
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -69,10 +85,12 @@ class IterableTransformedDataset(IterableDataset[T_co]):
         transforms: Sequence[_transforms.DataTransformFn],
         *,
         is_batched: bool = False,
+        preserve_fields: list[str] | None = None,
     ):
         self._dataset = dataset
         self._transform = _transforms.compose(transforms)
         self._is_batched = is_batched
+        self._preserve_fields = preserve_fields or []
 
     def __iter__(self):
         for sample in self._dataset:
@@ -81,6 +99,12 @@ class IterableTransformedDataset(IterableDataset[T_co]):
                 # individual samples and apply the transform to each sample individually.
                 batch_size = next(v.shape[0] for v in sample.values())
 
+                # Save preserved fields before transforms
+                preserved = {}
+                for field in self._preserve_fields:
+                    if field in sample:
+                        preserved[field] = sample[field]
+
                 # Split batch into individual samples using tree_map
                 individual_samples = [jax.tree.map(lambda x: x[i], sample) for i in range(batch_size)]  # noqa: B023
 
@@ -88,9 +112,28 @@ class IterableTransformedDataset(IterableDataset[T_co]):
                 transformed = [self._transform(s) for s in individual_samples]
 
                 # Recombine batch with tree_map
-                yield jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+                result = jax.tree.map(lambda *x: np.stack(x, axis=0), *transformed)
+                
+                # Restore preserved fields
+                for field, value in preserved.items():
+                    result[field] = value
+                
+                yield result
             else:
-                yield self._transform(sample)
+                # Save preserved fields
+                preserved = {}
+                for field in self._preserve_fields:
+                    if field in sample:
+                        preserved[field] = sample[field]
+                
+                # Apply transform
+                transformed = self._transform(sample)
+                
+                # Restore preserved fields
+                for field, value in preserved.items():
+                    transformed[field] = value
+                
+                yield transformed
 
     def __len__(self) -> int:
         return len(self._dataset)
@@ -162,6 +205,7 @@ def create_torch_dataset(
 
     # Apply transforms for prompt generation
     transforms = []
+    has_advantage = False
     if data_config.prompt_from_task:
         transforms.append(_transforms.PromptFromLeRobotTask(dataset_meta.tasks))
     
@@ -179,7 +223,8 @@ def create_torch_dataset(
         logging.info("=" * 80)
     
     if transforms:
-        dataset = TransformedDataset(dataset, transforms)
+        # Preserve advantage_label through subsequent transforms
+        dataset = TransformedDataset(dataset, transforms, preserve_fields=["advantage_label"] if has_advantage else [])
 
     return dataset
 
@@ -213,6 +258,7 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             )
         norm_stats = data_config.norm_stats
 
+    # Preserve advantage_label field through all transforms (it gets added by ActionChunkAdvantagePrompt)
     return TransformedDataset(
         dataset,
         [
@@ -221,6 +267,7 @@ def transform_dataset(dataset: Dataset, data_config: _config.DataConfig, *, skip
             _transforms.Normalize(norm_stats, use_quantiles=data_config.use_quantile_norm),
             *data_config.model_transforms.inputs,
         ],
+        preserve_fields=["advantage_label"],
     )
 
 
@@ -250,6 +297,7 @@ def transform_iterable_dataset(
             *data_config.model_transforms.inputs,
         ],
         is_batched=is_batched,
+        preserve_fields=["advantage_label"],
     )
 
 
@@ -569,5 +617,26 @@ class DataLoaderImpl(DataLoader):
         return self._data_config
 
     def __iter__(self):
+        batch_count = 0
         for batch in self._data_loader:
-            yield _model.Observation.from_dict(batch), batch["actions"]
+            # Pass through advantage_label if present for loss tracking
+            advantage_labels = batch.get("advantage_label", None)
+            
+            # Debug: Check if advantage_label exists in first batch
+            if batch_count == 0:
+                import logging
+                if advantage_labels is not None:
+                    logging.info(f"✓ Found advantage_label in batch: shape={advantage_labels.shape if hasattr(advantage_labels, 'shape') else len(advantage_labels)}")
+                else:
+                    logging.info(f"✗ No advantage_label found in batch. Available keys: {list(batch.keys())}")
+                batch_count += 1
+            
+            observation = _model.Observation.from_dict(batch)
+            actions = batch["actions"]
+            
+            # Return advantage_labels as metadata (can't modify frozen Observation)
+            # Store in a dict for easy access
+            metadata = {"advantage_label": advantage_labels}
+            
+            # Yield as triple: (observation, actions, metadata)
+            yield observation, actions, metadata
