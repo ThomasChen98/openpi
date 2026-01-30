@@ -71,6 +71,10 @@ while [[ $# -gt 0 ]]; do
             REWARD_RANDOM_DROP_RATE="$2"
             shift 2
             ;;
+        --reward-reject-rate)
+            REWARD_REJECT_RATE="$2"
+            shift 2
+            ;;
         --reward-goal-image-path)
             REWARD_GOAL_IMAGE_PATH="$2"
             shift 2
@@ -106,6 +110,7 @@ REWARD_IMAGE_ROTATION="${REWARD_IMAGE_ROTATION:-0}"
 REWARD_ADVANTAGE_THRESHOLD="${REWARD_ADVANTAGE_THRESHOLD:-0.3}"
 REWARD_LOOK_AHEAD_WINDOW="${REWARD_LOOK_AHEAD_WINDOW:-80}"
 REWARD_RANDOM_DROP_RATE="${REWARD_RANDOM_DROP_RATE:-0.0}"
+REWARD_REJECT_RATE="${REWARD_REJECT_RATE:-0.3}"
 REWARD_GOAL_IMAGE_PATH="${REWARD_GOAL_IMAGE_PATH:-}"
 
 # Action dimension (empty = auto-detect from HDF5, 14=arms, 26=arms+hands)
@@ -329,6 +334,8 @@ if [ "$LABELING_MODE" != "none" ]; then
         fi
         # Pass random drop rate (default 0.0 means no dropping)
         CONVERT_CMD="$CONVERT_CMD --reward_random_drop_rate $REWARD_RANDOM_DROP_RATE"
+        # Pass reject rate (default 0.3 means reject 30% of bad samples)
+        CONVERT_CMD="$CONVERT_CMD --reward_reject_rate $REWARD_REJECT_RATE"
         # Add goal image path for RoboDopamine
         if [ "$REWARD_METHOD" = "RoboDopamine" ] && [ -n "$REWARD_GOAL_IMAGE_PATH" ]; then
             CONVERT_CMD="$CONVERT_CMD --reward_goal_image_path \"$REWARD_GOAL_IMAGE_PATH\""

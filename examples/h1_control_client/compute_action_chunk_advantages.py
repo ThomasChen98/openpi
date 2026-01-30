@@ -492,11 +492,13 @@ def main():
         reward_cache = ep_file.replace('.parquet', f'_{args.reward_method}_reward.pkl')
         
         if os.path.exists(reward_cache) and not args.force_recompute:
-            rewards = pickle.load(open(reward_cache, 'rb'))
+            with open(reward_cache, 'rb') as f:
+                rewards = pickle.load(f)
         else:
             images = load_episode_images(ep_file)
             rewards = computer.compute_episode_rewards(images, episode_file_path=ep_file)
-            pickle.dump(rewards, open(reward_cache, 'wb'))
+            with open(reward_cache, 'wb') as f:
+                pickle.dump(rewards, f)
         
         all_episode_rewards.append(rewards)
     
@@ -519,11 +521,13 @@ def main():
         embd_cache = ep_file.replace('.parquet', '_ego_image_embeddings.pkl')
         
         if os.path.exists(embd_cache) and not args.force_recompute:
-            embeddings = pickle.load(open(embd_cache, 'rb'))
+            with open(embd_cache, 'rb') as f:
+                embeddings = pickle.load(f)
         else:
             images = load_episode_images(ep_file)
             embeddings = computer.embed_images(images, batch_size=64)
-            pickle.dump(embeddings, open(embd_cache, 'wb'))
+            with open(embd_cache, 'wb') as f:
+                pickle.dump(embeddings, f)
         
         all_episode_embeddings.append(embeddings)
     
@@ -540,7 +544,8 @@ def main():
         
         if os.path.exists(advantage_cache) and not args.force_recompute:
             # Load existing and show stats
-            advantages = pickle.load(open(advantage_cache, 'rb'))
+            with open(advantage_cache, 'rb') as f:
+                advantages = pickle.load(f)
             true_count = advantages.sum()
             print(f"  [CACHED] {Path(ep_file).name}: {true_count}/{len(advantages)} frames with advantage ({100*true_count/len(advantages):.1f}%)")
             all_stats.append((Path(ep_file).name, true_count, len(advantages)))
@@ -559,7 +564,8 @@ def main():
             )
         
         # Save advantages
-        pickle.dump(advantages, open(advantage_cache, 'wb'))
+        with open(advantage_cache, 'wb') as f:
+            pickle.dump(advantages, f)
         
         # Stats
         true_count = advantages.sum()

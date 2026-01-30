@@ -696,10 +696,16 @@ class G1TrainingClient:
             
             target_q = current_q + t_smooth * (self.reset_pose[:14] - current_q)
             
+            # Compute RNEA-based gravity compensation
+            if self.use_gravity_compensation and self.ik_solver is not None:
+                tauff = self.ik_solver.compute_gravity_compensation(target_q)
+            else:
+                tauff = np.zeros(14, dtype=np.float32)
+            
             self.robot.ctrl_dual_arm(
                 q_target=target_q,
-                tauff_target=np.zeros(14, dtype=np.float32),
-                use_gravity_compensation=self.use_gravity_compensation
+                tauff_target=tauff,
+                use_gravity_compensation=False
             )
             
             # Move hands to reset pose
@@ -789,11 +795,19 @@ class G1TrainingClient:
                 if arm_max_error > 0.035 or waist_error > 0.035:  # ~2 degrees
                     logger.warning(f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°, waist={np.degrees(waist_error):.2f}°")
             
-            # Send arm command with optional gravity compensation
+            # Compute feedforward torques for gravity compensation
+            # Use RNEA-based computation from IK solver (more accurate than simplified model)
+            if self.use_gravity_compensation and self.ik_solver is not None:
+                tauff = self.ik_solver.compute_gravity_compensation(arm_joints)
+            else:
+                tauff = np.zeros(14, dtype=np.float32)
+            
+            # Send arm command with feedforward torques
+            # Note: use_gravity_compensation=False here since we already computed RNEA torques
             self.robot.ctrl_dual_arm(
                 q_target=arm_joints,
-                tauff_target=np.zeros(14, dtype=np.float32),
-                use_gravity_compensation=self.use_gravity_compensation
+                tauff_target=tauff,
+                use_gravity_compensation=False
             )
             
             # Send hand command
@@ -897,10 +911,16 @@ class G1TrainingClient:
                 return True
             
             # Keep commanding target while waiting
+            # Compute RNEA-based gravity compensation
+            if self.use_gravity_compensation and self.ik_solver is not None:
+                tauff = self.ik_solver.compute_gravity_compensation(target_arm)
+            else:
+                tauff = np.zeros(14, dtype=np.float32)
+            
             self.robot.ctrl_dual_arm(
                 q_target=target_arm,
-                tauff_target=np.zeros(14, dtype=np.float32),
-                use_gravity_compensation=self.use_gravity_compensation
+                tauff_target=tauff,
+                use_gravity_compensation=False
             )
             self.robot.ctrl_waist_yaw(target_waist)
             
@@ -1155,12 +1175,18 @@ class G1TrainingClient:
             try:
                 loop_start = time.time()
                 
-                # Hold arms (14 DOF)
-                current_arm_q = self.robot.get_current_dual_arm_q()
+                current_q = self.robot.get_current_dual_arm_q()
+                
+                # Compute RNEA-based gravity compensation
+                if self.use_gravity_compensation and self.ik_solver is not None:
+                    tauff = self.ik_solver.compute_gravity_compensation(current_q)
+                else:
+                    tauff = np.zeros(14, dtype=np.float32)
+                
                 self.robot.ctrl_dual_arm(
-                    q_target=current_arm_q,
-                    tauff_target=np.zeros(14, dtype=np.float32),
-                    use_gravity_compensation=self.use_gravity_compensation
+                    q_target=current_q,
+                    tauff_target=tauff,
+                    use_gravity_compensation=False
                 )
                 
                 # Hold hands (14 DOF)

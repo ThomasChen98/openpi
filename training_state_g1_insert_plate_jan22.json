@@ -1,0 +1,11 @@
+{
+  "task_name": "insert_plate_jan22",
+  "task_description": "pick up the plate, turn the body and insert to the plate holder",
+  "config_name": "pi05_g1_auto",
+  "robot": "G1",
+  "epoch": 0,
+  "last_checkpoint": "",
+  "warmup_checkpoint": "/home/yuxin/Projects/openpi/checkpoints/pi05_g1_auto/insert_plate_jan22/4999",
+  "status": "collecting_data",
+  "updated_at": "2026-01-22T23:16:03-08:00"
+}
