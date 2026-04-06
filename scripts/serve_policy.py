@@ -107,7 +107,12 @@ def create_policy(args: Args) -> _policy.Policy:
                     if args.policy.data_dir is not None:
                         data_updates['data_dir'] = args.policy.data_dir
                         logging.info(f"Overriding data_dir to: {args.policy.data_dir}")
-                    
+                    if args.policy.action_dim is not None and isinstance(
+                        config.data, _config.LeRobotG1LocalDataConfig
+                    ):
+                        data_updates['action_dim'] = args.policy.action_dim
+                        logging.info(f"Overriding G1 policy action_dim to: {args.policy.action_dim}")
+
                     config = dataclasses.replace(
                         config,
                         data=dataclasses.replace(config.data, **data_updates)

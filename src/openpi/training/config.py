@@ -439,10 +439,17 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
     
     HDF5 data format:
         qpos: [T, 29] - arm + hand + waist_yaw joints
-        action: [T, 29] - arm + hand + waist_yaw targets
+        action: [T, 29] - arm + hand + waist_yaw targets (or [T,16] if dataset already binary-gripper)
+
+    policy action_dim:
+        29 — full arm(14)+hand(14)+waist(1) targets (default)
+        28 — arm+hand, no waist in the policy action vector
+        16 — arm(14)+binary left/right gripper (0–1); 29-D dataset actions are projected for training
     """
     # Local directory path containing the LeRobot format dataset
     data_dir: str = tyro.MISSING
+    # Policy I/O action width (must match norm_stats / execution client policy_server.action_dim)
+    action_dim: int = 29
     # If true, will convert arm joint dimensions to deltas (not hands or waist)
     extra_delta_transform: bool = True
     # Action keys that will be used to read the action sequence from the dataset
@@ -450,6 +457,9 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
     
     @override
     def create(self, assets_dirs: pathlib.Path, model_config: _model.BaseModelConfig) -> DataConfig:
+        if self.action_dim not in (16, 28, 29):
+            raise ValueError(f"LeRobotG1LocalDataConfig.action_dim must be 16, 28, or 29, got {self.action_dim}")
+
         # Repack transform: map HDF5 keys to policy input format
         # Match H1 format exactly: include wrist cameras (zero-padded in dataset)
         repack_transforms = _transforms.Group(
@@ -469,16 +479,31 @@ class LeRobotG1LocalDataConfig(DataConfigFactory):
             ]
         )
 
-        # Data transforms: G1Inputs handles 29-dim state, G1Outputs returns 29-dim actions
+        # Optional: collapse 29-D dataset actions to policy width before G1Inputs / delta transforms
+        align_inputs = []
+        if self.action_dim != 29:
+            align_inputs.append(
+                g1_policy.G1AlignDatasetActionsToPolicyDim(policy_action_dim=self.action_dim),
+            )
+
+        # Delta mask: delta on arm joints (14) only; remaining action dims stay absolute
+        if self.action_dim == 16:
+            delta_action_mask = _transforms.make_bool_mask(14, -2)
+        elif self.action_dim == 28:
+            delta_action_mask = _transforms.make_bool_mask(14, -14)
+        else:
+            delta_action_mask = _transforms.make_bool_mask(14, -15)
+
+        # Data transforms: G1Inputs handles 29-dim state, G1Outputs returns policy_action_dim actions
         data_transforms = _transforms.Group(
-            inputs=[g1_policy.G1Inputs(model_type=model_config.model_type)],
-            outputs=[g1_policy.G1Outputs(action_dim=29)],
+            inputs=[
+                *align_inputs,
+                g1_policy.G1Inputs(model_type=model_config.model_type),
+            ],
+            outputs=[g1_policy.G1Outputs(action_dim=self.action_dim)],
         )
 
         if self.extra_delta_transform:
-            # Apply delta transform to arm joints only (first 14), not hands or waist_yaw
-            # Mask: [True]*14 + [False]*15 = delta for arms, absolute for hands+waist
-            delta_action_mask = _transforms.make_bool_mask(14, -15)
             data_transforms = data_transforms.push(
                 inputs=[_transforms.DeltaActions(delta_action_mask)],
                 outputs=[_transforms.AbsoluteActions(delta_action_mask)],

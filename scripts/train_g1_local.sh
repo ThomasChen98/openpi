@@ -46,6 +46,10 @@ while [[ $# -gt 0 ]]; do
             KEEP_PERIOD="$2"
             shift 2
             ;;
+        --action-dim)
+            ACTION_DIM="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
             exit 1
@@ -58,6 +62,7 @@ TASK_NAME="${TASK_NAME:-cabinet_bottle}"
 EPOCH_NUM="${EPOCH_NUM:-}"  # Empty means no epoch suffix
 CONFIG_NAME="${CONFIG_NAME:-pi05_g1_auto}"
 GPU_ID="${GPU_ID:-0}"
+ACTION_DIM="${ACTION_DIM:-}"  # Empty: use TrainConfig default (29 for G1)
 MAX_EPOCHS="${MAX_EPOCHS:-}"  # Empty means use config default
 SAVE_INTERVAL="${SAVE_INTERVAL:-}"  # Empty means use config default
 KEEP_PERIOD="${KEEP_PERIOD:-}"  # Empty means use config default
@@ -112,6 +117,9 @@ if [ -n "$SAVE_INTERVAL" ]; then
 fi
 if [ -n "$KEEP_PERIOD" ]; then
     echo "Keep period: $KEEP_PERIOD"
+fi
+if [ -n "$ACTION_DIM" ]; then
+    echo "Policy action_dim override: $ACTION_DIM"
 fi
 echo "========================================================"
 
@@ -173,6 +181,9 @@ if [ -n "$SAVE_INTERVAL" ]; then
 fi
 if [ -n "$KEEP_PERIOD" ]; then
     TRAIN_CMD="$TRAIN_CMD --keep-period $KEEP_PERIOD"
+fi
+if [ -n "$ACTION_DIM" ]; then
+    TRAIN_CMD="$TRAIN_CMD --action-dim $ACTION_DIM"
 fi
 
 echo ""

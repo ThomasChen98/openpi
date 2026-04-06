@@ -14,7 +14,7 @@
 # G1-specific configuration:
 #   - Port 8001 for policy server (H1 uses 8000)
 #   - Port 8081 for Viser visualizer (H1 uses 8080)
-#   - 29-dim action space (28 upper body + 1 waist_yaw)
+#   - Policy action width from YAML policy_server.action_dim (default 29)
 #   - G1-specific data paths and conversion
 #
 # Usage:
@@ -114,13 +114,18 @@ REWARD_CHECKPOINT_PATH=$(yq -r '.reward.checkpoint_path // ""' "$CONFIG_FILE")
 # Server (G1 uses different ports from H1)
 SERVER_HOST=$(yq -r '.policy_server.host // "localhost"' "$CONFIG_FILE")
 SERVER_PORT=$(yq -r '.policy_server.port // 8001' "$CONFIG_FILE")
+ACTION_DIM=$(yq -r '.policy_server.action_dim // 29' "$CONFIG_FILE")
+case "$ACTION_DIM" in
+    16|28|29) ;;
+    *)
+        echo "ERROR: policy_server.action_dim must be 16, 28, or 29 (got: $ACTION_DIM) in $CONFIG_FILE"
+        exit 1
+        ;;
+esac
 
 # Visualization (G1 uses different ports from H1)
 VISER_PORT=$(yq -r '.visualization.viser_port // 8081' "$CONFIG_FILE")
 ROBOT_COMMAND_PORT=$(yq -r '.visualization.robot_command_port // 5008' "$CONFIG_FILE")
-
-# G1 fixed action dim: 29 (28 upper body + 1 waist_yaw)
-ACTION_DIM=29
 
 # Pipeline
 START_PHASE=$(yq -r '.pipeline.start_phase // "data_collection"' "$CONFIG_FILE")
@@ -246,7 +251,7 @@ start_server() {
     export CUDA_VISIBLE_DEVICES=$GPU_ID
     
     log_info "Starting server..."
-    log_info "Action dim: $ACTION_DIM (G1: 28 upper body + 1 waist_yaw)"
+    log_info "Policy action_dim: $ACTION_DIM (from YAML; passed to serve_policy and train_g1_local)"
     nohup uv run scripts/serve_policy.py \
         --port "$SERVER_PORT" \
         --training-epoch "$EPOCH" \
@@ -498,7 +503,7 @@ convert_epoch_data() {
     
     log_info "Converting $count G1 episodes..."
     log_info "Labeling mode: human_labeling (SFT mode - filtering good episodes only)"
-    log_info "Action dim: $ACTION_DIM (G1 fixed)"
+    log_info "Policy action_dim (YAML): $ACTION_DIM"
     
     # SFT MODE: Use human_labeling for all epochs and filter to keep only good episodes
     # This removes the action_chunk_advantage logic and uses human labels from HDF5 files
@@ -546,6 +551,7 @@ train_epoch() {
     
     local train_args="--task-name $TASK_NAME --epoch $EPOCH --config-name $CONFIG_NAME --gpu $GPU_ID"
     train_args="$train_args --max-epochs $MAX_EPOCHS --save-interval $SAVE_INTERVAL --keep-period $KEEP_PERIOD"
+    train_args="$train_args --action-dim $ACTION_DIM"
     
     if [ -n "$base_checkpoint" ]; then
         train_args="$train_args --base-checkpoint $base_checkpoint"
@@ -599,7 +605,7 @@ show_config() {
     echo -e "  Task Description:  ${GREEN}$TASK_DESCRIPTION${NC}"
     echo -e "  Policy Config:     $CONFIG_NAME"
     echo -e "  Warmup Checkpoint: ${WARMUP_CHECKPOINT:-none}"
-    echo -e "  Action Dim:        $ACTION_DIM (28 upper body + 1 waist_yaw)"
+    echo -e "  Policy action_dim:  $ACTION_DIM  (YAML policy_server.action_dim: 29 full, 28 no waist, 16 binary grippers)"
     echo -e "  Max Epochs:        $MAX_EPOCHS"
     echo -e "  Save Interval:     $SAVE_INTERVAL"
     echo -e "  Keep Period:       $KEEP_PERIOD"

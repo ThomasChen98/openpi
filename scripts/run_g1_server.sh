@@ -90,9 +90,16 @@ echo ""
 cd "$OPENPI_DIR"
 
 # Note: --port must come BEFORE the policy:checkpoint subcommand
+# Optional: POLICY_ACTION_DIM=16|28|29 to match training (default: omit = config default 29)
+EXTRA_ACTION_DIM=()
+if [ -n "${POLICY_ACTION_DIM:-}" ]; then
+    EXTRA_ACTION_DIM=(--policy.action-dim="${POLICY_ACTION_DIM}")
+fi
+
 uv run scripts/serve_policy.py \
     --port="${PORT}" \
     policy:checkpoint \
     --policy.config="${POLICY_CONFIG}" \
     --policy.dir="${POLICY_DIR}" \
-    --policy.data-dir="${DATA_DIR}"
+    --policy.data-dir="${DATA_DIR}" \
+    "${EXTRA_ACTION_DIM[@]}"

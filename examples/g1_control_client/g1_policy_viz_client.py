@@ -43,7 +43,7 @@ from pathlib import Path
 import cv2
 import einops
 import h5py
-import numpy as np
+import numpy as np  
 import tyro
 import websockets
 from PIL import Image

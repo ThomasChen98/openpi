@@ -74,6 +74,14 @@ class G1_29_ArmController:
         self.kp_5020 = ARMATURE_5020 * NATURAL_FREQ**2  # ~14.25
         self.kd_5020 = 2.0 * DAMPING_RATIO * ARMATURE_5020 * NATURAL_FREQ  # ~0.91
         
+        # Shoulder gains (pitch/roll/yaw) - increased for better stiffness
+        self.kp_shoulder = self.kp_5020 * 3.0   # ~14.25 * 3 = 42.75
+        self.kd_shoulder = self.kd_5020 * 2.0   # ~0.91 * 2 = 1.82
+        
+        # Elbow gains - increased for better stiffness
+        self.kp_elbow = self.kp_5020 * 10.0     # ~14.25 * 10 = 142.5
+        self.kd_elbow = self.kd_5020 * 2.0       # ~0.91 * 2 = 1.82
+        
         # 4010 motors: wrist_pitch, wrist_yaw (smaller motors)
         self.kp_4010 = ARMATURE_4010 * NATURAL_FREQ**2  # ~16.78
         self.kd_4010 = 2.0 * DAMPING_RATIO * ARMATURE_4010 * NATURAL_FREQ  # ~1.07
@@ -93,6 +101,10 @@ class G1_29_ArmController:
         # Waist yaw control gains (uses 7520 motor)
         self.kp_waist = self.kp_7520
         self.kd_waist = self.kd_7520
+        
+        # Waist pitch and roll gains - higher stiffness to prevent bowing forward
+        self.kp_waist_pitch_roll = 350.0
+        self.kd_waist_pitch_roll = 5.0
         self.waist_yaw_target = 0.0
         self.waist_yaw_limits = [-2.618, 2.618]  # From URDF: approx +/- 150 degrees
         
@@ -162,14 +174,26 @@ class G1_29_ArmController:
                 self.msg.motor_cmd[id].kp = self.kp_waist
                 self.msg.motor_cmd[id].kd = self.kd_waist
                 self.waist_yaw_target = self.all_motor_q[id]
+            elif id == G1_29_JointIndex.kWaistPitch or id == G1_29_JointIndex.kWaistRoll:
+                # Waist pitch and roll with higher stiffness to prevent bowing forward
+                self.msg.motor_cmd[id].kp = self.kp_waist_pitch_roll
+                self.msg.motor_cmd[id].kd = self.kd_waist_pitch_roll
             elif id.value in arm_indices:
                 # Arm motors use physics-based gains by motor type
-                if self._Is_wrist_pitch_yaw_motor(id):
+                if self._Is_shoulder_motor(id):
+                    # Shoulder motors (pitch/roll/yaw) with increased gains
+                    self.msg.motor_cmd[id].kp = self.kp_shoulder
+                    self.msg.motor_cmd[id].kd = self.kd_shoulder
+                elif self._Is_elbow_motor(id):
+                    # Elbow motors with increased gains
+                    self.msg.motor_cmd[id].kp = self.kp_elbow
+                    self.msg.motor_cmd[id].kd = self.kd_elbow
+                elif self._Is_wrist_pitch_yaw_motor(id):
                     # Wrist pitch/yaw use 4010 motors
                     self.msg.motor_cmd[id].kp = self.kp_4010
                     self.msg.motor_cmd[id].kd = self.kd_4010
                 else:
-                    # Shoulder, elbow, wrist_roll use 5020 motors
+                    # Wrist roll uses 5020 motors
                     self.msg.motor_cmd[id].kp = self.kp_5020
                     self.msg.motor_cmd[id].kd = self.kd_5020
             else:
@@ -449,6 +473,26 @@ class G1_29_ArmController:
             G1_29_JointIndex.kRightWristYaw.value,
         ]
         return motor_index.value in wrist_pitch_yaw_motors
+
+    def _Is_shoulder_motor(self, motor_index):
+        """Check if motor is a shoulder motor (pitch, roll, or yaw)."""
+        shoulder_motors = [
+            G1_29_JointIndex.kLeftShoulderPitch.value,
+            G1_29_JointIndex.kLeftShoulderRoll.value,
+            G1_29_JointIndex.kLeftShoulderYaw.value,
+            G1_29_JointIndex.kRightShoulderPitch.value,
+            G1_29_JointIndex.kRightShoulderRoll.value,
+            G1_29_JointIndex.kRightShoulderYaw.value,
+        ]
+        return motor_index.value in shoulder_motors
+
+    def _Is_elbow_motor(self, motor_index):
+        """Check if motor is an elbow motor."""
+        elbow_motors = [
+            G1_29_JointIndex.kLeftElbow.value,
+            G1_29_JointIndex.kRightElbow.value,
+        ]
+        return motor_index.value in elbow_motors
 
 
 class G1_29_JointArmIndex(IntEnum):

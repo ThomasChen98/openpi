@@ -15,13 +15,10 @@ Key concepts:
     - EPOCH: A training cycle with a specific policy checkpoint. Multiple episodes per epoch.
     - EPISODE: A single rollout/trajectory recorded during EXECUTING state.
 
-State Space (29 dims):
-    [0:28]  qpos        - arm (14) + hand (14) joint positions
-    [28]    waist_yaw   - waist yaw joint position
-
-Action Space (29 dims):
-    [0:28]  upper_body  - arm (14) + hand (14) joint targets
-    [28]    waist_yaw   - waist yaw joint target
+Robot state is always 29-D internally (arms + hands + waist). Policy I/O matches
+``g1_policy_viz_client`` continuous rollout via ``g1_policy_action_utils``:
+``policy_server.action_dim`` 29 / 28 / 16 with the same state packing and
+``convert_actions_to_29dim`` for robot commands.
 
 Usage:
     python g1_execution_client.py --config training_config_g1.yaml
@@ -47,6 +44,12 @@ import cv2
 import numpy as np
 import requests
 import yaml
+
+from g1_policy_action_utils import (
+    convert_actions_to_29dim,
+    convert_qpos_to_16dim_state,
+    round_binary_gripper_raw,
+)
 
 # Setup logging
 logging.basicConfig(
@@ -311,10 +314,21 @@ class G1TrainingClient:
         self.last_policy_epoch = -1
         self.episode_rejected = False
         
-        # G1 29-dim action space: 28 upper body + 1 waist_yaw
+        # Robot always uses 29-D resolved commands (28 upper body + waist_yaw).
         self.action_dim = 29
         self.upper_body_dim = 28  # 14 arm + 14 hand
-        logger.info(f"Action dim: {self.action_dim} (28 upper body + 1 waist_yaw)")
+        # Policy train/infer width — from config only (16 / 28 / 29), same convention as g1_policy_viz_client.
+        pad = self.config.get("policy_server", {}).get("action_dim", 29)
+        self.policy_action_dim = int(pad)
+        if self.policy_action_dim not in (16, 28, 29):
+            raise ValueError(
+                f"policy_server.action_dim must be 16, 28, or 29, got {self.policy_action_dim}"
+            )
+        logger.info(
+            f"Robot command dim: {self.action_dim}; policy action_dim (from config): {self.policy_action_dim}"
+        )
+        # 16-D: same state continuity as g1_policy_viz_client continuous rollout
+        self.last_executed_binary_gripper: Optional[np.ndarray] = None
         
         # Control frequency
         self.control_freq = self.config.get('robot', {}).get('control_freq', 30)
@@ -352,14 +366,16 @@ class G1TrainingClient:
         if self.use_gravity_compensation:
             logger.info("Gravity compensation ENABLED - arms should track better")
         
-        # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw)
-        # Zeros for home position
+        # Reset pose for robot (29 DOF: 14 arm + 14 hand + 1 waist_yaw).
+        # From pick_place_mar16: mean of 14 arm joints over first frame of all 201 episodes.
+        # Hand block zeros -> mean-hand binary 0,0 (matches viz / LeRobot 16-D state).
         self.reset_pose = np.array([
-            -0.54445535,  0.80403286,  0.07707055,  0.2144577,   0.7221694,  -0.41270077,
-            0.52263206, -0.4834796,  -0.6733569,   0.03534148, -0.21908362, -1.328715,
-            0.1290701,  -0.3368646,  -0.8957139,   0.88443977,  0.68365633, -0.17486757,
-            -0.01879567, -0.0822694,  -0.17111236, -0.8242576,  -0.8970064,  -0.839932,
-            0.47695217,  0.02509532,  0.0332288,   0.9400982,  -0.5505542,
+            -0.61988723,  0.02266632,  0.10872238,  0.37303299, -0.07049258, -0.70826751,
+            -0.04716705, -0.68442738, -0.34490269, -0.14608258,  0.32342657, -0.00362663,
+            -0.24380642,  0.09941904,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            0.0,
         ])
         
         # Signal handling
@@ -530,7 +546,8 @@ class G1TrainingClient:
             )
             
             metadata = self.policy_client.get_server_metadata()
-            logger.info(f"  Connected! Action dim: {metadata.get('action_dim', 'N/A')}")
+            srv_ad = metadata.get("action_dim", "N/A")
+            logger.info(f"  Connected! Server metadata action_dim: {srv_ad} (client uses config: {self.policy_action_dim})")
             return True
             
         except Exception as e:
@@ -641,8 +658,8 @@ class G1TrainingClient:
         Get current observation from robot.
         
         Args:
-            for_policy: If True, format for policy inference (29-dim state)
-                       If False, format for recording
+            for_policy: If True, format state for policy using policy_server.action_dim (16/28/29).
+                       If False, format for recording (always 29-dim qpos).
         """
         # Get current state (29 DOF: arm + hand + waist_yaw)
         current_q = self.get_current_state()
@@ -667,13 +684,29 @@ class G1TrainingClient:
             head_image = dummy_image
         
         if for_policy:
-            # Format for policy inference: 29-dim state
             task_config = self.config.get('task', {})
             task_description = task_config.get('description', 'manipulation task')
-            
+            padim = self.policy_action_dim
+            if padim == 16:
+                if (
+                    self.last_executed_binary_gripper is not None
+                    and len(self.last_executed_binary_gripper) >= 2
+                ):
+                    arms = current_q[:14].astype(np.float32)
+                    binary = np.asarray(
+                        self.last_executed_binary_gripper[:2], dtype=np.float32
+                    )
+                    state = np.concatenate([arms, binary]).astype(np.float32)
+                else:
+                    state = convert_qpos_to_16dim_state(current_q)
+            elif padim == 28:
+                state = current_q[:28].astype(np.float32)
+            else:
+                state = current_q[:29].astype(np.float32)
+
             return {
                 "images": {"cam_head": head_image},
-                "state": current_q,  # 29 dims
+                "state": state,
                 "prompt": f"{task_description}, Advantage=True",
             }
         else:
@@ -721,7 +754,7 @@ class G1TrainingClient:
             time.sleep(1.0 / self.control_freq)
         
         logger.info("Reset complete")
-    
+
     def query_policy(self) -> np.ndarray:
         """Query the policy server for an action chunk."""
         obs = self.get_observation(for_policy=True)
@@ -732,15 +765,33 @@ class G1TrainingClient:
         logger.info(f"   Range: [{action_chunk.min():.3f}, {action_chunk.max():.3f}]")
         
         return action_chunk
+
+    def _crop_policy_action_chunk(self, action_chunk: np.ndarray) -> np.ndarray:
+        """Trim padded model width to policy_server.action_dim (same as viz continuous rollout)."""
+        if len(action_chunk.shape) < 2:
+            raise ValueError(f"Expected action chunk (T, D), got shape {action_chunk.shape}")
+        width = int(action_chunk.shape[1])
+        dim = self.policy_action_dim
+        if width > dim:
+            return np.asarray(action_chunk[:, :dim], dtype=np.float32)
+        if width < dim:
+            raise ValueError(
+                f"Action chunk has width {width} but policy_server.action_dim is {dim}. "
+                "Fix the policy output or config."
+            )
+        return np.asarray(action_chunk, dtype=np.float32)
+
+    def _normalize_policy_chunk_to_29(self, action_chunk: np.ndarray) -> np.ndarray:
+        """Same expansion as g1_policy_viz_client.convert_actions_to_29dim."""
+        cropped = self._crop_policy_action_chunk(action_chunk)
+        return convert_actions_to_29dim(cropped, self.policy_action_dim)
     
     def execute_action_chunk(self, action_chunk: np.ndarray, track_error: bool = True) -> int:
         """
         Execute a full action chunk on the robot.
         
-        Action format (29 dims):
-            [0:14]  arm_joints
-            [14:28] hand_joints
-            [28]    waist_yaw
+        Policy rows use policy_server.action_dim (16, 28, or 29); 16-D uses binary grippers on
+        indices 14–15 like g1_policy_viz_client. Execution always applies 29-D resolved targets.
             
         Args:
             action_chunk: Array of actions to execute
@@ -749,32 +800,38 @@ class G1TrainingClient:
         control_period = 1.0 / self.control_freq
         actions_executed = 0
         
-        action_dim = action_chunk.shape[1] if len(action_chunk.shape) > 1 else self.action_dim
+        actions_29 = self._normalize_policy_chunk_to_29(action_chunk)
         
-        logger.info(f"   Executing {len(action_chunk)} actions at {self.control_freq}Hz ({action_dim} DOF)...")
+        logger.info(
+            f"   Executing {len(actions_29)} actions at {self.control_freq}Hz "
+            f"(policy {self.policy_action_dim}-D -> 29-D resolved)..."
+        )
+        
+        # 16-D policy has no waist output (resolved waist is fixed); skip waist in metrics/convergence.
+        ignore_waist = self.policy_action_dim == 16
         
         # Tracking error statistics
         arm_errors = []
         waist_errors = []
         per_joint_errors = [[] for _ in range(14)]  # Track each arm joint
         
-        for i, action in enumerate(action_chunk):
+        for i, action in enumerate(actions_29):
             loop_start = time.time()
             
             # Check for stop key
             key = self.keyboard.get_key(timeout=0.001)
             if key and key.lower() == 's':
-                logger.info(f"Stop signal received at action {i}/{len(action_chunk)}")
+                logger.info(f"Stop signal received at action {i}/{len(actions_29)}")
                 break
             
             # Extract arm joints (14 DOF)
             arm_joints = action[:14]
             
             # Extract hand joints (14 DOF)
-            hand_joints = action[14:28] if action_dim >= 28 else np.zeros(14, dtype=np.float32)
+            hand_joints = action[14:28]
             
             # Extract waist yaw (1 DOF)
-            waist_yaw = action[28] if action_dim >= 29 else 0.0
+            waist_yaw = float(action[28])
             
             # Track position error before sending new command
             if track_error:
@@ -786,14 +843,25 @@ class G1TrainingClient:
                 waist_error = abs(current_waist - waist_yaw)
                 
                 arm_errors.append(arm_max_error)
-                waist_errors.append(waist_error)
+                if not ignore_waist:
+                    waist_errors.append(waist_error)
                 
                 for j in range(14):
                     per_joint_errors[j].append(arm_error[j])
                 
                 # Log warnings for large errors (threshold: 2 degrees)
-                if arm_max_error > 0.035 or waist_error > 0.035:  # ~2 degrees
-                    logger.warning(f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°, waist={np.degrees(waist_error):.2f}°")
+                warn_arm = arm_max_error > 0.035
+                warn_waist = not ignore_waist and waist_error > 0.035
+                if warn_arm or warn_waist:
+                    if ignore_waist:
+                        logger.warning(
+                            f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°"
+                        )
+                    else:
+                        logger.warning(
+                            f"  Step {i}: Tracking error - arm_max={np.degrees(arm_max_error):.2f}°, "
+                            f"waist={np.degrees(waist_error):.2f}°"
+                        )
             
             # Compute feedforward torques for gravity compensation
             # Use RNEA-based computation from IK solver (more accurate than simplified model)
@@ -826,8 +894,7 @@ class G1TrainingClient:
                 current_qvel = self.get_current_qvel()  # 29 DOF
                 obs = self.get_observation(for_policy=False)
                 
-                # Action is 29-dim: arm + hand + waist_yaw
-                recorded_action = action[:29] if action_dim >= 29 else np.concatenate([action[:28], [waist_yaw]])
+                recorded_action = np.asarray(action[:29], dtype=np.float32)
                 
                 self.episode_writer.add_timestep(
                     qpos=current_q,
@@ -840,7 +907,7 @@ class G1TrainingClient:
             actions_executed += 1
             
             if i % 10 == 0:
-                logger.info(f"   Step {i}/{len(action_chunk)}")
+                logger.info(f"   Step {i}/{len(actions_29)}")
             
             elapsed = time.time() - loop_start
             sleep_time = max(0, control_period - elapsed)
@@ -850,7 +917,6 @@ class G1TrainingClient:
         if track_error and arm_errors:
             arm_mean = np.degrees(np.mean(arm_errors))
             arm_max = np.degrees(np.max(arm_errors))
-            waist_mean = np.degrees(np.mean(waist_errors))
             
             # Find worst joints
             joint_names = ['L_sh_pitch', 'L_sh_roll', 'L_sh_yaw', 'L_elbow', 'L_wr_roll', 'L_wr_pitch', 'L_wr_yaw',
@@ -858,7 +924,17 @@ class G1TrainingClient:
             joint_mean_errors = [np.degrees(np.mean(errs)) for errs in per_joint_errors]
             worst_joints = np.argsort(joint_mean_errors)[-3:][::-1]
             
-            logger.info(f"Tracking stats: arm_mean={arm_mean:.2f}°, arm_max={arm_max:.2f}°, waist_mean={waist_mean:.2f}°")
+            if ignore_waist:
+                logger.info(
+                    f"Tracking stats: arm_mean={arm_mean:.2f}°, arm_max={arm_max:.2f}° "
+                    f"(waist omitted, 16-D policy)"
+                )
+            else:
+                waist_mean = np.degrees(np.mean(waist_errors))
+                logger.info(
+                    f"Tracking stats: arm_mean={arm_mean:.2f}°, arm_max={arm_max:.2f}°, "
+                    f"waist_mean={waist_mean:.2f}°"
+                )
             worst_info = [(joint_names[j], f'{joint_mean_errors[j]:.2f}°') for j in worst_joints]
             logger.info(f"Worst tracking joints: {worst_info}")
         
@@ -882,10 +958,18 @@ class G1TrainingClient:
         except Exception as e:
             logger.debug(f"Failed to forward controller locomotion: {e}")
     
-    def wait_for_convergence(self, target_arm: np.ndarray, target_waist: float, 
-                             threshold_deg: float = 1.5, timeout: float = 0.5) -> bool:
+    def wait_for_convergence(
+        self,
+        target_arm: np.ndarray,
+        target_waist: float,
+        threshold_deg: float = 1.5,
+        timeout: float = 0.5,
+    ) -> bool:
         """
-        Wait for robot to converge to target position.
+        Wait for robot to converge to target position (arm + waist only; matches g1_remote_client).
+        
+        For policy_action_dim == 16, waist is not part of the policy; only arm error is checked
+        (waist is still commanded to target_waist each tick).
         
         Args:
             target_arm: Target arm joint positions (14 DOF)
@@ -899,15 +983,18 @@ class G1TrainingClient:
         threshold_rad = np.radians(threshold_deg)
         start_time = time.time()
         control_period = 1.0 / self.control_freq
+        ignore_waist = self.policy_action_dim == 16
         
         while time.time() - start_time < timeout:
             current_arm = self.robot.get_current_dual_arm_q()
-            current_waist = self.robot.get_current_waist_yaw()
-            
             arm_error = np.max(np.abs(current_arm - target_arm))
-            waist_error = abs(current_waist - target_waist)
-            
-            if arm_error < threshold_rad and waist_error < threshold_rad:
+            if ignore_waist:
+                converged = arm_error < threshold_rad
+            else:
+                current_waist = self.robot.get_current_waist_yaw()
+                waist_error = abs(current_waist - target_waist)
+                converged = arm_error < threshold_rad and waist_error < threshold_rad
+            if converged:
                 return True
             
             # Keep commanding target while waiting
@@ -928,10 +1015,15 @@ class G1TrainingClient:
         
         # Log final error on timeout
         current_arm = self.robot.get_current_dual_arm_q()
-        current_waist = self.robot.get_current_waist_yaw()
         arm_error = np.degrees(np.max(np.abs(current_arm - target_arm)))
-        waist_error = np.degrees(abs(current_waist - target_waist))
-        logger.warning(f"Convergence timeout: arm_error={arm_error:.2f}°, waist_error={waist_error:.2f}°")
+        if ignore_waist:
+            logger.warning(f"Convergence timeout: arm_error={arm_error:.2f}° (waist ignored, 16-D policy)")
+        else:
+            current_waist = self.robot.get_current_waist_yaw()
+            waist_error = np.degrees(abs(current_waist - target_waist))
+            logger.warning(
+                f"Convergence timeout: arm_error={arm_error:.2f}°, waist_error={waist_error:.2f}°"
+            )
         
         return False
     
@@ -1040,6 +1132,7 @@ class G1TrainingClient:
         print("=" * 60)
         
         print("  Resetting robot to starting pose...")
+        self.last_executed_binary_gripper = None
         self.reset_to_pose(duration=2.0)
         
         self.current_phase = "policy"
@@ -1062,21 +1155,35 @@ class G1TrainingClient:
                     actions_executed = self.execute_action_chunk(action_chunk, track_error=True)
                     total_actions += actions_executed
                     
-                    if actions_executed < len(action_chunk):
+                    action_chunk_29 = self._normalize_policy_chunk_to_29(action_chunk)
+                    if actions_executed < len(action_chunk_29):
                         logger.info(f"User stopped execution after {total_actions} total actions")
                         self.state = TrainingState.LABELING
                         break
                     
+                    if (
+                        self.policy_action_dim == 16
+                        and actions_executed == len(action_chunk_29)
+                    ):
+                        raw = self._crop_policy_action_chunk(action_chunk)
+                        if len(raw) > 0:
+                            la = raw[-1]
+                            if len(la) >= 16:
+                                self.last_executed_binary_gripper = round_binary_gripper_raw(
+                                    float(la[14]), float(la[15])
+                                )
+                    
                     # Wait for robot to converge to final position before next chunk
-                    if wait_for_convergence and len(action_chunk) > 0:
-                        last_action = action_chunk[-1]
+                    if wait_for_convergence and len(action_chunk_29) > 0:
+                        last_action = action_chunk_29[-1]
                         target_arm = last_action[:14]
-                        target_waist = last_action[28] if len(last_action) >= 29 else 0.0
+                        target_waist = float(last_action[28])
                         
                         converged = self.wait_for_convergence(
-                            target_arm, target_waist,
+                            target_arm,
+                            target_waist,
                             threshold_deg=convergence_threshold,
-                            timeout=convergence_timeout
+                            timeout=convergence_timeout,
                         )
                         if not converged:
                             logger.warning("Did not converge after action chunk")

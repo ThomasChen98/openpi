@@ -210,6 +210,7 @@ def main(
     resume: bool = False,
     wandb_enabled: bool = True,
     data_dir: str | None = None,
+    action_dim: int | None = None,
     max_epochs: int | None = None,
     save_interval: int | None = None,
     keep_period: int | None = None,
@@ -223,6 +224,7 @@ def main(
         resume: Whether to resume from the latest checkpoint
         wandb_enabled: Whether to enable Weights & Biases logging
         data_dir: Optional path to override the data_dir in the config (for LeRobotH1LocalDataConfig or LeRobotG1LocalDataConfig)
+        action_dim: For LeRobotG1LocalDataConfig only: policy action width 16 / 28 / 29 (must match norm_stats)
         max_epochs: Optional number of training steps (epochs) to override num_train_steps
         save_interval: Optional save interval (in steps/epochs) to override save_interval
         keep_period: Optional keep period (in steps/epochs) to override keep_period
@@ -233,18 +235,33 @@ def main(
     # Load the config by name
     config = _config.get_config(config_name)
     
-    # If data_dir is provided, override in the config
-    if data_dir is not None:
-        if isinstance(config.data, _config.LeRobotH1LocalDataConfig) or isinstance(config.data, _config.LeRobotG1LocalDataConfig):
-            data_updates = {}
-            if data_dir is not None:
-                data_updates['data_dir'] = data_dir
-                logging.info(f"Overriding data_dir to: {data_dir}")
-            
+    # If data_dir and/or action_dim is provided, override in the config
+    if data_dir is not None or action_dim is not None:
+        if action_dim is not None and not isinstance(config.data, _config.LeRobotG1LocalDataConfig):
+            raise ValueError("--action-dim is only supported when using LeRobotG1LocalDataConfig (e.g. pi05_g1_auto)")
+        if isinstance(config.data, _config.LeRobotH1LocalDataConfig):
+            if data_dir is None:
+                raise ValueError("--data-dir is required for LeRobotH1LocalDataConfig overrides")
+            logging.info(f"Overriding data_dir to: {data_dir}")
             config = dataclasses.replace(
                 config,
-                data=dataclasses.replace(config.data, **data_updates)
+                data=dataclasses.replace(config.data, data_dir=data_dir),
             )
+        elif isinstance(config.data, _config.LeRobotG1LocalDataConfig):
+            data_updates = {}
+            if data_dir is not None:
+                data_updates["data_dir"] = data_dir
+                logging.info(f"Overriding data_dir to: {data_dir}")
+            if action_dim is not None:
+                if action_dim not in (16, 28, 29):
+                    raise ValueError(f"--action-dim must be 16, 28, or 29, got {action_dim}")
+                data_updates["action_dim"] = action_dim
+                logging.info(f"Overriding G1 action_dim to: {action_dim}")
+            if data_updates:
+                config = dataclasses.replace(
+                    config,
+                    data=dataclasses.replace(config.data, **data_updates),
+                )
     
     # Override training parameters if provided
     if max_epochs is not None:

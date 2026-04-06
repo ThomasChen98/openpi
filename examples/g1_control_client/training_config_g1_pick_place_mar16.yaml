@@ -1,0 +1,117 @@
+# =============================================================================
+# G1 Integrated Training Pipeline Configuration - DEFAULT/TEMPLATE
+# =============================================================================
+#
+# This configuration file controls the G1 training pipeline.
+# Copy and modify for new tasks.
+#
+# Usage:
+#   ./scripts/integrated_training_g1.sh --config-file training_config_g1.yaml
+#
+# Key differences from H1:
+#   - 28 DOF upper body: 14 arm + 14 Dex3 hand
+#   - 32-dim state/action space with locomotion (vx, vy, vyaw)
+#   - Single head camera (no wrist cameras)
+#   - Port 8001 for policy server (8000 is H1)
+#   - Port 8081 for Viser UI (8080 is H1)
+#   - Port 5008 for robot commands (5007 is H1)
+# =============================================================================
+
+# =============================================================================
+# TASK CONFIGURATION - What task are we training?
+# =============================================================================
+task:
+  name: "pick_place_mar16"
+  description: "Move your right hand to the white rectangular holder next to the plate, close your right hand to grasp it securely, lift it off the table, move it over the center of the round plate, lower it onto the plate, and open your right hand to release it neatly on the plate."
+
+# =============================================================================
+# POLICY CONFIGURATION - Model and checkpoints
+# =============================================================================
+policy:
+  config_name: "pi05_g1_auto"
+  # Warmup checkpoint: trained on teleoperation data, used for epoch 0 data collection
+  # Leave empty to start from scratch (random policy)
+  warmup_checkpoint: "/home/yuxin/Projects/openpi/checkpoints/pi05_g1_auto/pick_place_mar16/1999"
+# =============================================================================
+# TRAINING CONFIGURATION - How to train
+# =============================================================================
+training:
+  max_epochs: 1200
+  save_interval: 1200        # Save checkpoint every N steps
+  keep_period: 1200          # Keep checkpoint every N steps (others are deleted)
+  num_repeats: 1             # Number of data augmentation repeats
+  labeling_mode: "human_labeling"  # none, human_labeling, reward_labeling
+  gpu_id: 0
+
+# =============================================================================
+# REWARD LABELING CONFIGURATION - For reward_labeling mode
+# =============================================================================
+reward:
+  # Path to Qwen reward model checkpoint (required for reward_labeling mode)
+  checkpoint_path: "/home/yuxin/Projects/openpi/third_party/emboided_reward/FT-checkpoint-1240"
+  
+  task_instruction: |
+    The robot is trying to pick up a plate and insert it into the plate holder.
+    Success: The plate is securely inserted into the plate holder.
+    Partial success: The plate is grasped but not inserted into the plate holder.
+    Failure: The plate falls, robot fails to grasp, or collides with obstacles.
+    
+    If the task fails, all frames after failure should be scored 0.
+  
+  max_frames: 30
+  image_rotation: 0
+  advantage_threshold: 0.3
+
+# =============================================================================
+# SERVER CONFIGURATION - Policy server settings (G1 uses different ports from H1)
+# =============================================================================
+policy_server:
+  host: "localhost"
+  port: 8001                 # G1 policy server port (H1 uses 8000)
+  poll_interval_sec: 5
+  action_dim: 16
+
+# =============================================================================
+# VISUALIZATION CONFIGURATION - Viser UI settings
+# =============================================================================
+visualization:
+  viser_port: 8081           # G1 Viser UI port (H1 uses 8080)
+  robot_command_port: 5008   # G1 robot command port (H1 uses 5007)
+
+# =============================================================================
+# ROBOT CONFIGURATION - G1 robot settings
+# =============================================================================
+robot:
+  # G1 has fixed configuration: 28 DOF (14 arm + 14 Dex3 hand)
+  # No include_hands toggle like H1 - hands are always included
+  
+  head_camera_server_ip: "192.168.123.164"
+  head_camera_server_port: 5555
+  control_freq: 30           # Hz
+
+# =============================================================================
+# DATA CONFIGURATION - Where to save/load data
+# =============================================================================
+data:
+  save_dir: "g1_data_auto"
+  
+  rsync:
+    enabled: true
+    target: "P6000:/home/yuxin/Projects/openpi/examples/g1_control_client/g1_data_auto"
+    options: "-avz --progress"
+    ssh_key: "~/.ssh/id_rsa"
+
+# =============================================================================
+# RECORDING CONFIGURATION - Episode recording settings
+# =============================================================================
+recording:
+  fps: 30
+  image_quality: 85
+
+# =============================================================================
+# PIPELINE CONFIGURATION - Integrated training settings
+# =============================================================================
+pipeline:
+  start_phase: "data_collection"
+  start_epoch: 0
+  auto_sync: true

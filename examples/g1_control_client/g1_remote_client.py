@@ -192,9 +192,35 @@ class Dex3DirectController:
         # Initialize command messages
         self._init_cmd_messages()
         
-        # Current state
+        # Current state (actual finger positions from robot)
         self.left_state = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
         self.right_state = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
+        
+        # Target states (commanded positions)
+        self.left_target = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
+        self.right_target = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)
+        
+        # Gain scheduling anti-windup: track error duration for each finger
+        # When fingers are stuck (large error persists), reduce gains to prevent motor burnout
+        self.left_error_duration = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)  # seconds
+        self.right_error_duration = np.zeros(DEX3_NUM_MOTORS, dtype=np.float32)  # seconds
+        
+        # Gain scheduling parameters
+        self.kp_nominal = 1.5  # Nominal proportional gain
+        self.kd_nominal = 0.2  # Nominal derivative gain
+        self.kp_min = 0.3      # Minimum gain when stuck (20% of nominal)
+        self.kd_min = 0.04     # Minimum gain when stuck (20% of nominal)
+        
+        # Error threshold for gain reduction (radians) - ~5.7 degrees
+        self.error_threshold = 0.1
+        # Time constants for gain reduction/restoration
+        self.error_accumulation_rate = 2.0  # How fast error duration accumulates (1/s)
+        self.error_decay_rate = 1.0         # How fast error duration decays when error decreases (1/s)
+        self.max_error_duration = 2.0       # Maximum error duration before full gain reduction
+        
+        # Control period for gain scheduling updates
+        self.control_dt = 1.0 / 30.0  # Assume 30Hz control loop
+        self.last_update_time = time.time()
         
         # Start state subscriber thread
         self.running = True
@@ -207,7 +233,7 @@ class Dex3DirectController:
                 break
             time.sleep(0.1)
         
-        logger.info("Dex3DirectController initialized")
+        logger.info("Dex3DirectController initialized with gain scheduling anti-windup")
     
     def _init_cmd_messages(self):
         """Initialize command messages with default gains."""
@@ -267,21 +293,103 @@ class Dex3DirectController:
             
             time.sleep(0.002)  # ~500Hz
     
+    def _compute_gain_scale(self, error_duration: float) -> float:
+        """
+        Compute gain scaling factor based on error duration.
+        
+        When error persists for a long time (fingers stuck), reduce gains to prevent motor burnout.
+        Gain scales from 1.0 (nominal) down to 0.2 (minimum) as error duration increases.
+        
+        Args:
+            error_duration: How long the error has persisted (seconds)
+            
+        Returns:
+            Gain scaling factor in [0.2, 1.0]
+        """
+        # Normalize error duration to [0, 1] range
+        normalized_duration = min(error_duration / self.max_error_duration, 1.0)
+        
+        # Linear interpolation: 1.0 at duration=0, 0.2 at duration=max
+        gain_scale = 1.0 - 0.8 * normalized_duration
+        
+        return max(gain_scale, 0.2)  # Clamp to minimum 20%
+    
+    def _update_error_tracking(self):
+        """
+        Update error duration tracking for gain scheduling anti-windup.
+        Called periodically to track how long each finger has had a large error.
+        """
+        current_time = time.time()
+        dt = current_time - self.last_update_time
+        self.last_update_time = current_time
+        
+        # Update left hand error tracking
+        for i in range(DEX3_NUM_MOTORS):
+            error = abs(self.left_target[i] - self.left_state[i])
+            
+            if error > self.error_threshold:
+                # Large error - accumulate duration
+                self.left_error_duration[i] += dt * self.error_accumulation_rate
+            else:
+                # Small error - decay duration
+                self.left_error_duration[i] = max(0.0, self.left_error_duration[i] - dt * self.error_decay_rate)
+            
+            # Clamp to max
+            self.left_error_duration[i] = min(self.left_error_duration[i], self.max_error_duration)
+        
+        # Update right hand error tracking
+        for i in range(DEX3_NUM_MOTORS):
+            error = abs(self.right_target[i] - self.right_state[i])
+            
+            if error > self.error_threshold:
+                # Large error - accumulate duration
+                self.right_error_duration[i] += dt * self.error_accumulation_rate
+            else:
+                # Small error - decay duration
+                self.right_error_duration[i] = max(0.0, self.right_error_duration[i] - dt * self.error_decay_rate)
+            
+            # Clamp to max
+            self.right_error_duration[i] = min(self.right_error_duration[i], self.max_error_duration)
+    
     def ctrl_dual_hand(self, left_q: np.ndarray, right_q: np.ndarray):
         """
-        Send joint angle commands to both hands.
+        Send joint angle commands to both hands with gain scheduling anti-windup.
+        
+        Reads actual finger states and adjusts PD gains based on tracking error duration.
+        When fingers are stuck (large error persists), gains are reduced to prevent motor burnout.
         
         Args:
             left_q: Left hand joint angles (7 DOF) in radians
             right_q: Right hand joint angles (7 DOF) in radians
         """
-        # Update left hand command
+        # Update target states
+        self.left_target = np.asarray(left_q, dtype=np.float32)
+        self.right_target = np.asarray(right_q, dtype=np.float32)
+        
+        # Update error tracking for gain scheduling
+        self._update_error_tracking()
+        
+        # Update left hand command with gain scheduling
         for i, joint_id in enumerate(Dex3LeftJointIndex):
             self.left_msg.motor_cmd[joint_id].q = float(left_q[i])
+            
+            # Compute gain scaling based on error duration
+            gain_scale = self._compute_gain_scale(self.left_error_duration[i])
+            
+            # Apply scaled gains
+            self.left_msg.motor_cmd[joint_id].kp = self.kp_nominal * gain_scale
+            self.left_msg.motor_cmd[joint_id].kd = self.kd_nominal * gain_scale
         
-        # Update right hand command
+        # Update right hand command with gain scheduling
         for i, joint_id in enumerate(Dex3RightJointIndex):
             self.right_msg.motor_cmd[joint_id].q = float(right_q[i])
+            
+            # Compute gain scaling based on error duration
+            gain_scale = self._compute_gain_scale(self.right_error_duration[i])
+            
+            # Apply scaled gains
+            self.right_msg.motor_cmd[joint_id].kp = self.kp_nominal * gain_scale
+            self.right_msg.motor_cmd[joint_id].kd = self.kd_nominal * gain_scale
         
         # Publish
         self.left_cmd_publisher.Write(self.left_msg)
@@ -573,6 +681,9 @@ class G1RemoteClient:
             waist_errors = []
         
         # Execute at control_fps
+        # Track current waist yaw to maintain pose when action doesn't include waist dimension
+        current_waist_yaw = self.robot.get_current_waist_yaw()
+        
         for i, action in enumerate(policy_actions):
             # Extract arm joints (14 DOF)
             arm_joints = action[:14]
@@ -584,7 +695,13 @@ class G1RemoteClient:
                 hand_joints = np.zeros(14, dtype=np.float32)
             
             # Extract waist yaw (1 DOF)
-            waist_yaw = action[28] if action_dim >= 29 else 0.0
+            # If action doesn't include waist, maintain current position to keep robot straight
+            if action_dim >= 29:
+                waist_yaw = action[28]
+                current_waist_yaw = waist_yaw  # Update tracked value
+            else:
+                # Maintain current waist yaw position (don't force to 0.0 which causes forward bend)
+                waist_yaw = current_waist_yaw
             
             # Track position error before sending command
             if track_error:
@@ -666,39 +783,64 @@ class G1RemoteClient:
         logger.info("Action chunk execution complete")
         return None
     
-    def wait_for_convergence(self, target_arm: np.ndarray, target_waist: float = None,
-                             threshold_rad: float = 0.02, timeout_s: float = 1.0) -> bool:
+    def wait_for_convergence(
+        self,
+        target_arm: np.ndarray,
+        target_waist: float = None,
+        target_hand: np.ndarray | None = None,
+        threshold_rad: float = 0.02,
+        timeout_s: float = 1.0,
+    ) -> bool:
         """
-        Wait for robot to converge to target position.
-        
-        Args:
-            target_arm: Target arm positions (14 DOF)
-            target_waist: Target waist yaw (optional)
-            threshold_rad: Convergence threshold in radians (~1.1 degrees)
-            timeout_s: Maximum time to wait
-            
-        Returns:
-            True if converged, False if timed out
+        Wait for robot to converge while holding arm, waist, and hand targets each tick.
+
+        Without re-sending hand commands, Dex3 can relax toward open between chunks.
         """
         start_time = time.time()
-        
+        control_period = 1.0 / self.control_fps
+        arm_error = 0.0
+        waist_error = 0.0
+
         while (time.time() - start_time) < timeout_s:
             current_arm = self.robot.get_current_dual_arm_q()
             arm_error = np.max(np.abs(current_arm - target_arm))
-            
+
             if target_waist is not None:
                 current_waist = self.robot.get_current_waist_yaw()
                 waist_error = abs(current_waist - target_waist)
             else:
                 waist_error = 0.0
-            
+
             if arm_error < threshold_rad and waist_error < threshold_rad:
                 return True
-            
-            time.sleep(0.01)  # Check at 100Hz
-        
-        logger.warning(f"Convergence timeout: arm_error={np.degrees(arm_error):.2f}°, "
-                       f"waist_error={np.degrees(waist_error):.2f}°")
+
+            if self.use_gravity_compensation and self.ik_solver is not None:
+                tauff = self.ik_solver.compute_gravity_compensation(target_arm)
+            else:
+                tauff = np.zeros(14, dtype=np.float32)
+            self.robot.ctrl_dual_arm(
+                q_target=target_arm,
+                tauff_target=tauff,
+                use_gravity_compensation=False,
+            )
+            if target_waist is not None:
+                self.robot.ctrl_waist_yaw(target_waist)
+            if (
+                self.hand_ctrl is not None
+                and target_hand is not None
+                and len(target_hand) >= 14
+            ):
+                self.hand_ctrl.ctrl_dual_hand(
+                    np.asarray(target_hand[:7], dtype=np.float32),
+                    np.asarray(target_hand[7:14], dtype=np.float32),
+                )
+            self._forward_controller_locomotion()
+            time.sleep(control_period)
+
+        logger.warning(
+            f"Convergence timeout: arm_error={np.degrees(arm_error):.2f}°, "
+            f"waist_error={np.degrees(waist_error):.2f}°"
+        )
         return False
 
     def _forward_controller_locomotion(self):
@@ -756,9 +898,17 @@ class G1RemoteClient:
                             if wait_converge and len(actions) > 0:
                                 last_action = actions[-1]
                                 waist_target = last_action[28] if len(last_action) >= 29 else None
+                                target_hand = (
+                                    last_action[14:28].copy()
+                                    if len(last_action) >= 28
+                                    else None
+                                )
                                 converged = self.wait_for_convergence(
-                                    last_action[:14], waist_target,
-                                    threshold_rad=0.02, timeout_s=0.5
+                                    last_action[:14],
+                                    waist_target,
+                                    target_hand=target_hand,
+                                    threshold_rad=0.02,
+                                    timeout_s=0.5,
                                 )
                                 if not converged:
                                     logger.warning("Did not converge after action chunk")
@@ -848,6 +998,23 @@ class G1RemoteClient:
                                     "cam_head": img_to_base64(obs["image"]["cam_head"]),
                                 }
                             }
+                        
+                        elif cmd == "go_home":
+                            logger.info("Moving robot to initial/home pose...")
+                            # Move arms to home position
+                            self.robot.ctrl_dual_arm_go_home()
+                            
+                            # Open hands (set to zero - fully open)
+                            if self.hand_ctrl is not None:
+                                self.hand_ctrl.ctrl_dual_hand(
+                                    np.zeros(7, dtype=np.float32),
+                                    np.zeros(7, dtype=np.float32)
+                                )
+                            
+                            # Reset waist yaw to zero
+                            self.robot.ctrl_waist_yaw(0.0)
+                            
+                            response = {"status": "success", "message": "Moved to initial pose"}
                         
                         elif cmd == "emergency_stop":
                             logger.warning("EMERGENCY STOP")

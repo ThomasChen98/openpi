@@ -70,6 +70,8 @@ policy_server:
   host: "localhost"
   port: 8001                 # G1 policy server port (H1 uses 8000)
   poll_interval_sec: 5
+  # 29 = full arms+hands+waist (default). 28 = no waist in action. 16 = arms + binary grippers.
+  action_dim: 29
 
 # =============================================================================
 # VISUALIZATION CONFIGURATION - Viser UI settings

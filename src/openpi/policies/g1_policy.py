@@ -52,6 +52,36 @@ def make_g1_example() -> dict:
     }
 
 
+@dataclasses.dataclass(frozen=True)
+class G1AlignDatasetActionsToPolicyDim(transforms.DataTransformFn):
+    """Map LeRobot dataset actions to the policy action width before delta / normalization.
+
+    - 28 from 29: drop waist yaw (last dim).
+    - 16 from 29: [arm(14), mean(left_hand), mean(right_hand)] for binary-style training.
+    If actions already match ``policy_action_dim``, this is a no-op.
+    """
+
+    policy_action_dim: int
+
+    def __call__(self, data: dict) -> dict:
+        if "actions" not in data:
+            return data
+        a = np.asarray(data["actions"], dtype=np.float32)
+        if a.shape[-1] == self.policy_action_dim:
+            return data
+        if self.policy_action_dim == 28 and a.shape[-1] >= 28:
+            data["actions"] = a[..., :28]
+            return data
+        if self.policy_action_dim == 16 and a.shape[-1] >= 29:
+            left_m = np.mean(a[..., 14:21], axis=-1, keepdims=True)
+            right_m = np.mean(a[..., 21:28], axis=-1, keepdims=True)
+            data["actions"] = np.concatenate([a[..., :14], left_m, right_m], axis=-1).astype(np.float32)
+            return data
+        raise ValueError(
+            f"Cannot align actions with shape {a.shape} to policy_action_dim={self.policy_action_dim}"
+        )
+
+
 def _parse_image(image) -> np.ndarray:
     """Parse image to uint8 (H, W, C) format."""
     image = np.asarray(image)
@@ -110,17 +140,22 @@ class G1Inputs(transforms.DataTransformFn):
             images[dest] = np.zeros_like(base_image)
             image_masks[dest] = np.True_ if self.model_type != _model.ModelType.PI0 else np.False_
 
-        # State should be 29-dim: upper_body(28) + waist_yaw(1)
+        # State should be 29-dim for the model: upper_body(28) + waist_yaw(1)
         input_state = np.asarray(data["state"], dtype=np.float32)
-        
+
         if len(input_state) == G1_STATE_DIM:
-            # Expected format: 29 dims
             state = input_state
         elif len(input_state) == G1_UPPER_BODY_DIM:
-            # Legacy 28-dim format: pad with zero waist_yaw
             state = np.concatenate([input_state, np.zeros(G1_WAIST_DIM, dtype=np.float32)])
+        elif len(input_state) == 16:
+            # Execution client: [arm(14), bin_L, bin_R] — pad hands + waist for a 29-D qpos-like state
+            state = np.concatenate(
+                [input_state[:14], np.zeros(14, dtype=np.float32), np.zeros(G1_WAIST_DIM, dtype=np.float32)]
+            )
         else:
-            raise ValueError(f"Expected state dim {G1_STATE_DIM} or {G1_UPPER_BODY_DIM}, got {len(input_state)}")
+            raise ValueError(
+                f"Expected state dim {G1_STATE_DIM}, {G1_UPPER_BODY_DIM}, or 16, got {len(input_state)}"
+            )
 
         # Create inputs dict
         inputs = {
@@ -145,12 +180,13 @@ class G1Outputs(transforms.DataTransformFn):
     """
     Transform outputs from model back to G1 action format.
     
-    Model outputs 29 dims: [upper_body(28), waist_yaw(1)]
+    Model outputs are sliced to the policy action width (pi05 uses a wider head).
     
     Args:
         action_dim: Number of action dimensions to return.
-            - 29: Full action space (default)
-            - 28: Upper body only [arm(14), hand(14)]
+            - 29: arm(14)+hand(14)+waist_yaw(1)
+            - 28: arm(14)+hand(14)
+            - 16: arm(14)+binary grippers (2)
     """
     
     action_dim: int = 29  # Return full 29-dim actions by default
